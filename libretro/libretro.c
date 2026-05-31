@@ -3751,6 +3751,11 @@ void *retro_get_memory_data(unsigned id)
          return sram.on ? sram.sram : NULL;
       case RETRO_MEMORY_SYSTEM_RAM:
          return work_ram;
+      /* Aether fork delta: expose VDP VRAM (64KB) so the HD sprite pipeline can
+         read the Sprite Attribute Table. Upstream returns NULL for VIDEO_RAM.
+         vram[] is the VDP's 64KB VRAM, declared in core/vdp_ctrl.c. */
+      case RETRO_MEMORY_VIDEO_RAM:
+         return vram;
       default:
          return NULL;
    }
@@ -3801,6 +3806,10 @@ size_t retro_get_memory_size(unsigned id)
          else
             return 0x2000; /* 8KB internal RAM */
       }
+
+      /* Aether fork delta: VDP VRAM is a fixed 64KB array (core/vdp_ctrl.c). */
+      case RETRO_MEMORY_VIDEO_RAM:
+         return 0x10000;
 
       default:
         return 0;

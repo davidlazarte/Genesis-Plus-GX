@@ -348,3 +348,25 @@ void mastertap_2_write(unsigned char data, unsigned char mask)
   /* update internal state */
   flipflop[1].Latch = data;
 }
+
+/* AETHER: serialize input-hardware latch state. The 6-button pad multiplexes
+   button reads through State/Counter/Timeout on TH toggles; without this a
+   savestate taken mid-replay restores a different pad phase and the game
+   reads different buttons (Lab split/scrub determinism). */
+int gamepad_context_save(unsigned char *state)
+{
+  int bufferptr = 0;
+  save_param(gamepad, sizeof(gamepad));
+  save_param(flipflop, sizeof(flipflop));
+  save_param(&latch, sizeof(latch));
+  return bufferptr;
+}
+
+int gamepad_context_load(unsigned char *state)
+{
+  int bufferptr = 0;
+  load_param(gamepad, sizeof(gamepad));
+  load_param(flipflop, sizeof(flipflop));
+  load_param(&latch, sizeof(latch));
+  return bufferptr;
+}

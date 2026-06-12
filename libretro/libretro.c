@@ -3756,6 +3756,12 @@ void *retro_get_memory_data(unsigned id)
          vram[] is the VDP's 64KB VRAM, declared in core/vdp_ctrl.c. */
       case RETRO_MEMORY_VIDEO_RAM:
          return vram;
+      /* Aether fork delta: expose VDP CRAM (128 bytes = 64 x 9-bit colour
+         entries, stored as host-endian uint16 words in GPX's internal
+         0000BBB0GGG0RRR0 layout — core/vdp_ctrl.c). There is no standard
+         libretro id for CRAM, so the Aether frontend uses a private one. */
+      case 0x100 /* AETHER_MEMORY_CRAM */:
+         return cram;
       default:
          return NULL;
    }
@@ -3810,6 +3816,10 @@ size_t retro_get_memory_size(unsigned id)
       /* Aether fork delta: VDP VRAM is a fixed 64KB array (core/vdp_ctrl.c). */
       case RETRO_MEMORY_VIDEO_RAM:
          return 0x10000;
+
+      /* Aether fork delta: VDP CRAM is a fixed 128-byte array. */
+      case 0x100 /* AETHER_MEMORY_CRAM */:
+         return 0x80;
 
       default:
         return 0;

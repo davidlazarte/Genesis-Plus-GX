@@ -1,3 +1,38 @@
+> ## ⚡ Aether Fork
+>
+> Esta rama (`aether/expose-vram-video-ram`) es el core de
+> [**Aether**](https://github.com/davidlazarte/aether) — un "RTX Remix para
+> juegos 2D retro". Mantiene **deltas mínimos** sobre el upstream
+> `ekeeke/Genesis-Plus-GX`, todos en `libretro/libretro.c` salvo el de
+> savestate:
+>
+> | Delta | Qué expone | Commit |
+> |---|---|---|
+> | VRAM | `retro_get_memory_data(RETRO_MEMORY_VIDEO_RAM)` → `vram` (64KB) — upstream devuelve NULL | `7fcf9bc` |
+> | Latch input-hw | serializa el estado del pad de 6 botones (fase TH) en el savestate (STATE_VERSION 1.7.7) — sin esto, restaurar un savestate a mitad de replay diverge | `539dc45` |
+> | CRAM | id **privado** `0x100` → `cram` (128 B, 64 colores de 9 bits) | `195ebcb` |
+> | Registros VDP | id **privado** `0x101` → `reg[0x20]` (bases de planos + tamaño, para el tilemap viewer) | `09dd082` |
+>
+> **Ids privados**: `0x100`/`0x101` no son estándar de libretro (la convención
+> reserva ≥`0x100` para usos no estandarizados). El Lab de Aether los consume
+> vía `RetroRunner`/`AetherSession`; un core stock devuelve null y el Lab
+> degrada (las vistas VRAM/CRAM/tilemap quedan deshabilitadas). **VRAM y CRAM
+> se exponen word-swapped en hosts little-endian** (igual que la Work RAM): el
+> byte lógico `off` vive en el array en `off^1`.
+>
+> **Build local** (la DLL no se versiona — BYOC): con un toolchain
+> **llvm-mingw de runtime MSVCRT** (`scoop install mingw-mstorsjo-llvm-msvcrt`)
+> en el PATH —
+> ```
+> make -f Makefile.libretro platform=win64 -j8
+> ```
+> Un build UCRT crasha en `retro_load_game` (STATUS_STACK_BUFFER_OVERRUN); el
+> MSVCRT es bit-idéntico al DLL stock en emulación. La DLL resultante se
+> despliega en Aether como `third_party/cores/genesis_plus_gx_libretro_vram.dll`.
+>
+> Rebase con upstream: revisar que `ekeeke/Genesis-Plus-GX` no haya
+> implementado `RETRO_MEMORY_VIDEO_RAM` (entraría en conflicto con `7fcf9bc`).
+
 [![Build Status](https://travis-ci.org/libretro/Genesis-Plus-GX.svg?branch=master)](https://travis-ci.org/libretro/Genesis-Plus-GX)
 [![Build status](https://ci.appveyor.com/api/projects/status/d72k6bipi13o15v4/branch/master?svg=true)](https://ci.appveyor.com/project/bparker06/genesis-plus-gx/branch/master)
 

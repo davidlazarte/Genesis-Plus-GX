@@ -3762,6 +3762,11 @@ void *retro_get_memory_data(unsigned id)
          libretro id for CRAM, so the Aether frontend uses a private one. */
       case 0x100 /* AETHER_MEMORY_CRAM */:
          return cram;
+      /* Aether fork delta: expose the 32 VDP registers (reg[0x20],
+         core/vdp_ctrl.c) so the Lab can derive the plane name-table bases
+         and plane size for the tilemap viewer. No standard libretro id. */
+      case 0x101 /* AETHER_MEMORY_VDP_REGS */:
+         return reg;
       default:
          return NULL;
    }
@@ -3820,6 +3825,10 @@ size_t retro_get_memory_size(unsigned id)
       /* Aether fork delta: VDP CRAM is a fixed 128-byte array. */
       case 0x100 /* AETHER_MEMORY_CRAM */:
          return 0x80;
+
+      /* Aether fork delta: 32 VDP registers. */
+      case 0x101 /* AETHER_MEMORY_VDP_REGS */:
+         return 0x20;
 
       default:
         return 0;

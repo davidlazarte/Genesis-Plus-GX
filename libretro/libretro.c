@@ -3772,6 +3772,11 @@ void *retro_get_memory_data(unsigned id)
          para aislar capas en el viewport. core/vdp_render.c. */
       case 0x102 /* AETHER_MEMORY_LAYER_MASK */:
          return &aether_layer_mask;
+      /* Aether fork delta: bitmask de slots SAT suprimidos (16 bytes, ESCRIBIBLE).
+         El frontend setea el bit de cada slot a ocultar; parse_satb lo saltea.
+         core/vdp_render.c. */
+      case 0x103 /* AETHER_MEMORY_SPRITE_SUPPRESS */:
+         return aether_sprite_suppress;
       default:
          return NULL;
    }
@@ -3838,6 +3843,10 @@ size_t retro_get_memory_size(unsigned id)
       /* Aether fork delta: máscara de capas visibles (1 byte). */
       case 0x102 /* AETHER_MEMORY_LAYER_MASK */:
          return 1;
+
+      /* Aether fork delta: bitmask de slots SAT suprimidos (16 bytes). */
+      case 0x103 /* AETHER_MEMORY_SPRITE_SUPPRESS */:
+         return sizeof(aether_sprite_suppress);
 
       default:
         return 0;

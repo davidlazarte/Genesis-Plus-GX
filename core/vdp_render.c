@@ -610,6 +610,14 @@ uint8 aether_layer_mask = 0xFF;
 #define AETHER_HIDE_B (!(aether_layer_mask & AETHER_LAYER_B))
 #define AETHER_HIDE_W (!(aether_layer_mask & AETHER_LAYER_W))
 
+/* Aether fork delta: bitmask de slots SAT suprimidos (id de memoria 0x103,
+   escribible). Bit set = ese slot NO se parsea → su sprite no se dibuja (ocultar
+   sprite por hash en el Lab). El frontend lo setea SÓLO para el frame visible
+   (produce) y lo vacía para la re-simulación bare → status del VDP intacto. */
+uint8 aether_sprite_suppress[16] = {0};
+#define AETHER_SPR_SUPPRESSED(slot) \
+  (aether_sprite_suppress[((slot) >> 3) & 0x0F] & (1 << ((slot) & 7)))
+
 /* Function pointers */
 void (*render_bg)(int line);
 void (*render_obj)(int line);
@@ -4539,6 +4547,11 @@ void parse_satb_m5(int line)
       /* Check if sprite is visible on current line */
       if (ypos < height)
       {
+        /* Aether: ocultar sprite por hash — saltear el slot SAT suprimido (no se
+           agrega → no se dibuja). Sólo el frame visible suprime; la re-sim bare
+           corre con la máscara vacía → status del VDP intacto, replay sin drift. */
+        if (!AETHER_SPR_SUPPRESSED(link >> 2))
+        {
         /* Sprite overflow */
         if (count == max)
         {
@@ -4557,6 +4570,7 @@ void parse_satb_m5(int line)
 
         /* Next sprite entry */
         object_info++;
+        }
       }
     }
 
@@ -4627,6 +4641,11 @@ void parse_satb_m5_im2(int line)
       /* Check if sprite is visible on current line */
       if (ypos < height)
       {
+        /* Aether: ocultar sprite por hash — saltear el slot SAT suprimido (no se
+           agrega → no se dibuja). Sólo el frame visible suprime; la re-sim bare
+           corre con la máscara vacía → status del VDP intacto, replay sin drift. */
+        if (!AETHER_SPR_SUPPRESSED(link >> 2))
+        {
         /* Sprite overflow */
         if (count == max)
         {
@@ -4645,6 +4664,7 @@ void parse_satb_m5_im2(int line)
 
         /* Next sprite entry */
         object_info++;
+        }
       }
     }
 

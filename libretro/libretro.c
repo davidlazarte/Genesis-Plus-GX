@@ -3767,6 +3767,11 @@ void *retro_get_memory_data(unsigned id)
          and plane size for the tilemap viewer. No standard libretro id. */
       case 0x101 /* AETHER_MEMORY_VDP_REGS */:
          return reg;
+      /* Aether fork delta: máscara de capas visibles (1 byte, ESCRIBIBLE). El
+         frontend escribe el bitmask (A/B/Window/Sprites) y el renderer la lee
+         para aislar capas en el viewport. core/vdp_render.c. */
+      case 0x102 /* AETHER_MEMORY_LAYER_MASK */:
+         return &aether_layer_mask;
       default:
          return NULL;
    }
@@ -3829,6 +3834,10 @@ size_t retro_get_memory_size(unsigned id)
       /* Aether fork delta: 32 VDP registers. */
       case 0x101 /* AETHER_MEMORY_VDP_REGS */:
          return 0x20;
+
+      /* Aether fork delta: máscara de capas visibles (1 byte). */
+      case 0x102 /* AETHER_MEMORY_LAYER_MASK */:
+         return 1;
 
       default:
         return 0;

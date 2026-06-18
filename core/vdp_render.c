@@ -603,6 +603,13 @@ static uint8 object_count[2];
 /* Sprite Collision Info */
 uint16 spr_col;
 
+/* Aether fork delta: máscara de capas visibles (id de memoria privado 0x102).
+   Bit set = visible. La leen render_bg_m5/_vs (planos) y render_line (sprites). */
+uint8 aether_layer_mask = 0xFF;
+#define AETHER_HIDE_A (!(aether_layer_mask & AETHER_LAYER_A))
+#define AETHER_HIDE_B (!(aether_layer_mask & AETHER_LAYER_B))
+#define AETHER_HIDE_W (!(aether_layer_mask & AETHER_LAYER_W))
+
 /* Function pointers */
 void (*render_bg)(int line);
 void (*render_obj)(int line);
@@ -1587,6 +1594,11 @@ void render_bg_m5(int line)
     DRAW_COLUMN(atbuf, v_line)
   }
 
+  /* Aether: ocultar Plano A o Window → limpiar su buffer compartido (linebuf[1])
+     antes de dibujar; lo no dibujado queda transparente y se ve Plano B. */
+  if (AETHER_HIDE_A || AETHER_HIDE_W)
+    memset(&linebuf[1][0x20], 0, bitmap.viewport.w);
+
   if (w == (line >= a))
   {
     /* Window takes up entire line */
@@ -1603,6 +1615,8 @@ void render_bg_m5(int line)
   /* Plane A */
   if (a)
   {
+    if (!AETHER_HIDE_A)   /* Aether: gate Plano A (el rango de Window se fija igual abajo) */
+    {
     /* Plane A width */
     start = clip[0].left;
     end   = clip[0].right;
@@ -1652,6 +1666,7 @@ void render_bg_m5(int line)
       atbuf = nt[index & pf_col_mask];
       DRAW_COLUMN(atbuf, v_line)
     }
+    }   /* Aether: fin gate Plano A */
 
     /* Window width */
     start = clip[1].left;
@@ -1659,7 +1674,7 @@ void render_bg_m5(int line)
   }
 
   /* Window */
-  if (w)
+  if (w && !AETHER_HIDE_W)   /* Aether: gate Window */
   {
     /* Window name table */
     nt = (uint32 *)&vram[ntwb | ((line >> 3) << (6 + (reg[12] & 1)))];
@@ -1676,6 +1691,10 @@ void render_bg_m5(int line)
       DRAW_COLUMN(atbuf, v_line)
     }
   }
+
+  /* Aether: ocultar Plano B → limpiar su buffer antes del merge. */
+  if (AETHER_HIDE_B)
+    memset(&linebuf[0][0x20], 0, bitmap.viewport.w);
 
   /* Merge background layers */
   merge(&linebuf[1][0x20], &linebuf[0][0x20], &linebuf[0][0x20], lut[(reg[12] & 0x08) >> 2], bitmap.viewport.w);
@@ -1763,6 +1782,10 @@ void render_bg_m5_vs(int line)
     DRAW_COLUMN(atbuf, v_line)
   }
 
+  /* Aether: ocultar Plano A o Window → limpiar su buffer compartido (linebuf[1]). */
+  if (AETHER_HIDE_A || AETHER_HIDE_W)
+    memset(&linebuf[1][0x20], 0, bitmap.viewport.w);
+
   if (w == (line >= a))
   {
     /* Window takes up entire line */
@@ -1779,6 +1802,8 @@ void render_bg_m5_vs(int line)
   /* Plane A */
   if (a)
   {
+    if (!AETHER_HIDE_A)   /* Aether: gate Plano A */
+    {
     /* Plane A width */
     start = clip[0].left;
     end   = clip[0].right;
@@ -1842,6 +1867,7 @@ void render_bg_m5_vs(int line)
       atbuf = nt[index & pf_col_mask];
       DRAW_COLUMN(atbuf, v_line)
     }
+    }   /* Aether: fin gate Plano A */
 
     /* Window width */
     start = clip[1].left;
@@ -1849,7 +1875,7 @@ void render_bg_m5_vs(int line)
   }
 
   /* Window */
-  if (w)
+  if (w && !AETHER_HIDE_W)   /* Aether: gate Window */
   {
     /* Window name table */
     nt = (uint32 *)&vram[ntwb | ((line >> 3) << (6 + (reg[12] & 1)))];
@@ -1866,6 +1892,10 @@ void render_bg_m5_vs(int line)
       DRAW_COLUMN(atbuf, v_line)
     }
   }
+
+  /* Aether: ocultar Plano B → limpiar su buffer antes del merge. */
+  if (AETHER_HIDE_B)
+    memset(&linebuf[0][0x20], 0, bitmap.viewport.w);
 
   /* Merge background layers */
   merge(&linebuf[1][0x20], &linebuf[0][0x20], &linebuf[0][0x20], lut[(reg[12] & 0x08) >> 2], bitmap.viewport.w);
@@ -4874,8 +4904,9 @@ void render_line(int line)
     /* Render BG layer(s) */
     render_bg(line);
 
-    /* Render sprite layer */
-    render_obj(line & 1);
+    /* Render sprite layer (Aether: ocultable vía máscara de capas, id 0x102) */
+    if (aether_layer_mask & AETHER_LAYER_OBJ)
+      render_obj(line & 1);
 
     /* Left-most column blanking */
     if (reg[0] & 0x20)

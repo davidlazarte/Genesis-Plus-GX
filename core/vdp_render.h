@@ -102,6 +102,16 @@
 /* Global variables */
 extern uint16 spr_col;
 
+/* Aether fork delta: máscara de capas visibles (id de memoria privado 0x102,
+   escribible desde el frontend). Bit set = capa visible; default 0xFF. La leen
+   render_bg_m5/_vs (planos A/B/Window) y render_line (sprites) para aislar
+   capas en el viewport — autoría en el Lab de Aether. */
+#define AETHER_LAYER_A   0x01   /* Plano A (Scroll A)  */
+#define AETHER_LAYER_B   0x02   /* Plano B (Scroll B)  */
+#define AETHER_LAYER_W   0x04   /* Window              */
+#define AETHER_LAYER_OBJ 0x08   /* Sprites             */
+extern uint8 aether_layer_mask;
+
 /* Function prototypes */
 extern void render_init(void);
 extern void render_reset(void);

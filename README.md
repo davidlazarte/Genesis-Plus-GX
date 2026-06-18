@@ -12,8 +12,9 @@
 > | Latch input-hw | serializa el estado del pad de 6 botones (fase TH) en el savestate (STATE_VERSION 1.7.7) — sin esto, restaurar un savestate a mitad de replay diverge | `539dc45` |
 > | CRAM | id **privado** `0x100` → `cram` (128 B, 64 colores de 9 bits) | `195ebcb` |
 > | Registros VDP | id **privado** `0x101` → `reg[0x20]` (bases de planos + tamaño, para el tilemap viewer) | `09dd082` |
+> | Máscara de capas | id **privado** `0x102` (1 byte, **escribible**) → ocultar/mostrar Plano A/B/Window/Sprites en el render (aislar capas para autoría en el Lab) | _(esta rama)_ |
 >
-> **Ids privados**: `0x100`/`0x101` no son estándar de libretro (la convención
+> **Ids privados**: `0x100`/`0x101`/`0x102` no son estándar de libretro (la convención
 > reserva ≥`0x100` para usos no estandarizados). El Lab de Aether los consume
 > vía `RetroRunner`/`AetherSession`; un core stock devuelve null y el Lab
 > degrada (las vistas VRAM/CRAM/tilemap quedan deshabilitadas). **VRAM y CRAM

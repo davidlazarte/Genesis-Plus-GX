@@ -113,6 +113,8 @@ extern uint16 spr_col;
 extern uint8 aether_layer_mask;
 extern uint8 aether_sprite_suppress[16];   /* slots SAT suprimidos (id 0x103) */
 extern uint8 aether_tile_suppress[512];    /* celdas de tile suprimidas (id 0x104, 64x64) */
+extern uint8 aether_plane_tile_suppress[3 * 1024]; /* tiles de plano suprimidos (id 0x105) */
+extern uint8 aether_plane_suppress_active;  /* id 0x106: 1 = hay algún tile de plano oculto */
 
 /* Function prototypes */
 extern void render_init(void);

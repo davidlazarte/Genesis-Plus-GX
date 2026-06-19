@@ -3767,6 +3767,12 @@ void *retro_get_memory_data(unsigned id)
          and plane size for the tilemap viewer. No standard libretro id. */
       case 0x101 /* AETHER_MEMORY_VDP_REGS */:
          return reg;
+      /* Aether fork delta: expose VSRAM (128 bytes = 64 x 11-bit vertical
+         scroll entries, host-endian uint16 words — core/vdp_ctrl.c). Needed to
+         resolve la posición en pantalla de un tile de plano (Fase 2c, overlay HD
+         scroll-aware). hscroll vive en VRAM; vscroll vive acá. */
+      case 0x107 /* AETHER_MEMORY_VSRAM */:
+         return vsram;
       /* Aether fork delta: máscara de capas visibles (1 byte, ESCRIBIBLE). El
          frontend escribe el bitmask (A/B/Window/Sprites) y el renderer la lee
          para aislar capas en el viewport. core/vdp_render.c. */
@@ -3782,6 +3788,16 @@ void *retro_get_memory_data(unsigned id)
          line>>3) a ocultar; render_line la pinta con el backdrop. vdp_render.c. */
       case 0x104 /* AETHER_MEMORY_TILE_SUPPRESS */:
          return aether_tile_suppress;
+      /* Aether fork delta: máscara de tiles de PLANO suprimidos (3072 bytes,
+         ESCRIBIBLE). 3 planos × bitmap de (patrón<<2 | paleta); render_bg_m5/_vs
+         saltea esas celdas y revela el plano de atrás. vdp_render.c. */
+      case 0x105 /* AETHER_MEMORY_PLANE_TILE_SUPPRESS */:
+         return aether_plane_tile_suppress;
+      /* Aether fork delta: flag (1 byte) "hay tiles de plano ocultos" — gatea el
+         fast path de render_bg_m5/_vs (0 = DRAW_COLUMN sin costo). Lo setea el
+         frontend al escribir 0x105. */
+      case 0x106 /* AETHER_MEMORY_PLANE_SUPPRESS_ACTIVE */:
+         return &aether_plane_suppress_active;
       default:
          return NULL;
    }
@@ -3845,6 +3861,10 @@ size_t retro_get_memory_size(unsigned id)
       case 0x101 /* AETHER_MEMORY_VDP_REGS */:
          return 0x20;
 
+      /* Aether fork delta: VSRAM (128 bytes). */
+      case 0x107 /* AETHER_MEMORY_VSRAM */:
+         return 0x80;
+
       /* Aether fork delta: máscara de capas visibles (1 byte). */
       case 0x102 /* AETHER_MEMORY_LAYER_MASK */:
          return 1;
@@ -3856,6 +3876,14 @@ size_t retro_get_memory_size(unsigned id)
       /* Aether fork delta: máscara de celdas de tile suprimidas (512 bytes). */
       case 0x104 /* AETHER_MEMORY_TILE_SUPPRESS */:
          return sizeof(aether_tile_suppress);
+
+      /* Aether fork delta: máscara de tiles de plano suprimidos (3072 bytes). */
+      case 0x105 /* AETHER_MEMORY_PLANE_TILE_SUPPRESS */:
+         return sizeof(aether_plane_tile_suppress);
+
+      /* Aether fork delta: flag de actividad de la supresión por plano (1 byte). */
+      case 0x106 /* AETHER_MEMORY_PLANE_SUPPRESS_ACTIVE */:
+         return 1;
 
       default:
         return 0;

@@ -635,6 +635,24 @@ uint8 aether_tile_suppress[(AETHER_TILE_COLS * AETHER_TILE_ROWS) / 8] = {0};
   (aether_tile_suppress[(((row) * AETHER_TILE_COLS) + (col)) >> 3] \
    & (1 << ((((row) * AETHER_TILE_COLS) + (col)) & 7)))
 
+/* Aether fork delta: tiles de PLANO suprimidos por (plano, patrón, paleta) — id de
+   memoria 0x105, escribible (Fase 2b del Lab: ocultar un tile de fondo). A diferencia
+   de 0x104 (por celda de pantalla), esto oculta el GRÁFICO del tile dondequiera que
+   aparezca en su plano, sin depender del scroll: render_bg_m5/_vs lo consultan por
+   columna al leer la nametable. 3 planos (A=0, B=1, Window=2) × bitmap de
+   (patrón<<2 | paleta) = 2048×4 = 8192 bits = 1024 bytes/plano = 3072 bytes. Identidad
+   idéntica a collect_plane_tiles del frontend (patrón = word & 0x7FF, paleta = bits
+   13-14). Ocultar un tile de A/Window deja su columna transparente → se ve el Plano B
+   (o backdrop); ocultar uno de B → backdrop. Sólo en el frame visible (produce); la
+   re-sim bare corre con la máscara vacía (active=0) → determinismo de video intacto. */
+uint8 aether_plane_tile_suppress[3 * 1024] = {0};
+uint8 aether_plane_suppress_active = 0;   /* id 0x106: lo setea el frontend (1 = hay algo oculto) */
+#define AETHER_PSUP(plane) \
+  (aether_plane_suppress_active ? &aether_plane_tile_suppress[(plane) * 1024] : (const uint8 *)0)
+/* Clave e índice de bit de una celda de 16 bits (patrón 0x7FF | paleta bits 13-14). */
+#define AETHER_PTKEY(cell)     ((((uint32)(cell) & 0x7FFu) << 2) | (((uint32)(cell) >> 13) & 3u))
+#define AETHER_PTSUP(ps, cell) ((ps)[AETHER_PTKEY(cell) >> 3] & (1u << (AETHER_PTKEY(cell) & 7u)))
+
 /* Estado del "peel" para la línea en curso (lo arma render_line antes de
    render_bg y lo apaga antes de los sprites → no pela los merges de sprites).
    Sólo se activa en líneas con alguna celda marcada → merge() conserva su fast
@@ -1608,6 +1626,38 @@ void render_bg_m4(int line)
   }
 }
 
+/* Aether fork delta: dibuja una columna de 2 celdas igual que DRAW_COLUMN, pero
+   saltea (deja transparente, color 0) las celdas cuyo patrón+paleta esté en la
+   máscara de supresión por-plano `ps` (id 0x105). `ps == NULL` → camino idéntico a
+   DRAW_COLUMN (sin costo para los demás juegos). Respeta el orden de dibujo
+   (LSB/MSB) según el endianness, igual que DRAW_COLUMN. Devuelve el `dst` avanzado. */
+#ifdef ALIGN_LONG
+#define AETHER_PUT0()  do { WRITE_LONG(dst, 0); dst++; WRITE_LONG(dst, 0); dst++; } while (0)
+#define AETHER_PUTS()  do { WRITE_LONG(dst, src[0] | atex); dst++; WRITE_LONG(dst, src[1] | atex); dst++; } while (0)
+#else
+#define AETHER_PUT0()  do { *dst++ = 0; *dst++ = 0; } while (0)
+#define AETHER_PUTS()  do { *dst++ = (src[0] | atex); *dst++ = (src[1] | atex); } while (0)
+#endif
+INLINE uint32 *aether_draw_col(uint32 *dst, uint32 atbuf, uint32 v_line, const uint8 *ps)
+{
+  uint32 atex, *src;
+#ifdef LSB_FIRST
+  if (AETHER_PTSUP(ps, atbuf & 0xFFFFu))        { AETHER_PUT0(); }
+  else { GET_LSB_TILE(atbuf, v_line) AETHER_PUTS(); }
+  if (AETHER_PTSUP(ps, (atbuf >> 16) & 0xFFFFu)){ AETHER_PUT0(); }
+  else { GET_MSB_TILE(atbuf, v_line) AETHER_PUTS(); }
+#else
+  if (AETHER_PTSUP(ps, (atbuf >> 16) & 0xFFFFu)){ AETHER_PUT0(); }
+  else { GET_MSB_TILE(atbuf, v_line) AETHER_PUTS(); }
+  if (AETHER_PTSUP(ps, atbuf & 0xFFFFu))        { AETHER_PUT0(); }
+  else { GET_LSB_TILE(atbuf, v_line) AETHER_PUTS(); }
+#endif
+  return dst;
+}
+/* Atajo: usa el fast path (DRAW_COLUMN) cuando no hay supresión en este plano. */
+#define DRAW_COLUMN_AE(ATTR, LINE, PS) \
+  do { if (PS) dst = aether_draw_col(dst, (ATTR), (LINE), (PS)); else { DRAW_COLUMN((ATTR), (LINE)) } } while (0)
+
 /* Mode 5 */
 #ifndef ALT_RENDERER
 void render_bg_m5(int line)
@@ -1621,6 +1671,11 @@ void render_bg_m5(int line)
   uint32 pf_col_mask  = playfield_col_mask;
   uint32 pf_row_mask  = playfield_row_mask;
   uint32 pf_shift     = playfield_shift;
+
+  /* Aether: máscaras de supresión por plano (id 0x105); NULL = fast path. */
+  const uint8 *psupA = AETHER_PSUP(0);
+  const uint8 *psupB = AETHER_PSUP(1);
+  const uint8 *psupW = AETHER_PSUP(2);
 
   /* Window & Plane A */
   int a = (reg[18] & 0x1F) << 3;
@@ -1653,7 +1708,7 @@ void render_bg_m5(int line)
     dst = (uint32 *)&linebuf[0][0x10 + shift];
 
     atbuf = nt[(index - 1) & pf_col_mask];
-    DRAW_COLUMN(atbuf, v_line)
+    DRAW_COLUMN_AE(atbuf, v_line, psupB);
   }
   else
   {
@@ -1664,7 +1719,7 @@ void render_bg_m5(int line)
   for(column = 0; column < end; column++, index++)
   {
     atbuf = nt[index & pf_col_mask];
-    DRAW_COLUMN(atbuf, v_line)
+    DRAW_COLUMN_AE(atbuf, v_line, psupB);
   }
 
   /* Aether: ocultar Plano A o Window → limpiar su buffer compartido (linebuf[1])
@@ -1726,7 +1781,7 @@ void render_bg_m5(int line)
         atbuf = nt[(index - 1) & pf_col_mask];
       }
 
-      DRAW_COLUMN(atbuf, v_line)
+      DRAW_COLUMN_AE(atbuf, v_line, psupA);
     }
     else
     {
@@ -1737,7 +1792,7 @@ void render_bg_m5(int line)
     for(column = start; column < end; column++, index++)
     {
       atbuf = nt[index & pf_col_mask];
-      DRAW_COLUMN(atbuf, v_line)
+      DRAW_COLUMN_AE(atbuf, v_line, psupA);
     }
     }   /* Aether: fin gate Plano A */
 
@@ -1761,7 +1816,7 @@ void render_bg_m5(int line)
     for(column = start; column < end; column++)
     {
       atbuf = nt[column];
-      DRAW_COLUMN(atbuf, v_line)
+      DRAW_COLUMN_AE(atbuf, v_line, psupW);
     }
   }
 
@@ -1778,6 +1833,11 @@ void render_bg_m5_vs(int line)
   int column;
   uint32 atex, atbuf, *src, *dst;
   uint32 v_line, *nt;
+
+  /* Aether: máscaras de supresión por plano (id 0x105); NULL = fast path. */
+  const uint8 *psupA = AETHER_PSUP(0);
+  const uint8 *psupB = AETHER_PSUP(1);
+  const uint8 *psupW = AETHER_PSUP(2);
 
   /* Common data */
   uint32 xscroll      = *(uint32 *)&vram[hscb + ((line & hscroll_mask) << 2)];
@@ -1828,7 +1888,7 @@ void render_bg_m5_vs(int line)
     dst = (uint32 *)&linebuf[0][0x10 + shift];
 
     atbuf = nt[(index - 1) & pf_col_mask];
-    DRAW_COLUMN(atbuf, v_line)
+    DRAW_COLUMN_AE(atbuf, v_line, psupB);
   }
   else
   {
@@ -1852,7 +1912,7 @@ void render_bg_m5_vs(int line)
     v_line = (v_line & 7) << 3;
 
     atbuf = nt[index & pf_col_mask];
-    DRAW_COLUMN(atbuf, v_line)
+    DRAW_COLUMN_AE(atbuf, v_line, psupB);
   }
 
   /* Aether: ocultar Plano A o Window → limpiar su buffer compartido (linebuf[1]). */
@@ -1914,7 +1974,7 @@ void render_bg_m5_vs(int line)
         atbuf = nt[(index - 1) & pf_col_mask];
       }
 
-      DRAW_COLUMN(atbuf, v_line)
+      DRAW_COLUMN_AE(atbuf, v_line, psupA);
     }
     else
     {
@@ -1938,7 +1998,7 @@ void render_bg_m5_vs(int line)
       v_line = (v_line & 7) << 3;
 
       atbuf = nt[index & pf_col_mask];
-      DRAW_COLUMN(atbuf, v_line)
+      DRAW_COLUMN_AE(atbuf, v_line, psupA);
     }
     }   /* Aether: fin gate Plano A */
 
@@ -1962,7 +2022,7 @@ void render_bg_m5_vs(int line)
     for(column = start; column < end; column++)
     {
       atbuf = nt[column];
-      DRAW_COLUMN(atbuf, v_line)
+      DRAW_COLUMN_AE(atbuf, v_line, psupW);
     }
   }
 

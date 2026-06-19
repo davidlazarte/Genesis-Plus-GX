@@ -618,6 +618,21 @@ uint8 aether_sprite_suppress[16] = {0};
 #define AETHER_SPR_SUPPRESSED(slot) \
   (aether_sprite_suppress[((slot) >> 3) & 0x0F] & (1 << ((slot) & 7)))
 
+/* Aether fork delta: máscara de celdas de tile suprimidas (id de memoria 0x104,
+   escribible). Grilla de 8x8 px en coordenadas de SALIDA (col = x>>3, fila =
+   line>>3); bit set = esa celda se pinta con el backdrop (revela el fondo del
+   VDP), ocultar tile por hash en el Lab. El frontend mapea el hash de tile oculto
+   → celdas del frame y setea la máscara SÓLO para el frame visible (produce); la
+   re-simulación bare corre con la máscara vacía. Stride fijo de 64 columnas (los
+   modos de MD usan ≤40) → filas alineadas a byte (8 bytes/fila) para un descarte
+   rápido por línea. 64x64 celdas = 512 bytes. */
+#define AETHER_TILE_COLS 64
+#define AETHER_TILE_ROWS 64
+uint8 aether_tile_suppress[(AETHER_TILE_COLS * AETHER_TILE_ROWS) / 8] = {0};
+#define AETHER_TILE_SUPPRESSED(row, col) \
+  (aether_tile_suppress[(((row) * AETHER_TILE_COLS) + (col)) >> 3] \
+   & (1 << ((((row) * AETHER_TILE_COLS) + (col)) & 7)))
+
 /* Function pointers */
 void (*render_bg)(int line);
 void (*render_obj)(int line);
@@ -4923,6 +4938,31 @@ void render_line(int line)
 
     /* Render BG layer(s) */
     render_bg(line);
+
+    /* Aether: supresión de tiles por celda (id 0x104) → pinta la celda con el
+       backdrop (índice 0x40), revelando el fondo del VDP. Antes de los sprites
+       para no borrar un sprite que pase por encima de un tile oculto.
+       Las celdas se indexan en el espacio del frame que ve el frontend (= el que
+       hashea: bitmap.data + bordes), así que sumamos viewport.x/y (0 con overscan
+       off, el caso normal de MD). Descarte rápido por fila (8 bytes = 64 cols). */
+    {
+      const int frow = (line + bitmap.viewport.y) >> 3;
+      if (frow >= 0 && frow < AETHER_TILE_ROWS)
+      {
+        const uint8 *rb = &aether_tile_suppress[(frow * AETHER_TILE_COLS) >> 3];
+        if (rb[0]|rb[1]|rb[2]|rb[3]|rb[4]|rb[5]|rb[6]|rb[7])
+        {
+          const int vx = bitmap.viewport.x;
+          int x;
+          for (x = 0; x < bitmap.viewport.w; x += 8)
+          {
+            const int fcol = (x + vx) >> 3;
+            if (fcol < AETHER_TILE_COLS && (rb[fcol >> 3] & (1 << (fcol & 7))))
+              memset(&linebuf[0][0x20 + x], 0x40, 8);
+          }
+        }
+      }
+    }
 
     /* Render sprite layer (Aether: ocultable vía máscara de capas, id 0x102) */
     if (aether_layer_mask & AETHER_LAYER_OBJ)

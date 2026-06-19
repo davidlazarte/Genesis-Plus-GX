@@ -3777,6 +3777,11 @@ void *retro_get_memory_data(unsigned id)
          core/vdp_render.c. */
       case 0x103 /* AETHER_MEMORY_SPRITE_SUPPRESS */:
          return aether_sprite_suppress;
+      /* Aether fork delta: máscara de celdas de tile suprimidas (512 bytes,
+         ESCRIBIBLE). El frontend setea el bit de cada celda (col=x>>3, fila=
+         line>>3) a ocultar; render_line la pinta con el backdrop. vdp_render.c. */
+      case 0x104 /* AETHER_MEMORY_TILE_SUPPRESS */:
+         return aether_tile_suppress;
       default:
          return NULL;
    }
@@ -3847,6 +3852,10 @@ size_t retro_get_memory_size(unsigned id)
       /* Aether fork delta: bitmask de slots SAT suprimidos (16 bytes). */
       case 0x103 /* AETHER_MEMORY_SPRITE_SUPPRESS */:
          return sizeof(aether_sprite_suppress);
+
+      /* Aether fork delta: máscara de celdas de tile suprimidas (512 bytes). */
+      case 0x104 /* AETHER_MEMORY_TILE_SUPPRESS */:
+         return sizeof(aether_tile_suppress);
 
       default:
         return 0;

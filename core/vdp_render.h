@@ -112,6 +112,7 @@ extern uint16 spr_col;
 #define AETHER_LAYER_OBJ 0x08   /* Sprites             */
 extern uint8 aether_layer_mask;
 extern uint8 aether_sprite_suppress[16];   /* slots SAT suprimidos (id 0x103) */
+extern uint8 aether_tile_suppress[512];    /* celdas de tile suprimidas (id 0x104, 64x64) */
 
 /* Function prototypes */
 extern void render_init(void);

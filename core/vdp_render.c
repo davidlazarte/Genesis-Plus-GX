@@ -619,19 +619,29 @@ uint8 aether_sprite_suppress[16] = {0};
   (aether_sprite_suppress[((slot) >> 3) & 0x0F] & (1 << ((slot) & 7)))
 
 /* Aether fork delta: máscara de celdas de tile suprimidas (id de memoria 0x104,
-   escribible). Grilla de 8x8 px en coordenadas de SALIDA (col = x>>3, fila =
-   line>>3); bit set = esa celda se pinta con el backdrop (revela el fondo del
-   VDP), ocultar tile por hash en el Lab. El frontend mapea el hash de tile oculto
-   → celdas del frame y setea la máscara SÓLO para el frame visible (produce); la
-   re-simulación bare corre con la máscara vacía. Stride fijo de 64 columnas (los
-   modos de MD usan ≤40) → filas alineadas a byte (8 bytes/fila) para un descarte
-   rápido por línea. 64x64 celdas = 512 bytes. */
+   escribible). Grilla de 8x8 px en coordenadas del frame que ve el frontend
+   (col = (x+viewport.x)>>3, fila = (line+viewport.y)>>3); bit set = "ocultar este
+   tile". OCULTAR = PELAR UNA CAPA en el merge (no pintar backdrop): si el pixel
+   visible vino del primer plano (A/Window) se revela el Plano B de atrás; si vino
+   de B se revela el backdrop. Así "ver qué hay detrás" del elemento, no un agujero.
+   El frontend mapea el hash de tile oculto → celdas del frame y setea la máscara
+   SÓLO para el frame visible (produce); la re-sim bare corre con la máscara vacía.
+   Stride fijo de 64 columnas (los modos de MD usan ≤40) → filas alineadas a byte
+   (8 bytes/fila) para un descarte rápido por línea. 64x64 celdas = 512 bytes. */
 #define AETHER_TILE_COLS 64
 #define AETHER_TILE_ROWS 64
 uint8 aether_tile_suppress[(AETHER_TILE_COLS * AETHER_TILE_ROWS) / 8] = {0};
 #define AETHER_TILE_SUPPRESSED(row, col) \
   (aether_tile_suppress[(((row) * AETHER_TILE_COLS) + (col)) >> 3] \
    & (1 << ((((row) * AETHER_TILE_COLS) + (col)) & 7)))
+
+/* Estado del "peel" para la línea en curso (lo arma render_line antes de
+   render_bg y lo apaga antes de los sprites → no pela los merges de sprites).
+   Sólo se activa en líneas con alguna celda marcada → merge() conserva su fast
+   path para todos los demás casos/juegos. */
+static int aether_peel_active = 0;   /* la línea actual tiene celdas marcadas */
+static int aether_peel_row    = 0;   /* fila de celda (frame, con borde) de la línea */
+static int aether_peel_vx     = 0;   /* desplazamiento del borde izquierdo (viewport.x) */
 
 /* Function pointers */
 void (*render_bg)(int line);
@@ -984,8 +994,38 @@ static uint32 make_lut_bgobj_m4(uint32 bx, uint32 sx)
 /* Pixel layer merging function                                             */
 /*--------------------------------------------------------------------------*/
 
+/* Aether: merge que "pela una capa" en las celdas marcadas (id 0x104) → revela el
+   plano de atrás. Por pixel: `top` = resultado normal; `noA` = resultado con A/W
+   transparente (= Plano B o backdrop). Si top != noA, el pixel visible venía de
+   A/Window → se muestra noA (el Plano B / backdrop de atrás). Si top == noA, el
+   visible ya era B (o backdrop) → se pela a backdrop (0x40). Función aparte (no
+   inline) para no inflar el fast path de merge(), que sigue intacto. */
+static void aether_peel_merge(uint8 *srca, uint8 *srcb, uint8 *dst, uint8 *table, int width)
+{
+  int x = 0;
+  do
+  {
+    uint8 a   = *srca++;
+    uint8 b   = *srcb++;
+    uint8 top = table[(b << 8) | a];
+    int   fcol = (x + aether_peel_vx) >> 3;
+    if (fcol < AETHER_TILE_COLS && AETHER_TILE_SUPPRESSED(aether_peel_row, fcol))
+    {
+      uint8 noA = table[(b << 8)];               /* A/W transparente → B o backdrop */
+      *dst++ = (top != noA) ? noA : 0x40;        /* A visible→revela B ; si no→backdrop */
+    }
+    else
+    {
+      *dst++ = top;
+    }
+    x++;
+  }
+  while (--width);
+}
+
 INLINE void merge(uint8 *srca, uint8 *srcb, uint8 *dst, uint8 *table, int width)
 {
+  if (aether_peel_active) { aether_peel_merge(srca, srcb, dst, table, width); return; }
   do
   {
     *dst++ = table[(*srcb++ << 8) | (*srca++)];
@@ -4936,15 +4976,13 @@ void render_line(int line)
       bg_list_index = 0;
     }
 
-    /* Render BG layer(s) */
-    render_bg(line);
-
-    /* Aether: supresión de tiles por celda (id 0x104) → pinta la celda con el
-       backdrop (índice 0x40), revelando el fondo del VDP. Antes de los sprites
-       para no borrar un sprite que pase por encima de un tile oculto.
-       Las celdas se indexan en el espacio del frame que ve el frontend (= el que
-       hashea: bitmap.data + bordes), así que sumamos viewport.x/y (0 con overscan
-       off, el caso normal de MD). Descarte rápido por fila (8 bytes = 64 cols). */
+    /* Aether: ocultar tile por celda (id 0x104) → "pela una capa" en el merge de
+       render_bg, revelando el plano de atrás (ver aether_peel_merge). Se activa
+       sólo si esta línea tiene alguna celda marcada (descarte rápido: 8 bytes de
+       la fila), en coords del frame que ve el frontend (+ viewport.x/y; 0 con
+       overscan off, el caso normal de MD). Se apaga antes de los sprites para no
+       pelar sus merges (un sprite sobre un tile oculto sigue visible). */
+    aether_peel_active = 0;
     {
       const int frow = (line + bitmap.viewport.y) >> 3;
       if (frow >= 0 && frow < AETHER_TILE_ROWS)
@@ -4952,17 +4990,18 @@ void render_line(int line)
         const uint8 *rb = &aether_tile_suppress[(frow * AETHER_TILE_COLS) >> 3];
         if (rb[0]|rb[1]|rb[2]|rb[3]|rb[4]|rb[5]|rb[6]|rb[7])
         {
-          const int vx = bitmap.viewport.x;
-          int x;
-          for (x = 0; x < bitmap.viewport.w; x += 8)
-          {
-            const int fcol = (x + vx) >> 3;
-            if (fcol < AETHER_TILE_COLS && (rb[fcol >> 3] & (1 << (fcol & 7))))
-              memset(&linebuf[0][0x20 + x], 0x40, 8);
-          }
+          aether_peel_active = 1;
+          aether_peel_row    = frow;
+          aether_peel_vx     = bitmap.viewport.x;
         }
       }
     }
+
+    /* Render BG layer(s) */
+    render_bg(line);
+
+    /* Aether: el peel sólo aplica a los merges de BG, no a los de sprites. */
+    aether_peel_active = 0;
 
     /* Render sprite layer (Aether: ocultable vía máscara de capas, id 0x102) */
     if (aether_layer_mask & AETHER_LAYER_OBJ)

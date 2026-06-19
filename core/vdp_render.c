@@ -994,31 +994,43 @@ static uint32 make_lut_bgobj_m4(uint32 bx, uint32 sx)
 /* Pixel layer merging function                                             */
 /*--------------------------------------------------------------------------*/
 
-/* Aether: merge que "pela el primer plano" en las celdas marcadas (id 0x104) →
-   quita la contribución de Plano A + Window en esa celda y deja ver el PLANO B de
-   atrás (o el backdrop si B también está vacío ahí). Implementado como el merge
-   normal pero con A/W forzado a transparente (`table[(b<<8)|0]`) en las celdas
-   marcadas → revela el fondo de forma uniforme y limpia (sin agujeros ni inversión
-   en tiles con transparencias, p. ej. texto). Función aparte (no inline) para no
-   inflar el fast path de merge(), que sigue intacto.
-   Nota: pela el PRIMER PLANO (lo que se ve "adelante"). Un tile que vive en Plano B
-   no se oculta así (no hay plano debajo de B salvo el backdrop) → para eso está el
-   ocultar de Plano B entero. */
+/* Aether: merge que oculta los tiles marcados (id 0x104) revelando lo de atrás.
+   Procesa de a una celda (tramo de 8 px alineado al frame) y decide por celda:
+     · la celda tiene PRIMER PLANO (algún pixel de A/Window opaco) → es un elemento
+       de adelante: se pela A/W (merge con A transparente, `table[(b<<8)|0]`) y se
+       revela el PLANO B de atrás, uniforme y limpio (sin inversión en tiles con
+       transparencias, p. ej. texto);
+     · la celda es PLANO B puro (sin primer plano, un fondo) → se revela el
+       BACKDROP (índice 0x40), porque no hay nada debajo de B.
+   Así se oculta CUALQUIER tile (de adelante o de fondo) viendo lo que queda detrás.
+   La decisión es por tramo de celda-fila (8 px), no por pixel → un fondo de Plano B
+   puro (sin primer plano en ninguna fila) queda limpio en backdrop, y un elemento
+   de primer plano revela B de forma uniforme. Función aparte (no inline) para no
+   inflar el fast path de merge(), que sigue intacto. */
 static void aether_peel_merge(uint8 *srca, uint8 *srcb, uint8 *dst, uint8 *table, int width)
 {
   int x = 0;
-  do
+  while (width > 0)
   {
-    uint8 a = *srca++;
-    uint8 b = *srcb++;
-    int   fcol = (x + aether_peel_vx) >> 3;
+    int fx   = x + aether_peel_vx;
+    int seg  = 8 - (fx & 7);            /* px hasta el próximo borde de celda */
+    int fcol = fx >> 3;
+    int i;
+    if (seg > width) seg = width;
     if (fcol < AETHER_TILE_COLS && AETHER_TILE_SUPPRESSED(aether_peel_row, fcol))
-      *dst++ = table[(b << 8)];          /* A/W transparente → revela Plano B / backdrop */
+    {
+      int has_fg = 0;                   /* ¿algún pixel de primer plano (A/W) en la celda? */
+      for (i = 0; i < seg; i++) if (srca[i]) { has_fg = 1; break; }
+      for (i = 0; i < seg; i++)
+        dst[i] = has_fg ? table[(srcb[i] << 8)]   /* pela A/W → revela Plano B */
+                        : 0x40;                    /* fondo (B puro) → backdrop */
+    }
     else
-      *dst++ = table[(b << 8) | a];      /* merge normal */
-    x++;
+    {
+      for (i = 0; i < seg; i++) dst[i] = table[(srcb[i] << 8) | srca[i]];   /* merge normal */
+    }
+    srca += seg; srcb += seg; dst += seg; x += seg; width -= seg;
   }
-  while (--width);
 }
 
 INLINE void merge(uint8 *srca, uint8 *srcb, uint8 *dst, uint8 *table, int width)

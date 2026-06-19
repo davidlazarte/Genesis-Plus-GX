@@ -14,7 +14,7 @@
 > | Registros VDP | id **privado** `0x101` → `reg[0x20]` (bases de planos + tamaño, para el tilemap viewer) | `09dd082` |
 > | Máscara de capas | id **privado** `0x102` (1 byte, **escribible**) → ocultar/mostrar Plano A/B/Window/Sprites en el render (aislar capas para autoría en el Lab) | _(esta rama)_ |
 > | Slots suprimidos | id **privado** `0x103` (16 bytes, **escribible**) → bitmask de slots SAT que `parse_satb` saltea (ocultar sprite por hash; el frontend lo setea sólo en el frame visible) | _(esta rama)_ |
-> | Celdas suprimidas | id **privado** `0x104` (512 bytes, **escribible**) → máscara de celdas de tile (64×64, 8 px, coords del frame con bordes); en esas celdas `merge` **pela una capa** (A/Window visible → revela Plano B; B visible → backdrop) para ocultar tile/fondo/texto por hash viendo lo de atrás; el frontend lo setea sólo en el frame visible | _(esta rama)_ |
+> | Celdas suprimidas | id **privado** `0x104` (512 bytes, **escribible**) → máscara de celdas de tile (64×64, 8 px, coords del frame con bordes); en esas celdas `merge` **pela el primer plano** (Plano A + Window transparentes → revela el Plano B de atrás, o backdrop si B vacío) para ocultar fondo/texto por hash viendo lo de atrás; el frontend lo setea sólo en el frame visible | _(esta rama)_ |
 >
 > **Ids privados**: `0x100`/`0x101`/`0x102`/`0x103`/`0x104` no son estándar de libretro (la convención
 > reserva ≥`0x100` para usos no estandarizados). El Lab de Aether los consume

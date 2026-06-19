@@ -994,30 +994,28 @@ static uint32 make_lut_bgobj_m4(uint32 bx, uint32 sx)
 /* Pixel layer merging function                                             */
 /*--------------------------------------------------------------------------*/
 
-/* Aether: merge que "pela una capa" en las celdas marcadas (id 0x104) → revela el
-   plano de atrás. Por pixel: `top` = resultado normal; `noA` = resultado con A/W
-   transparente (= Plano B o backdrop). Si top != noA, el pixel visible venía de
-   A/Window → se muestra noA (el Plano B / backdrop de atrás). Si top == noA, el
-   visible ya era B (o backdrop) → se pela a backdrop (0x40). Función aparte (no
-   inline) para no inflar el fast path de merge(), que sigue intacto. */
+/* Aether: merge que "pela el primer plano" en las celdas marcadas (id 0x104) →
+   quita la contribución de Plano A + Window en esa celda y deja ver el PLANO B de
+   atrás (o el backdrop si B también está vacío ahí). Implementado como el merge
+   normal pero con A/W forzado a transparente (`table[(b<<8)|0]`) en las celdas
+   marcadas → revela el fondo de forma uniforme y limpia (sin agujeros ni inversión
+   en tiles con transparencias, p. ej. texto). Función aparte (no inline) para no
+   inflar el fast path de merge(), que sigue intacto.
+   Nota: pela el PRIMER PLANO (lo que se ve "adelante"). Un tile que vive en Plano B
+   no se oculta así (no hay plano debajo de B salvo el backdrop) → para eso está el
+   ocultar de Plano B entero. */
 static void aether_peel_merge(uint8 *srca, uint8 *srcb, uint8 *dst, uint8 *table, int width)
 {
   int x = 0;
   do
   {
-    uint8 a   = *srca++;
-    uint8 b   = *srcb++;
-    uint8 top = table[(b << 8) | a];
+    uint8 a = *srca++;
+    uint8 b = *srcb++;
     int   fcol = (x + aether_peel_vx) >> 3;
     if (fcol < AETHER_TILE_COLS && AETHER_TILE_SUPPRESSED(aether_peel_row, fcol))
-    {
-      uint8 noA = table[(b << 8)];               /* A/W transparente → B o backdrop */
-      *dst++ = (top != noA) ? noA : 0x40;        /* A visible→revela B ; si no→backdrop */
-    }
+      *dst++ = table[(b << 8)];          /* A/W transparente → revela Plano B / backdrop */
     else
-    {
-      *dst++ = top;
-    }
+      *dst++ = table[(b << 8) | a];      /* merge normal */
     x++;
   }
   while (--width);

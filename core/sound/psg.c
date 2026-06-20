@@ -91,6 +91,10 @@ static struct
   int chanDelta[4][2];
   int chanOut[4][2];
   int chanAmp[4][2];
+#ifdef SOUND_PROBE
+  unsigned int preamp;   /* last preamp value  (for gain refresh) */
+  unsigned int panning;  /* last panning value (for gain refresh) */
+#endif
 } psg;
 
 static void psg_update(unsigned int clocks);
@@ -140,6 +144,11 @@ void psg_reset(void)
 
   /* reset internal M-cycles clock counter */
   psg.clocks = 0;
+
+#ifdef SOUND_PROBE
+  psg.preamp  = 0;
+  psg.panning = 0;
+#endif
 }
 
 int psg_context_save(uint8 *state)
@@ -387,6 +396,12 @@ void psg_config(unsigned int clocks, unsigned int preamp, unsigned int panning)
 {
   int i;
 
+#ifdef SOUND_PROBE
+  /* remember settings so audio_probe gain changes can be re-applied live */
+  psg.preamp  = preamp;
+  psg.panning = panning;
+#endif
+
   /* PSG chip synchronization */
   if (clocks > psg.clocks)
   {
@@ -411,6 +426,18 @@ void psg_config(unsigned int clocks, unsigned int preamp, unsigned int panning)
         psg.chanAmp[i][0] = ((preamp * config.psg_ch_volumes[i]) / 100) * ((panning >> (i + 4)) & 1);
         psg.chanAmp[i][1] = ((preamp * config.psg_ch_volumes[i]) / 100) * ((panning >> (i + 0)) & 1);
     #endif
+
+#ifdef SOUND_PROBE
+    /* audio_probe per-channel gain (for HQ audio substitution) */
+    {
+      int pg = audio_probe_get_channel_gain(AP_SRC_PSG, i);
+      if (pg < 100)
+      {
+        psg.chanAmp[i][0] = (psg.chanAmp[i][0] * pg) / 100;
+        psg.chanAmp[i][1] = (psg.chanAmp[i][1] * pg) / 100;
+      }
+    }
+#endif
 
     /* tone channels */
     if (i < 3)
@@ -441,6 +468,16 @@ void psg_config(unsigned int clocks, unsigned int preamp, unsigned int panning)
     psg.chanOut[i][1] = (volume * psg.chanAmp[i][1]) / 100;
   }
 }
+
+#ifdef SOUND_PROBE
+/* Re-apply channel amplification using the last preamp/panning so an
+   audio_probe gain change takes effect immediately (propagated through the
+   same delta path psg_config uses). */
+void psg_refresh_gain(void)
+{
+  psg_config(psg.clocks, psg.preamp, psg.panning);
+}
+#endif
 
 void psg_end_frame(unsigned int clocks)
 {

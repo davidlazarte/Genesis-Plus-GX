@@ -133,8 +133,9 @@ int  audio_probe_poll(ap_event_t *out, int max);
 /* Fill the current emulation context/identity. */
 void audio_probe_get_context(ap_context_t *out);
 
-/* Per-channel output gain in percent (0 = mute, 100 = unchanged). Stored now;
-   wired into the audio mixer in phase 2. */
+/* Per-channel output gain in percent (0 = mute, 100 = unchanged), applied to
+   the audio mixer. FM channels 0-5 use AP_SRC_FM; while DAC mode is active,
+   channel 6 uses AP_SRC_DAC. PSG channels 0-3 use AP_SRC_PSG. */
 void audio_probe_set_channel_gain(ap_source_t src, int ch, int gain_percent);
 int  audio_probe_get_channel_gain(ap_source_t src, int ch);
 

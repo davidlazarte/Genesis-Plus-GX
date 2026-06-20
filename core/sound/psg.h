@@ -63,6 +63,8 @@ extern void psg_end_frame(unsigned int clocks);
    reported in block_fnum, attenuation (0-15, 15=off) in op_tl[0], and the
    noise control nibble (channel 3 only) in algorithm. */
 extern void PSG_GetVoice(int ch, ap_voice_t *out);
+/* Re-apply per-channel amplification immediately after a gain change. */
+extern void psg_refresh_gain(void);
 #endif
 
 #endif /* _PSG_H_ */

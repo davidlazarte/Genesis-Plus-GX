@@ -2183,6 +2183,21 @@ void YM2612Update(int *buffer, int length)
         if (config.md_ch_volumes[5] < 100) out_fm[5] = (out_fm[5] * config.md_ch_volumes[5]) / 100;
     #endif
 
+#ifdef SOUND_PROBE
+    /* audio_probe per-channel gain (for HQ audio substitution); channel 6
+       reports as the DAC source while DAC mode is active */
+    {
+      int ch, g;
+      for (ch = 0; ch < 6; ch++)
+      {
+        g = ((ch == 5) && ym2612.dacen)
+          ? audio_probe_get_channel_gain(AP_SRC_DAC, 5)
+          : audio_probe_get_channel_gain(AP_SRC_FM, ch);
+        if (g < 100) out_fm[ch] = (out_fm[ch] * g) / 100;
+      }
+    }
+#endif
+
     /* stereo DAC output panning & mixing  */
     lt  = ((out_fm[0]) & ym2612.OPN.pan[0]);
     rt  = ((out_fm[0]) & ym2612.OPN.pan[1]);

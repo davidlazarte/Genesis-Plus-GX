@@ -200,12 +200,17 @@ different pitches are "the same trigger" (use `timbre_hash`) or not (use `voice_
 - *Phase 3*: libretro core-option + `environment` callback to register the consumer.
 
 ### Phases
-1. **Phase 1 (core):** facade module + FM/PSG tap (RAW + NOTE_ON/OFF) + voice
-   accessors + timeline + context + build flag. Enough to capture and identify
-   triggers.
-2. **Phase 2 (substitution):** per-channel gain wired into mixing + reset/load
-   resync signals.
-3. **Phase 3 (extension):** detailed DAC/PCM, hash tuning, libretro core-option.
+1. **Phase 1 (core) — done:** facade module + FM/PSG tap (RAW + NOTE_ON/OFF) +
+   voice accessors + timeline + context + reset/state-load signals + build flag.
+   Enough to capture and identify triggers.
+2. **Phase 2 (substitution) — done:** per-channel gain wired into mixing.
+   - FM (and DAC on channel 6) gain is applied per sample in `YM2612Update`,
+     alongside the existing `md_ch_volumes` scaling.
+   - PSG gain is folded into `chanAmp` in `psg_config`; `audio_probe_set_channel_gain`
+     calls `psg_refresh_gain()` so a change is heard immediately (propagated
+     through the same delta path).
+3. **Phase 3 (extension):** detailed DAC/PCM, Nuked OPN2 path, hash tuning,
+   libretro core-option + environment callback to register the consumer.
 
 ### Non-regression guarantee
 With `SOUND_PROBE` disabled (default), there is **no behavioral change and zero

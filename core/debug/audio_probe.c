@@ -191,6 +191,11 @@ void audio_probe_set_channel_gain(ap_source_t src, int ch, int gain_percent)
   if ((int)src < 0 || (int)src > 3 || ch < 0 || ch > 7) return;
   if (gain_percent < 0) gain_percent = 0;
   s_gain[src][ch] = gain_percent;
+
+  /* PSG amplitude is baked into chanAmp; re-apply so the change is heard now.
+     FM/DAC gain is read per-sample, so no refresh is needed there. */
+  if (src == AP_SRC_PSG)
+    psg_refresh_gain();
 }
 
 int audio_probe_get_channel_gain(ap_source_t src, int ch)

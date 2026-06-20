@@ -1561,6 +1561,10 @@ INLINE void OPNWriteMode(int r, int v)
       if (v&0x20) FM_KEYON(CH,SLOT2); else FM_KEYOFF(CH,SLOT2);
       if (v&0x40) FM_KEYON(CH,SLOT3); else FM_KEYOFF(CH,SLOT3);
       if (v&0x80) FM_KEYON(CH,SLOT4); else FM_KEYOFF(CH,SLOT4);
+#ifdef SOUND_PROBE
+      /* report note on/off with the resolved voice (channel-independent) */
+      audio_probe_fm_key(c, v);
+#endif
       break;
   }
 }
@@ -1971,6 +1975,10 @@ void YM2612Write(unsigned int a, unsigned int v)
     default:  /* data port */
     {
       int addr = ym2612.OPN.ST.address; /* verified by Nemesis on real YM2612 */
+#ifdef SOUND_PROBE
+      /* report the raw write (audio_probe keeps the register shadow) */
+      audio_probe_fm_raw(addr, v);
+#endif
       switch( addr & 0x1f0 )
       {
         case 0x20:  /* 0x20-0x2f Mode */
@@ -1980,6 +1988,11 @@ void YM2612Write(unsigned int a, unsigned int v)
               ym2612.dacout = ((int)v - 0x80) << 6; /* convert to 14-bit output */
               break;
             case 0x2b:  /* DAC Sel  (ym2612) */
+#ifdef SOUND_PROBE
+              /* report DAC enable/disable transitions */
+              if ((unsigned int)(v & 0x80) != (unsigned int)ym2612.dacen)
+                audio_probe_fm_dac(v & 0x80);
+#endif
               /* b7 = dac enable */
               ym2612.dacen = v & 0x80;
               break;
@@ -2102,6 +2115,21 @@ void YM2612Update(int *buffer, int length)
         if (config.md_ch_volumes[4] < 100) out_fm[4] = (out_fm[4] * config.md_ch_volumes[4]) / 100;
         if (config.md_ch_volumes[5] < 100) out_fm[5] = (out_fm[5] * config.md_ch_volumes[5]) / 100;
     #endif
+
+#ifdef SOUND_PROBE
+    /* audio_probe per-channel gain (for HQ audio substitution); channel 6
+       reports as the DAC source while DAC mode is active */
+    {
+      int ch, g;
+      for (ch = 0; ch < 6; ch++)
+      {
+        g = ((ch == 5) && ym2612.dacen)
+          ? audio_probe_get_channel_gain(AP_SRC_DAC, 5)
+          : audio_probe_get_channel_gain(AP_SRC_FM, ch);
+        if (g < 100) out_fm[ch] = (out_fm[ch] * g) / 100;
+      }
+    }
+#endif
 
     /* stereo DAC output panning & mixing  */
     lt  = ((out_fm[0]) & ym2612.OPN.pan[0]);

@@ -18,8 +18,17 @@ INCFLAGS += -I$(LIBRETRO_COMM_DIR)/include/compat/msvc
 endif
 
 ifeq ($(HOOK_CPU), 1)
-   GENPLUS_SRC_DIR += $(CORE_DIR)/core/debug
    FLAGS += -DHOOK_CPU
+   NEED_DEBUG_DIR := 1
+endif
+
+ifeq ($(SOUND_PROBE), 1)
+   FLAGS += -DSOUND_PROBE
+   NEED_DEBUG_DIR := 1
+endif
+
+ifeq ($(NEED_DEBUG_DIR), 1)
+   GENPLUS_SRC_DIR += $(CORE_DIR)/core/debug
 endif
 
 ifeq ($(HAVE_CHD), 1)

@@ -603,6 +603,64 @@ static uint8 object_count[2];
 /* Sprite Collision Info */
 uint16 spr_col;
 
+/* Aether fork delta: máscara de capas visibles (id de memoria privado 0x102).
+   Bit set = visible. La leen render_bg_m5/_vs (planos) y render_line (sprites). */
+uint8 aether_layer_mask = 0xFF;
+#define AETHER_HIDE_A (!(aether_layer_mask & AETHER_LAYER_A))
+#define AETHER_HIDE_B (!(aether_layer_mask & AETHER_LAYER_B))
+#define AETHER_HIDE_W (!(aether_layer_mask & AETHER_LAYER_W))
+
+/* Aether fork delta: bitmask de slots SAT suprimidos (id de memoria 0x103,
+   escribible). Bit set = ese slot NO se parsea → su sprite no se dibuja (ocultar
+   sprite por hash en el Lab). El frontend lo setea SÓLO para el frame visible
+   (produce) y lo vacía para la re-simulación bare → status del VDP intacto. */
+uint8 aether_sprite_suppress[16] = {0};
+#define AETHER_SPR_SUPPRESSED(slot) \
+  (aether_sprite_suppress[((slot) >> 3) & 0x0F] & (1 << ((slot) & 7)))
+
+/* Aether fork delta: máscara de celdas de tile suprimidas (id de memoria 0x104,
+   escribible). Grilla de 8x8 px en coordenadas del frame que ve el frontend
+   (col = (x+viewport.x)>>3, fila = (line+viewport.y)>>3); bit set = "ocultar este
+   tile". OCULTAR = PELAR UNA CAPA en el merge (no pintar backdrop): si el pixel
+   visible vino del primer plano (A/Window) se revela el Plano B de atrás; si vino
+   de B se revela el backdrop. Así "ver qué hay detrás" del elemento, no un agujero.
+   El frontend mapea el hash de tile oculto → celdas del frame y setea la máscara
+   SÓLO para el frame visible (produce); la re-sim bare corre con la máscara vacía.
+   Stride fijo de 64 columnas (los modos de MD usan ≤40) → filas alineadas a byte
+   (8 bytes/fila) para un descarte rápido por línea. 64x64 celdas = 512 bytes. */
+#define AETHER_TILE_COLS 64
+#define AETHER_TILE_ROWS 64
+uint8 aether_tile_suppress[(AETHER_TILE_COLS * AETHER_TILE_ROWS) / 8] = {0};
+#define AETHER_TILE_SUPPRESSED(row, col) \
+  (aether_tile_suppress[(((row) * AETHER_TILE_COLS) + (col)) >> 3] \
+   & (1 << ((((row) * AETHER_TILE_COLS) + (col)) & 7)))
+
+/* Aether fork delta: tiles de PLANO suprimidos por (plano, patrón, paleta) — id de
+   memoria 0x105, escribible (Fase 2b del Lab: ocultar un tile de fondo). A diferencia
+   de 0x104 (por celda de pantalla), esto oculta el GRÁFICO del tile dondequiera que
+   aparezca en su plano, sin depender del scroll: render_bg_m5/_vs lo consultan por
+   columna al leer la nametable. 3 planos (A=0, B=1, Window=2) × bitmap de
+   (patrón<<2 | paleta) = 2048×4 = 8192 bits = 1024 bytes/plano = 3072 bytes. Identidad
+   idéntica a collect_plane_tiles del frontend (patrón = word & 0x7FF, paleta = bits
+   13-14). Ocultar un tile de A/Window deja su columna transparente → se ve el Plano B
+   (o backdrop); ocultar uno de B → backdrop. Sólo en el frame visible (produce); la
+   re-sim bare corre con la máscara vacía (active=0) → determinismo de video intacto. */
+uint8 aether_plane_tile_suppress[3 * 1024] = {0};
+uint8 aether_plane_suppress_active = 0;   /* id 0x106: lo setea el frontend (1 = hay algo oculto) */
+#define AETHER_PSUP(plane) \
+  (aether_plane_suppress_active ? &aether_plane_tile_suppress[(plane) * 1024] : (const uint8 *)0)
+/* Clave e índice de bit de una celda de 16 bits (patrón 0x7FF | paleta bits 13-14). */
+#define AETHER_PTKEY(cell)     ((((uint32)(cell) & 0x7FFu) << 2) | (((uint32)(cell) >> 13) & 3u))
+#define AETHER_PTSUP(ps, cell) ((ps)[AETHER_PTKEY(cell) >> 3] & (1u << (AETHER_PTKEY(cell) & 7u)))
+
+/* Estado del "peel" para la línea en curso (lo arma render_line antes de
+   render_bg y lo apaga antes de los sprites → no pela los merges de sprites).
+   Sólo se activa en líneas con alguna celda marcada → merge() conserva su fast
+   path para todos los demás casos/juegos. */
+static int aether_peel_active = 0;   /* la línea actual tiene celdas marcadas */
+static int aether_peel_row    = 0;   /* fila de celda (frame, con borde) de la línea */
+static int aether_peel_vx     = 0;   /* desplazamiento del borde izquierdo (viewport.x) */
+
 /* Function pointers */
 void (*render_bg)(int line);
 void (*render_obj)(int line);
@@ -954,8 +1012,48 @@ static uint32 make_lut_bgobj_m4(uint32 bx, uint32 sx)
 /* Pixel layer merging function                                             */
 /*--------------------------------------------------------------------------*/
 
+/* Aether: merge que oculta los tiles marcados (id 0x104) revelando lo de atrás.
+   Procesa de a una celda (tramo de 8 px alineado al frame) y decide por celda:
+     · la celda tiene PRIMER PLANO (algún pixel de A/Window opaco) → es un elemento
+       de adelante: se pela A/W (merge con A transparente, `table[(b<<8)|0]`) y se
+       revela el PLANO B de atrás, uniforme y limpio (sin inversión en tiles con
+       transparencias, p. ej. texto);
+     · la celda es PLANO B puro (sin primer plano, un fondo) → se revela el
+       BACKDROP (índice 0x40), porque no hay nada debajo de B.
+   Así se oculta CUALQUIER tile (de adelante o de fondo) viendo lo que queda detrás.
+   La decisión es por tramo de celda-fila (8 px), no por pixel → un fondo de Plano B
+   puro (sin primer plano en ninguna fila) queda limpio en backdrop, y un elemento
+   de primer plano revela B de forma uniforme. Función aparte (no inline) para no
+   inflar el fast path de merge(), que sigue intacto. */
+static void aether_peel_merge(uint8 *srca, uint8 *srcb, uint8 *dst, uint8 *table, int width)
+{
+  int x = 0;
+  while (width > 0)
+  {
+    int fx   = x + aether_peel_vx;
+    int seg  = 8 - (fx & 7);            /* px hasta el próximo borde de celda */
+    int fcol = fx >> 3;
+    int i;
+    if (seg > width) seg = width;
+    if (fcol < AETHER_TILE_COLS && AETHER_TILE_SUPPRESSED(aether_peel_row, fcol))
+    {
+      int has_fg = 0;                   /* ¿algún pixel de primer plano (A/W) en la celda? */
+      for (i = 0; i < seg; i++) if (srca[i]) { has_fg = 1; break; }
+      for (i = 0; i < seg; i++)
+        dst[i] = has_fg ? table[(srcb[i] << 8)]   /* pela A/W → revela Plano B */
+                        : 0x40;                    /* fondo (B puro) → backdrop */
+    }
+    else
+    {
+      for (i = 0; i < seg; i++) dst[i] = table[(srcb[i] << 8) | srca[i]];   /* merge normal */
+    }
+    srca += seg; srcb += seg; dst += seg; x += seg; width -= seg;
+  }
+}
+
 INLINE void merge(uint8 *srca, uint8 *srcb, uint8 *dst, uint8 *table, int width)
 {
+  if (aether_peel_active) { aether_peel_merge(srca, srcb, dst, table, width); return; }
   do
   {
     *dst++ = table[(*srcb++ << 8) | (*srca++)];
@@ -1528,6 +1626,38 @@ void render_bg_m4(int line)
   }
 }
 
+/* Aether fork delta: dibuja una columna de 2 celdas igual que DRAW_COLUMN, pero
+   saltea (deja transparente, color 0) las celdas cuyo patrón+paleta esté en la
+   máscara de supresión por-plano `ps` (id 0x105). `ps == NULL` → camino idéntico a
+   DRAW_COLUMN (sin costo para los demás juegos). Respeta el orden de dibujo
+   (LSB/MSB) según el endianness, igual que DRAW_COLUMN. Devuelve el `dst` avanzado. */
+#ifdef ALIGN_LONG
+#define AETHER_PUT0()  do { WRITE_LONG(dst, 0); dst++; WRITE_LONG(dst, 0); dst++; } while (0)
+#define AETHER_PUTS()  do { WRITE_LONG(dst, src[0] | atex); dst++; WRITE_LONG(dst, src[1] | atex); dst++; } while (0)
+#else
+#define AETHER_PUT0()  do { *dst++ = 0; *dst++ = 0; } while (0)
+#define AETHER_PUTS()  do { *dst++ = (src[0] | atex); *dst++ = (src[1] | atex); } while (0)
+#endif
+INLINE uint32 *aether_draw_col(uint32 *dst, uint32 atbuf, uint32 v_line, const uint8 *ps)
+{
+  uint32 atex, *src;
+#ifdef LSB_FIRST
+  if (AETHER_PTSUP(ps, atbuf & 0xFFFFu))        { AETHER_PUT0(); }
+  else { GET_LSB_TILE(atbuf, v_line) AETHER_PUTS(); }
+  if (AETHER_PTSUP(ps, (atbuf >> 16) & 0xFFFFu)){ AETHER_PUT0(); }
+  else { GET_MSB_TILE(atbuf, v_line) AETHER_PUTS(); }
+#else
+  if (AETHER_PTSUP(ps, (atbuf >> 16) & 0xFFFFu)){ AETHER_PUT0(); }
+  else { GET_MSB_TILE(atbuf, v_line) AETHER_PUTS(); }
+  if (AETHER_PTSUP(ps, atbuf & 0xFFFFu))        { AETHER_PUT0(); }
+  else { GET_LSB_TILE(atbuf, v_line) AETHER_PUTS(); }
+#endif
+  return dst;
+}
+/* Atajo: usa el fast path (DRAW_COLUMN) cuando no hay supresión en este plano. */
+#define DRAW_COLUMN_AE(ATTR, LINE, PS) \
+  do { if (PS) dst = aether_draw_col(dst, (ATTR), (LINE), (PS)); else { DRAW_COLUMN((ATTR), (LINE)) } } while (0)
+
 /* Mode 5 */
 #ifndef ALT_RENDERER
 void render_bg_m5(int line)
@@ -1541,6 +1671,11 @@ void render_bg_m5(int line)
   uint32 pf_col_mask  = playfield_col_mask;
   uint32 pf_row_mask  = playfield_row_mask;
   uint32 pf_shift     = playfield_shift;
+
+  /* Aether: máscaras de supresión por plano (id 0x105); NULL = fast path. */
+  const uint8 *psupA = AETHER_PSUP(0);
+  const uint8 *psupB = AETHER_PSUP(1);
+  const uint8 *psupW = AETHER_PSUP(2);
 
   /* Window & Plane A */
   int a = (reg[18] & 0x1F) << 3;
@@ -1573,7 +1708,7 @@ void render_bg_m5(int line)
     dst = (uint32 *)&linebuf[0][0x10 + shift];
 
     atbuf = nt[(index - 1) & pf_col_mask];
-    DRAW_COLUMN(atbuf, v_line)
+    DRAW_COLUMN_AE(atbuf, v_line, psupB);
   }
   else
   {
@@ -1584,8 +1719,13 @@ void render_bg_m5(int line)
   for(column = 0; column < end; column++, index++)
   {
     atbuf = nt[index & pf_col_mask];
-    DRAW_COLUMN(atbuf, v_line)
+    DRAW_COLUMN_AE(atbuf, v_line, psupB);
   }
+
+  /* Aether: ocultar Plano A o Window → limpiar su buffer compartido (linebuf[1])
+     antes de dibujar; lo no dibujado queda transparente y se ve Plano B. */
+  if (AETHER_HIDE_A || AETHER_HIDE_W)
+    memset(&linebuf[1][0x20], 0, bitmap.viewport.w);
 
   if (w == (line >= a))
   {
@@ -1603,6 +1743,8 @@ void render_bg_m5(int line)
   /* Plane A */
   if (a)
   {
+    if (!AETHER_HIDE_A)   /* Aether: gate Plano A (el rango de Window se fija igual abajo) */
+    {
     /* Plane A width */
     start = clip[0].left;
     end   = clip[0].right;
@@ -1639,7 +1781,7 @@ void render_bg_m5(int line)
         atbuf = nt[(index - 1) & pf_col_mask];
       }
 
-      DRAW_COLUMN(atbuf, v_line)
+      DRAW_COLUMN_AE(atbuf, v_line, psupA);
     }
     else
     {
@@ -1650,8 +1792,9 @@ void render_bg_m5(int line)
     for(column = start; column < end; column++, index++)
     {
       atbuf = nt[index & pf_col_mask];
-      DRAW_COLUMN(atbuf, v_line)
+      DRAW_COLUMN_AE(atbuf, v_line, psupA);
     }
+    }   /* Aether: fin gate Plano A */
 
     /* Window width */
     start = clip[1].left;
@@ -1659,7 +1802,7 @@ void render_bg_m5(int line)
   }
 
   /* Window */
-  if (w)
+  if (w && !AETHER_HIDE_W)   /* Aether: gate Window */
   {
     /* Window name table */
     nt = (uint32 *)&vram[ntwb | ((line >> 3) << (6 + (reg[12] & 1)))];
@@ -1673,9 +1816,13 @@ void render_bg_m5(int line)
     for(column = start; column < end; column++)
     {
       atbuf = nt[column];
-      DRAW_COLUMN(atbuf, v_line)
+      DRAW_COLUMN_AE(atbuf, v_line, psupW);
     }
   }
+
+  /* Aether: ocultar Plano B → limpiar su buffer antes del merge. */
+  if (AETHER_HIDE_B)
+    memset(&linebuf[0][0x20], 0, bitmap.viewport.w);
 
   /* Merge background layers */
   merge(&linebuf[1][0x20], &linebuf[0][0x20], &linebuf[0][0x20], lut[(reg[12] & 0x08) >> 2], bitmap.viewport.w);
@@ -1686,6 +1833,11 @@ void render_bg_m5_vs(int line)
   int column;
   uint32 atex, atbuf, *src, *dst;
   uint32 v_line, *nt;
+
+  /* Aether: máscaras de supresión por plano (id 0x105); NULL = fast path. */
+  const uint8 *psupA = AETHER_PSUP(0);
+  const uint8 *psupB = AETHER_PSUP(1);
+  const uint8 *psupW = AETHER_PSUP(2);
 
   /* Common data */
   uint32 xscroll      = *(uint32 *)&vram[hscb + ((line & hscroll_mask) << 2)];
@@ -1736,7 +1888,7 @@ void render_bg_m5_vs(int line)
     dst = (uint32 *)&linebuf[0][0x10 + shift];
 
     atbuf = nt[(index - 1) & pf_col_mask];
-    DRAW_COLUMN(atbuf, v_line)
+    DRAW_COLUMN_AE(atbuf, v_line, psupB);
   }
   else
   {
@@ -1760,8 +1912,12 @@ void render_bg_m5_vs(int line)
     v_line = (v_line & 7) << 3;
 
     atbuf = nt[index & pf_col_mask];
-    DRAW_COLUMN(atbuf, v_line)
+    DRAW_COLUMN_AE(atbuf, v_line, psupB);
   }
+
+  /* Aether: ocultar Plano A o Window → limpiar su buffer compartido (linebuf[1]). */
+  if (AETHER_HIDE_A || AETHER_HIDE_W)
+    memset(&linebuf[1][0x20], 0, bitmap.viewport.w);
 
   if (w == (line >= a))
   {
@@ -1779,6 +1935,8 @@ void render_bg_m5_vs(int line)
   /* Plane A */
   if (a)
   {
+    if (!AETHER_HIDE_A)   /* Aether: gate Plano A */
+    {
     /* Plane A width */
     start = clip[0].left;
     end   = clip[0].right;
@@ -1816,7 +1974,7 @@ void render_bg_m5_vs(int line)
         atbuf = nt[(index - 1) & pf_col_mask];
       }
 
-      DRAW_COLUMN(atbuf, v_line)
+      DRAW_COLUMN_AE(atbuf, v_line, psupA);
     }
     else
     {
@@ -1840,8 +1998,9 @@ void render_bg_m5_vs(int line)
       v_line = (v_line & 7) << 3;
 
       atbuf = nt[index & pf_col_mask];
-      DRAW_COLUMN(atbuf, v_line)
+      DRAW_COLUMN_AE(atbuf, v_line, psupA);
     }
+    }   /* Aether: fin gate Plano A */
 
     /* Window width */
     start = clip[1].left;
@@ -1849,7 +2008,7 @@ void render_bg_m5_vs(int line)
   }
 
   /* Window */
-  if (w)
+  if (w && !AETHER_HIDE_W)   /* Aether: gate Window */
   {
     /* Window name table */
     nt = (uint32 *)&vram[ntwb | ((line >> 3) << (6 + (reg[12] & 1)))];
@@ -1863,9 +2022,13 @@ void render_bg_m5_vs(int line)
     for(column = start; column < end; column++)
     {
       atbuf = nt[column];
-      DRAW_COLUMN(atbuf, v_line)
+      DRAW_COLUMN_AE(atbuf, v_line, psupW);
     }
   }
+
+  /* Aether: ocultar Plano B → limpiar su buffer antes del merge. */
+  if (AETHER_HIDE_B)
+    memset(&linebuf[0][0x20], 0, bitmap.viewport.w);
 
   /* Merge background layers */
   merge(&linebuf[1][0x20], &linebuf[0][0x20], &linebuf[0][0x20], lut[(reg[12] & 0x08) >> 2], bitmap.viewport.w);
@@ -4509,6 +4672,11 @@ void parse_satb_m5(int line)
       /* Check if sprite is visible on current line */
       if (ypos < height)
       {
+        /* Aether: ocultar sprite por hash — saltear el slot SAT suprimido (no se
+           agrega → no se dibuja). Sólo el frame visible suprime; la re-sim bare
+           corre con la máscara vacía → status del VDP intacto, replay sin drift. */
+        if (!AETHER_SPR_SUPPRESSED(link >> 2))
+        {
         /* Sprite overflow */
         if (count == max)
         {
@@ -4527,6 +4695,7 @@ void parse_satb_m5(int line)
 
         /* Next sprite entry */
         object_info++;
+        }
       }
     }
 
@@ -4597,6 +4766,11 @@ void parse_satb_m5_im2(int line)
       /* Check if sprite is visible on current line */
       if (ypos < height)
       {
+        /* Aether: ocultar sprite por hash — saltear el slot SAT suprimido (no se
+           agrega → no se dibuja). Sólo el frame visible suprime; la re-sim bare
+           corre con la máscara vacía → status del VDP intacto, replay sin drift. */
+        if (!AETHER_SPR_SUPPRESSED(link >> 2))
+        {
         /* Sprite overflow */
         if (count == max)
         {
@@ -4615,6 +4789,7 @@ void parse_satb_m5_im2(int line)
 
         /* Next sprite entry */
         object_info++;
+        }
       }
     }
 
@@ -4871,11 +5046,36 @@ void render_line(int line)
       bg_list_index = 0;
     }
 
+    /* Aether: ocultar tile por celda (id 0x104) → "pela una capa" en el merge de
+       render_bg, revelando el plano de atrás (ver aether_peel_merge). Se activa
+       sólo si esta línea tiene alguna celda marcada (descarte rápido: 8 bytes de
+       la fila), en coords del frame que ve el frontend (+ viewport.x/y; 0 con
+       overscan off, el caso normal de MD). Se apaga antes de los sprites para no
+       pelar sus merges (un sprite sobre un tile oculto sigue visible). */
+    aether_peel_active = 0;
+    {
+      const int frow = (line + bitmap.viewport.y) >> 3;
+      if (frow >= 0 && frow < AETHER_TILE_ROWS)
+      {
+        const uint8 *rb = &aether_tile_suppress[(frow * AETHER_TILE_COLS) >> 3];
+        if (rb[0]|rb[1]|rb[2]|rb[3]|rb[4]|rb[5]|rb[6]|rb[7])
+        {
+          aether_peel_active = 1;
+          aether_peel_row    = frow;
+          aether_peel_vx     = bitmap.viewport.x;
+        }
+      }
+    }
+
     /* Render BG layer(s) */
     render_bg(line);
 
-    /* Render sprite layer */
-    render_obj(line & 1);
+    /* Aether: el peel sólo aplica a los merges de BG, no a los de sprites. */
+    aether_peel_active = 0;
+
+    /* Render sprite layer (Aether: ocultable vía máscara de capas, id 0x102) */
+    if (aether_layer_mask & AETHER_LAYER_OBJ)
+      render_obj(line & 1);
 
     /* Left-most column blanking */
     if (reg[0] & 0x20)

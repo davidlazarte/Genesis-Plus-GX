@@ -41,6 +41,8 @@
 #define _GAMEPAD_H_
 
 /* Function prototypes */
+extern int gamepad_context_save(unsigned char *state);
+extern int gamepad_context_load(unsigned char *state);
 extern void gamepad_reset(int port);
 extern void gamepad_refresh(int port);
 extern void gamepad_end_frame(int port, unsigned int cycles);

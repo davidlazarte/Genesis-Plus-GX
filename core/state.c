@@ -37,6 +37,7 @@
  ****************************************************************************************/
 
 #include "shared.h"
+#include "gamepad.h"
 
 int8 fast_savestates = false;
 int8 reset_do_not_clear_buffers = false;
@@ -192,6 +193,13 @@ int state_load(unsigned char *state)
     sms_cart_switch(~io_reg[0x0E]);
   }
 
+  /* AETHER: input hardware latch state (see gamepad.c) — present in
+     1.7.7+ saves only; older saves load with reset pad phase (legacy). */
+  if (version[15] >= 0x37)
+  {
+    bufferptr += gamepad_context_load(&state[bufferptr]);
+  }
+
   return bufferptr;
 }
 
@@ -282,6 +290,9 @@ int state_save(unsigned char *state)
     /* MS cartridge hardware */
     bufferptr += sms_cart_context_save(&state[bufferptr]);
   }
+
+  /* AETHER: input hardware latch state (see gamepad.c) */
+  bufferptr += gamepad_context_save(&state[bufferptr]);
 
   /* return total size */
   return bufferptr;

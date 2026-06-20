@@ -233,3 +233,104 @@ different pitches are "the same trigger" (use `timbre_hash`) or not (use `voice_
 With `SOUND_PROBE` disabled (default), there is **no behavioral change and zero
 cost** (same pattern as `HOOK_CPU`). All matching/sequencing lives outside the core;
 GPGX only exposes facts and levers.
+
+---
+
+## Consumer integration
+
+### Building
+
+The probe is opt-in. Build the libretro core with the flag enabled:
+
+```sh
+make -f Makefile.libretro platform=unix SOUND_PROBE=1
+```
+
+When `SOUND_PROBE=1`, the `audio_probe_*` symbols are exported from the shared
+library (via `libretro/link.T`); when it is off, none are present and the code
+compiles to nothing.
+
+### Attaching a consumer
+
+There are two ways to receive events. Pick one:
+
+- **Callback (push):** register a function called inline for every event.
+- **Poll (pull):** leave the callback unset and drain the ring buffer
+  periodically (e.g. once per frame). This decouples the emulator thread from
+  the tool thread.
+
+A frontend or harness that `dlopen`s the core resolves the consumer API by name:
+
+```c
+#include "audio_probe.h"   /* from core/debug */
+
+/* resolved via dlsym() on the loaded core */
+void (*set_cb)(ap_callback_t, void *);
+int  (*poll)(ap_event_t *, int);
+void (*get_ctx)(ap_context_t *);
+void (*set_gain)(ap_source_t, int, int);
+
+set_cb  = dlsym(core, "audio_probe_set_callback");
+poll    = dlsym(core, "audio_probe_poll");
+get_ctx = dlsym(core, "audio_probe_get_context");
+set_gain= dlsym(core, "audio_probe_set_channel_gain");
+```
+
+### Minimal poll loop
+
+```c
+ap_event_t evs[512];
+for (;;) {
+  /* ... run one frame of the core ... */
+  int n = poll(evs, 512);
+  for (int i = 0; i < n; i++) {
+    switch (evs[i].type) {
+      case AP_EV_NOTE_ON:
+        /* evs[i].voice_hash identifies the sound, regardless of channel;
+           evs[i].group ties simultaneous cross-channel anchors together */
+        on_trigger(evs[i].voice_hash, evs[i].group, evs[i].t_global);
+        break;
+      case AP_EV_NOTE_OFF:
+      case AP_EV_DAC_STOP:
+        on_release(evs[i].channel);
+        break;
+      case AP_EV_RESET:
+      case AP_EV_STATE_LOAD:
+        resync();            /* discard in-flight hypotheses */
+        break;
+      default: break;
+    }
+  }
+}
+```
+
+### Substituting audio
+
+To replace a sound with an HQ track, attenuate the channels it occupies and
+play your own stream:
+
+```c
+set_gain(AP_SRC_FM, 5, 0);    /* mute FM channel 6 */
+set_gain(AP_SRC_DAC, 5, 0);   /* mute the DAC voice on channel 6 */
+/* ... restore with gain 100 when the substituted sound ends ... */
+```
+
+FM/DAC gain takes effect on the next sample; PSG gain is applied immediately
+through `psg_refresh_gain()`.
+
+---
+
+## Testing
+
+Unit tests for the probe logic live in [`tests/`](../tests/) and build the
+module in isolation (no full emulator build):
+
+```sh
+cd tests
+make check
+```
+
+They cover event round-trips, the monotonic timeline, FM voice decoding,
+**channel-independent fingerprints**, note/DAC/PSG events, per-channel gain,
+coincidence grouping, ring-buffer overflow, the callback path, and the context
+accessor. See [`tests/README.md`](../tests/README.md).

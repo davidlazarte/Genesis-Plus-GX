@@ -200,6 +200,11 @@ int state_load(unsigned char *state)
     bufferptr += gamepad_context_load(&state[bufferptr]);
   }
 
+#ifdef SOUND_PROBE
+  /* tell the probe consumer to resync after a state load */
+  audio_probe_signal(AP_EV_STATE_LOAD);
+#endif
+
   return bufferptr;
 }
 

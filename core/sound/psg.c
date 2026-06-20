@@ -238,6 +238,11 @@ void psg_write(unsigned int clocks, unsigned int data)
     psg.clocks += ((clocks - psg.clocks + PSG_MCYCLES_RATIO - 1) / PSG_MCYCLES_RATIO) * PSG_MCYCLES_RATIO;
   }
 
+#ifdef SOUND_PROBE
+  /* report the raw PSG bus write (timestamped) */
+  audio_probe_psg_raw(clocks, data);
+#endif
+
   if (data & 0x80)
   {
     /* latch register index (1xxx----) */
@@ -575,4 +580,20 @@ static void psg_update(unsigned int clocks)
     /* save channel generator polarity */
     psg.polarity[i] = polarity;
   }
-}  
+}
+
+#ifdef SOUND_PROBE
+/* Snapshot the resolved voice of PSG channel 'ch' (0-3): tone period in
+   block_fnum, attenuation (0-15, 15=off) in op_tl[0], and the noise control
+   nibble (channel 3) in algorithm. */
+void PSG_GetVoice(int ch, ap_voice_t *out)
+{
+  if (!out) return;
+  memset(out, 0, sizeof(*out));
+  if (ch < 0 || ch > 3) return;
+  out->op_tl[0]   = (unsigned char)(psg.regs[ch * 2 + 1] & 0x0f);
+  out->block_fnum = (unsigned int)(psg.regs[ch * 2] & 0x3ff);
+  if (ch == 3)
+    out->algorithm = (unsigned char)(psg.regs[6] & 0x07);
+}
+#endif /* SOUND_PROBE */

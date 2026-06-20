@@ -113,6 +113,11 @@ static void YM2612_Reset(unsigned int cycles)
 
 static void YM2612_Write(unsigned int cycles, unsigned int a, unsigned int v)
 {
+#ifdef SOUND_PROBE
+  /* timestamp for any audio_probe events emitted by YM2612Write() below */
+  audio_probe_set_time(cycles);
+#endif
+
   /* detect DATA port write */
   if (a & 1)
   {
@@ -393,6 +398,12 @@ void sound_reset(void)
   
   /* reset FM cycle counters */
   fm_cycles_start = fm_cycles_count = 0;
+
+#ifdef SOUND_PROBE
+  /* reset the probe timeline/buffer and notify the consumer */
+  audio_probe_reset();
+  audio_probe_signal(AP_EV_RESET);
+#endif
 }
 
 #ifdef __LIBRETRO__
@@ -530,6 +541,11 @@ int sound_update(unsigned int cycles)
 
   /* end of blip buffer time frame */
   blip_end_frame(snd.blips[0], cycles);
+
+#ifdef SOUND_PROBE
+  /* emit end-of-frame marker and advance the monotonic timeline */
+  audio_probe_frame(cycles);
+#endif
 
   /* return number of available samples */
   return blip_samples_avail(snd.blips[0]);

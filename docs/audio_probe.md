@@ -209,8 +209,25 @@ different pitches are "the same trigger" (use `timbre_hash`) or not (use `voice_
    - PSG gain is folded into `chanAmp` in `psg_config`; `audio_probe_set_channel_gain`
      calls `psg_refresh_gain()` so a change is heard immediately (propagated
      through the same delta path).
-3. **Phase 3 (extension):** detailed DAC/PCM, Nuked OPN2 path, hash tuning,
-   libretro core-option + environment callback to register the consumer.
+3. **Phase 3 (extension) — partial:**
+   - **Nuked OPN2 (YM3438) parity — done:** the alternative high-accuracy FM
+     core funnels through `YM3438_Write`, which does not expose the internal
+     address latch, so `sound.c` mirrors the bus protocol (address ports 0/2,
+     data ports 1/3) to recover the register address and emits RAW / NOTE_ON /
+     NOTE_OFF / DAC just like the MAME path. The FM register shadow and voice
+     decoder now live in `audio_probe.c`, so both cores share one fingerprint
+     path.
+   - **libretro exposure — done:** the `audio_probe_*` symbols are added to the
+     version script (`libretro/link.T`), so a frontend / harness that `dlopen`s
+     the core can resolve the consumer API (`audio_probe_set_callback`,
+     `audio_probe_poll`, `audio_probe_get_context`, `audio_probe_set_channel_gain`).
+     They are only present when `SOUND_PROBE` is built in.
+   - **Deferred:** Sega CD PCM (RF5C164) events — the PCM chip runs on the
+     Sub-CPU clock domain, so its events need a dedicated timestamp/correlation
+     design rather than the main FM/PSG timeline; PSG note-on/off classification
+     from attenuation transitions; hash tuning; a dedicated libretro
+     `GET_PROC_ADDRESS` interface (the version-script export covers `dlopen`
+     consumers today).
 
 ### Non-regression guarantee
 With `SOUND_PROBE` disabled (default), there is **no behavioral change and zero

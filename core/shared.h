@@ -9,6 +9,9 @@
 #include "types.h"
 #include "osd.h"
 #include "macros.h"
+#ifdef SOUND_PROBE
+#include "audio_probe.h"
+#endif
 #include "loadrom.h"
 #include "m68k.h"
 #include "z80.h"

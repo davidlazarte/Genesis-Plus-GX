@@ -67,6 +67,11 @@ static ap_event_t   s_ring[AUDIO_PROBE_RING_SIZE];
 static unsigned int s_head = 0; /* producer (emulator) */
 static unsigned int s_tail = 0; /* consumer (tool)     */
 
+/* raw FM register shadow: bank 0 = CH1-3, bank 1 = CH4-6. Updated on every FM
+   write (from either the MAME or Nuked core), so a note's resolved voice can
+   be decoded regardless of when the driver programmed the patch. */
+static unsigned char s_fm_regs[2][256];
+
 static void ap_init_gain(void)
 {
   int s, c;
@@ -101,6 +106,46 @@ static unsigned long long ap_fnv(unsigned long long h, const void *p, int n)
     h *= 1099511628211ULL;
   }
   return h;
+}
+
+/* Decode the resolved voice of FM channel 'ch' (0-5) from the register shadow.
+   Operators are reported in hardware register order; values match what the
+   driver programmed (TL/AR/DR/SR/RR/MUL/DT, algorithm, feedback, LFO
+   sensitivity, blk/fnum), so a fingerprint is independent of channel. */
+static void ap_decode_fm_voice(int ch, ap_voice_t *out)
+{
+  int bank, cn, op;
+  unsigned char fb_algo, lr;
+
+  memset(out, 0, sizeof(*out));
+  if (ch < 0 || ch > 5) return;
+
+  bank = (ch >= 3) ? 1 : 0;
+  cn   = ch % 3;
+
+  for (op = 0; op < 4; op++)
+  {
+    int off = (op << 2) + cn; /* register operator slots: S1,S3,S2,S4 */
+    out->op_mul[op] =  s_fm_regs[bank][0x30 + off] & 0x0f;
+    out->op_dt[op]  = (s_fm_regs[bank][0x30 + off] >> 4) & 0x07;
+    out->op_tl[op]  =  s_fm_regs[bank][0x40 + off] & 0x7f;
+    out->op_ar[op]  =  s_fm_regs[bank][0x50 + off] & 0x1f;
+    out->op_dr[op]  =  s_fm_regs[bank][0x60 + off] & 0x1f;
+    out->op_sr[op]  =  s_fm_regs[bank][0x70 + off] & 0x1f;
+    out->op_rr[op]  =  s_fm_regs[bank][0x80 + off] & 0x0f;
+  }
+
+  fb_algo = s_fm_regs[bank][0xb0 + cn];
+  out->algorithm = fb_algo & 0x07;
+  out->feedback  = (fb_algo >> 3) & 0x07;
+
+  lr = s_fm_regs[bank][0xb4 + cn];
+  out->pan = (lr >> 6) & 0x03;
+  out->ams = (lr >> 4) & 0x03;
+  out->fms =  lr & 0x07;
+
+  out->block_fnum = ((s_fm_regs[bank][0xa4 + cn] & 0x3f) << 8)
+                  |   s_fm_regs[bank][0xa0 + cn];
 }
 
 /* canonical, channel-independent fingerprints */
@@ -217,6 +262,7 @@ void audio_probe_reset(void)
   s_group_seq     = 0;
   s_head          = 0;
   s_tail          = 0;
+  memset(s_fm_regs, 0, sizeof(s_fm_regs));
   if (!s_gain_init) ap_init_gain();
 }
 
@@ -254,6 +300,10 @@ void audio_probe_signal(ap_event_type_t type)
 void audio_probe_fm_raw(unsigned int reg, unsigned int data)
 {
   ap_event_t ev;
+
+  /* keep the register shadow up to date for voice decoding */
+  s_fm_regs[(reg >> 8) & 1][reg & 0xff] = (unsigned char)data;
+
   memset(&ev, 0, sizeof(ev));
   ev.source  = AP_SRC_FM;
   ev.type    = AP_EV_RAW_WRITE;
@@ -274,7 +324,7 @@ void audio_probe_fm_key(int ch, unsigned int slot_mask)
   if (slot_mask & 0xf0)
   {
     ev.type = AP_EV_NOTE_ON;
-    YM2612_GetVoice(ch, &ev.voice);
+    ap_decode_fm_voice(ch, &ev.voice);
     ap_hash_voice(&ev.voice, &ev.timbre_hash, &ev.voice_hash);
   }
   else

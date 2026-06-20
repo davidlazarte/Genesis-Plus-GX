@@ -627,13 +627,6 @@ typedef struct
 /* emulated chip */
 static YM2612 ym2612;
 
-#ifdef SOUND_PROBE
-/* raw register shadow: bank 0 = CH1-3 (port 0), bank 1 = CH4-6 (port 1).
-   Used by YM2612_GetVoice() to report the voice a driver actually programmed,
-   independently of when (cached patches survive across notes). */
-static UINT8 ym2612_regs[2][0x100];
-#endif
-
 /* current chip state */
 static INT32  m2,c1,c2;   /* Phase Modulation input for operators 2,3,4 */
 static INT32  mem;        /* one sample delay memory */
@@ -1924,10 +1917,6 @@ void YM2612ResetChip(void)
 {
   int i;
 
-#ifdef SOUND_PROBE
-  memset(ym2612_regs, 0, sizeof(ym2612_regs));
-#endif
-
   ym2612.OPN.eg_timer     = 0;
   ym2612.OPN.eg_cnt       = 0;
 
@@ -1987,8 +1976,7 @@ void YM2612Write(unsigned int a, unsigned int v)
     {
       int addr = ym2612.OPN.ST.address; /* verified by Nemesis on real YM2612 */
 #ifdef SOUND_PROBE
-      /* shadow the raw register and report the write */
-      ym2612_regs[(addr >> 8) & 1][addr & 0xff] = v;
+      /* report the raw write (audio_probe keeps the register shadow) */
       audio_probe_fm_raw(addr, v);
 #endif
       switch( addr & 0x1f0 )
@@ -2026,61 +2014,6 @@ unsigned int YM2612Read(void)
 {
   return ym2612.OPN.ST.status;
 }
-
-#ifdef SOUND_PROBE
-/* Snapshot the resolved voice of FM channel 'ch' (0-5) from the register
-   shadow. Operators are reported in hardware register order; the values match
-   what the driver programmed (TL/AR/DR/SR/RR/MUL/DT, algorithm, feedback,
-   LFO sensitivity, blk/fnum), so a fingerprint is independent of channel. */
-void YM2612_GetVoice(int ch, ap_voice_t *out)
-{
-  int bank, cn, op;
-  UINT8 fb_algo, lr;
-
-  if (!out) return;
-  memset(out, 0, sizeof(*out));
-  if (ch < 0 || ch > 5) return;
-
-  bank = (ch >= 3) ? 1 : 0;
-  cn   = ch % 3;
-
-  for (op = 0; op < 4; op++)
-  {
-    int off = (op << 2) + cn; /* register operator slots: S1,S3,S2,S4 */
-    out->op_mul[op] =  ym2612_regs[bank][0x30 + off] & 0x0f;
-    out->op_dt[op]  = (ym2612_regs[bank][0x30 + off] >> 4) & 0x07;
-    out->op_tl[op]  =  ym2612_regs[bank][0x40 + off] & 0x7f;
-    out->op_ar[op]  =  ym2612_regs[bank][0x50 + off] & 0x1f;
-    out->op_dr[op]  =  ym2612_regs[bank][0x60 + off] & 0x1f;
-    out->op_sr[op]  =  ym2612_regs[bank][0x70 + off] & 0x1f;
-    out->op_rr[op]  =  ym2612_regs[bank][0x80 + off] & 0x0f;
-  }
-
-  fb_algo = ym2612_regs[bank][0xb0 + cn];
-  out->algorithm = fb_algo & 0x07;
-  out->feedback  = (fb_algo >> 3) & 0x07;
-
-  lr = ym2612_regs[bank][0xb4 + cn];
-  out->pan = (lr >> 6) & 0x03;
-  out->ams = (lr >> 4) & 0x03;
-  out->fms =  lr & 0x07;
-
-  out->block_fnum = ((ym2612_regs[bank][0xa4 + cn] & 0x3f) << 8)
-                  |   ym2612_regs[bank][0xa0 + cn];
-}
-
-/* Return a bitmask of currently keyed-on slots for channel 'ch' (bit0..bit3). */
-int YM2612_GetKeyState(int ch)
-{
-  int mask = 0;
-  if (ch < 0 || ch > 5) return 0;
-  if (ym2612.CH[ch].SLOT[SLOT1].key) mask |= 1;
-  if (ym2612.CH[ch].SLOT[SLOT2].key) mask |= 2;
-  if (ym2612.CH[ch].SLOT[SLOT3].key) mask |= 4;
-  if (ym2612.CH[ch].SLOT[SLOT4].key) mask |= 8;
-  return mask;
-}
-#endif /* SOUND_PROBE */
 
 /* Generate samples for ym2612 */
 void YM2612Update(int *buffer, int length)

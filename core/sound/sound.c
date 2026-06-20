@@ -72,6 +72,11 @@ static ym3438_t ym3438;
 static short ym3438_accm[24][2];
 static int ym3438_sample[2];
 static int ym3438_cycles;
+#ifdef SOUND_PROBE
+/* latched register address for the Nuked core's audio_probe tap (OPN2_Write
+   only exposes the bus port, not the internal address latch) */
+static int ym3438_probe_addr;
+#endif
 #endif
 
 #ifdef HAVE_OPLL_CORE
@@ -226,6 +231,38 @@ static void YM3438_Write(unsigned int cycles, unsigned int a, unsigned int v)
 
   /* write FM register */
   OPN2_Write(&ym3438, a, v);
+
+#ifdef SOUND_PROBE
+  /* audio_probe tap for the Nuked core (same register protocol as YM2612) */
+  audio_probe_set_time(cycles);
+  v &= 0xff;
+  if (a == 0)
+  {
+    ym3438_probe_addr = v;
+  }
+  else if (a == 2)
+  {
+    ym3438_probe_addr = v | 0x100;
+  }
+  else
+  {
+    /* data port write */
+    audio_probe_fm_raw(ym3438_probe_addr, v);
+    if (ym3438_probe_addr == 0x28)
+    {
+      int c = v & 0x03;
+      if (c != 3)
+      {
+        if (v & 0x04) c += 3;
+        audio_probe_fm_key(c, v);
+      }
+    }
+    else if (ym3438_probe_addr == 0x2b)
+    {
+      audio_probe_fm_dac(v & 0x80);
+    }
+  }
+#endif
 }
 
 static unsigned int YM3438_Read(unsigned int cycles, unsigned int a)

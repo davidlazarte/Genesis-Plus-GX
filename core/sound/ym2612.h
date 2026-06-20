@@ -31,14 +31,4 @@ extern unsigned int YM2612Read(void);
 extern int YM2612LoadContext(unsigned char *state);
 extern int YM2612SaveContext(unsigned char *state);
 
-#ifdef SOUND_PROBE
-#include "audio_probe.h"
-/* Snapshot the resolved (channel-independent) voice state of an FM channel
-   (0-5) from the raw register shadow. Used by audio_probe to fingerprint
-   sound triggers regardless of which channel the driver used. */
-extern void YM2612_GetVoice(int ch, ap_voice_t *out);
-/* Return a bitmask of currently keyed-on slots for a channel (bit0..bit3). */
-extern int  YM2612_GetKeyState(int ch);
-#endif
-
 #endif /* _YM2612_ */

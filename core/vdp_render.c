@@ -610,6 +610,18 @@ uint8 aether_layer_mask = 0xFF;
 #define AETHER_HIDE_B (!(aether_layer_mask & AETHER_LAYER_B))
 #define AETHER_HIDE_W (!(aether_layer_mask & AETHER_LAYER_W))
 
+/* Aether fork delta: atenuar las capas NO-sprite (id de memoria 0x108, escribible).
+   0 = render normal (bit-exact, sin costo). !=0 = "dim mode": los píxeles que NO
+   son de sprite se emiten al 25% (preponderancia visual de los sprites — viewport
+   de Animación del Lab). Implementación SIN tocar render_obj: render_line snapshotea
+   linebuf[0] tras render_bg y lo difea tras render_obj (los píxeles que cambiaron
+   son sprites → aether_sprite_px); remap_line atenúa los demás. Sólo en el frame
+   visible (produce); la re-sim bare corre con dim=0. Asume salida RGB565 (el build
+   del fork: -DUSE_16BPP_RENDERING -DFRONTEND_SUPPORTS_RGB565). */
+uint8 aether_layer_dim = 0;
+static uint8 aether_bg_snap[0x200];    /* linebuf[0] tras render_bg (sólo dim mode) */
+static uint8 aether_sprite_px[0x200];  /* 1 = ese pixel es de sprite (sólo dim mode) */
+
 /* Aether fork delta: bitmask de slots SAT suprimidos (id de memoria 0x103,
    escribible). Bit set = ese slot NO se parsea → su sprite no se dibuja (ocultar
    sprite por hash en el Lab). El frontend lo setea SÓLO para el frame visible
@@ -5073,8 +5085,20 @@ void render_line(int line)
     /* Aether: el peel sólo aplica a los merges de BG, no a los de sprites. */
     aether_peel_active = 0;
 
-    /* Render sprite layer (Aether: ocultable vía máscara de capas, id 0x102) */
-    if (aether_layer_mask & AETHER_LAYER_OBJ)
+    /* Render sprite layer (Aether: ocultable vía máscara de capas, id 0x102).
+       Aether dim (id 0x108): snapshot de linebuf[0] tras render_bg + diff tras
+       render_obj → los píxeles que cambió render_obj son sprites (los demás son
+       fondo, que remap_line atenúa). No toca las internas de render_obj. */
+    if (aether_layer_dim)
+    {
+      int i;
+      memcpy(aether_bg_snap, linebuf[0], sizeof(aether_bg_snap));
+      if (aether_layer_mask & AETHER_LAYER_OBJ)
+        render_obj(line & 1);
+      for (i = 0; i < 0x200; i++)
+        aether_sprite_px[i] = (linebuf[0][i] != aether_bg_snap[i]);
+    }
+    else if (aether_layer_mask & AETHER_LAYER_OBJ)
       render_obj(line & 1);
 
     /* Left-most column blanking */
@@ -5114,6 +5138,10 @@ void render_line(int line)
 
     /* Blanked line */
     memset(&linebuf[0][0x20 - bitmap.viewport.x], 0x40, bitmap.viewport.w + 2*bitmap.viewport.x);
+
+    /* Aether dim: línea en blanco → ningún pixel es sprite (todo se atenúa). */
+    if (aether_layer_dim)
+      memset(aether_sprite_px, 0, sizeof(aether_sprite_px));
   }
 
   /* Pixel color remapping */
@@ -5123,6 +5151,9 @@ void render_line(int line)
 void blank_line(int line, int offset, int width)
 {
   memset(&linebuf[0][0x20 + offset], 0x40, width);
+  /* Aether dim: línea en blanco → ningún pixel es sprite (todo se atenúa). */
+  if (aether_layer_dim)
+    memset(aether_sprite_px, 0, sizeof(aether_sprite_px));
   remap_line(line);
 }
 
@@ -5172,6 +5203,29 @@ void remap_line(int line)
       do
       {
         RENDER_PIXEL_LCD(src,dst,pixel,config.lcd);
+      }
+      while (--width);
+    }
+    else if (aether_layer_dim)
+    {
+      /* Aether dim (id 0x108): los píxeles que NO son sprite se emiten al 25%
+         (cuarteo por canal RGB565). aether_sprite_px es paralelo a linebuf[0], con
+         el mismo offset que src. Asume PIXEL_OUT_T = uint16 RGB565 (build del fork). */
+      uint8 *spx = &aether_sprite_px[0x20 - bitmap.viewport.x];
+      do
+      {
+        PIXEL_OUT_T p = pixel[*src++];
+        if (*spx++)
+        {
+          *dst++ = p;
+        }
+        else
+        {
+          unsigned r = (p >> 11) & 0x1F;
+          unsigned g = (p >>  5) & 0x3F;
+          unsigned b =  p        & 0x1F;
+          *dst++ = (PIXEL_OUT_T)(((r >> 2) << 11) | ((g >> 2) << 5) | (b >> 2));
+        }
       }
       while (--width);
     }

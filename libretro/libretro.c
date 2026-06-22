@@ -3798,6 +3798,11 @@ void *retro_get_memory_data(unsigned id)
          frontend al escribir 0x105. */
       case 0x106 /* AETHER_MEMORY_PLANE_SUPPRESS_ACTIVE */:
          return &aether_plane_suppress_active;
+      /* Aether fork delta: flag (1 byte, ESCRIBIBLE) "atenuar capas no-sprite al
+         25%" — dim mode del viewport de Animación. 0 = render normal. El frontend
+         lo setea SÓLO en el frame visible (produce). core/vdp_render.c. */
+      case 0x108 /* AETHER_MEMORY_LAYER_DIM */:
+         return &aether_layer_dim;
       default:
          return NULL;
    }
@@ -3883,6 +3888,10 @@ size_t retro_get_memory_size(unsigned id)
 
       /* Aether fork delta: flag de actividad de la supresión por plano (1 byte). */
       case 0x106 /* AETHER_MEMORY_PLANE_SUPPRESS_ACTIVE */:
+         return 1;
+
+      /* Aether fork delta: flag de dim de capas no-sprite (1 byte). */
+      case 0x108 /* AETHER_MEMORY_LAYER_DIM */:
          return 1;
 
       default:

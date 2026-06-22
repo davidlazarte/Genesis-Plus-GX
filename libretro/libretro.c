@@ -3803,6 +3803,16 @@ void *retro_get_memory_data(unsigned id)
          lo setea SÓLO en el frame visible (produce). core/vdp_render.c. */
       case 0x108 /* AETHER_MEMORY_LAYER_DIM */:
          return &aether_layer_dim;
+      /* Aether fork delta: lista de sprites que parse_satb PARSEÓ este frame (8
+         bytes c/u: yr/xr/attr u16 + w/h u8) + su contador (escribible = reset). Es
+         la fuente fiable de "qué sprites se dibujaron" aunque el juego reescriba el
+         SAT a mitad de frame / cambie su base (el genio del logo Sega de Aladdin: el
+         SAT a fin de frame muestra solo placeholders). El frontend limpia el contador
+         (0x10C=0) antes del produce y lee la lista tras run_frame. vdp_render.c. */
+      case 0x10B /* AETHER_MEMORY_PARSED_SPRITES */:
+         return aether_sprites;
+      case 0x10C /* AETHER_MEMORY_PARSED_SPRITE_COUNT */:
+         return &aether_sprite_n;
       default:
          return NULL;
    }
@@ -3892,6 +3902,12 @@ size_t retro_get_memory_size(unsigned id)
 
       /* Aether fork delta: flag de dim de capas no-sprite (1 byte). */
       case 0x108 /* AETHER_MEMORY_LAYER_DIM */:
+         return 1;
+
+      /* Aether fork delta: lista de sprites parseados (128 x 8 bytes) + contador. */
+      case 0x10B /* AETHER_MEMORY_PARSED_SPRITES */:
+         return sizeof(aether_sprites);
+      case 0x10C /* AETHER_MEMORY_PARSED_SPRITE_COUNT */:
          return 1;
 
       default:

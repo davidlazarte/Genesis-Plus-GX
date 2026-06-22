@@ -622,6 +622,35 @@ uint8 aether_layer_dim = 0;
 static uint8 aether_bg_snap[0x200];    /* linebuf[0] tras render_bg (sólo dim mode) */
 static uint8 aether_sprite_px[0x200];  /* 1 = ese pixel es de sprite (sólo dim mode) */
 
+/* Aether fork delta: CAPTURA de los sprites realmente PARSEADOS por parse_satb
+   durante el frame (ids 0x10B lista / 0x10C contador, escribible = reset). Algunos
+   intros reescriben el SAT in-place a MITAD de frame (el genio del logo Sega: el
+   juego carga su SAT justo antes de sus scanlines y lo sobreescribe con placeholders
+   después), así que NINGÚN estado del SAT a un instante fijo (fin de frame, línea 0)
+   tiene todos los sprites. La única fuente fiable es lo que parse_satb parsea EN SUS
+   LÍNEAS. Registramos cada sprite agregado (Y/X/attr ya resueltos + w/h), deduplicado
+   por (Y,X,attr). El frontend limpia el contador antes del produce y lee la lista
+   tras run_frame. Produce-only; no afecta render ni estado. Valores (no bytes) →
+   sin problemas de endianness. */
+#define AETHER_SPR_CAP 128
+AetherSpr aether_sprites[AETHER_SPR_CAP];   /* AetherSpr declarado en vdp_render.h */
+uint8     aether_sprite_n = 0;
+INLINE void aether_record_sprite(uint16 yr, uint16 xr, uint16 attr, uint8 w, uint8 h)
+{
+  int i;
+  for (i = 0; i < aether_sprite_n; i++)
+    if (aether_sprites[i].yr == yr && aether_sprites[i].xr == xr
+        && aether_sprites[i].attr == attr) return;   /* ya registrado (otra línea) */
+  if (aether_sprite_n < AETHER_SPR_CAP) {
+    aether_sprites[aether_sprite_n].yr   = yr;
+    aether_sprites[aether_sprite_n].xr   = xr;
+    aether_sprites[aether_sprite_n].attr = attr;
+    aether_sprites[aether_sprite_n].w    = w;
+    aether_sprites[aether_sprite_n].h    = h;
+    aether_sprite_n++;
+  }
+}
+
 /* Aether fork delta: bitmask de slots SAT suprimidos (id de memoria 0x103,
    escribible). Bit set = ese slot NO se parsea → su sprite no se dibuja (ocultar
    sprite por hash en el Lab). El frontend lo setea SÓLO para el frame visible
@@ -4701,6 +4730,13 @@ void parse_satb_m5(int line)
         object_info->xpos  = p[link + 3] & 0x1ff;
         object_info->ypos  = ypos;
         object_info->size  = size & 0x0f;
+        /* Aether: registrar el sprite parseado (ids 0x10B/0x10C). q[link] = Y cruda
+           (la caché), p[link+3] = X, p[link+2] = attr; w/h desde `size` (q[link+1]>>8,
+           h=bits1:0, w=bits3:2). Captura los sprites reescritos in-place a mitad de
+           frame (genio del logo Sega), deduplicado por (Y,X,attr) entre scanlines. */
+        aether_record_sprite((uint16)(q[link] & 0x1FF), (uint16)(p[link + 3] & 0x1ff),
+                             (uint16)p[link + 2],
+                             (uint8)(((size >> 2) & 3) + 1), (uint8)((size & 3) + 1));
 
         /* Increment Sprite count */
         ++count;
@@ -4795,6 +4831,13 @@ void parse_satb_m5_im2(int line)
         object_info->xpos  = p[link + 3] & 0x1ff;
         object_info->ypos  = ypos;
         object_info->size  = size & 0x0f;
+        /* Aether: registrar el sprite parseado (ids 0x10B/0x10C). q[link] = Y cruda
+           (la caché), p[link+3] = X, p[link+2] = attr; w/h desde `size` (q[link+1]>>8,
+           h=bits1:0, w=bits3:2). Captura los sprites reescritos in-place a mitad de
+           frame (genio del logo Sega), deduplicado por (Y,X,attr) entre scanlines. */
+        aether_record_sprite((uint16)(q[link] & 0x1FF), (uint16)(p[link + 3] & 0x1ff),
+                             (uint16)p[link + 2],
+                             (uint8)(((size >> 2) & 3) + 1), (uint8)((size & 3) + 1));
 
         /* Increment Sprite count */
         ++count;

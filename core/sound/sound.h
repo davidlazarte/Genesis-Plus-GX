@@ -79,4 +79,18 @@ extern AetherAudioWrite aether_audio_writes[AETHER_AUDIO_WRITE_CAP];
 extern uint32 aether_audio_write_n;
 extern void aether_record_audio_write(uint8 chip, uint16 addr, uint8 data, uint32 cycle);
 
+/* ----------------------------------------------------------------------------
+ * Aether fork delta: máscara de SILENCIADO POR CANAL (2 bytes, ESCRIBIBLE desde
+ * el frontend vía el id de memoria 0x10D). Bits 0-5 = canales FM (YM2612) 0-5;
+ * bits 6-9 = canales PSG (SN76489) 0-3. Bit set = ese canal se pone a CERO en el
+ * mixer de salida, SIN tocar el estado de los registros del chip (el análogo de
+ * audio al sprite_suppress 0x103). Como sólo afecta el PCM emitido y no el estado
+ * interno, es replay-safe: el chip evoluciona idéntico aunque el mute esté puesto.
+ * Es el primitivo de la sustitución por evento (C-A3): mutear los canales de un
+ * evento mientras suena su asset HD.
+ * -------------------------------------------------------------------------- */
+extern uint16 aether_audio_mute;
+#define AETHER_FM_MUTED(ch)  (aether_audio_mute & (1u << (ch)))        /* ch 0-5 */
+#define AETHER_PSG_MUTED(ch) (aether_audio_mute & (1u << (6 + (ch))))  /* ch 0-3 */
+
 #endif /* _SOUND_H_ */

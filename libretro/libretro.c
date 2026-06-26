@@ -3824,6 +3824,12 @@ void *retro_get_memory_data(unsigned id)
          return aether_audio_writes;
       case 0x10A /* AETHER_MEMORY_AUDIO_WRITE_COUNT */:
          return &aether_audio_write_n;
+      /* Aether fork delta: máscara de mute por canal de audio (u16, ESCRIBIBLE).
+         Bits 0-5 = FM ch 0-5; bits 6-9 = PSG ch 0-3. El canal se pone a 0 en el
+         mixer de salida sin tocar el estado del chip (replay-safe). Primitivo de
+         la sustitución por evento (C-A3). core/sound/sound.c. */
+      case 0x10D /* AETHER_MEMORY_AUDIO_MUTE */:
+         return &aether_audio_mute;
       default:
          return NULL;
    }
@@ -3927,6 +3933,10 @@ size_t retro_get_memory_size(unsigned id)
          return sizeof(aether_audio_writes);
       case 0x10A /* AETHER_MEMORY_AUDIO_WRITE_COUNT */:
          return sizeof(aether_audio_write_n);
+
+      /* Aether fork delta: máscara de mute por canal de audio (u16). */
+      case 0x10D /* AETHER_MEMORY_AUDIO_MUTE */:
+         return sizeof(aether_audio_mute);
 
       default:
         return 0;

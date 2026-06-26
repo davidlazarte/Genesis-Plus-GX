@@ -50,6 +50,9 @@ int8 audio_hard_disable = 0;
 AetherAudioWrite aether_audio_writes[AETHER_AUDIO_WRITE_CAP];
 uint32 aether_audio_write_n = 0;
 
+/* Aether fork delta: máscara de mute por canal (ver sound.h). 0 = todo suena. */
+uint16 aether_audio_mute = 0;
+
 void aether_record_audio_write(uint8 chip, uint16 addr, uint8 data, uint32 cycle)
 {
   if (aether_audio_write_n < AETHER_AUDIO_WRITE_CAP)

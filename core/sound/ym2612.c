@@ -2092,7 +2092,21 @@ void YM2612Update(int *buffer, int length)
     else if (out_fm[4] < -8192) out_fm[4] = -8192;
     if (out_fm[5] > 8191) out_fm[5] = 8191;
     else if (out_fm[5] < -8192) out_fm[5] = -8192;
-    
+
+    /* Aether fork delta: silenciar canales FM seleccionados a nivel de SALIDA
+       (no toca el estado del chip → replay-safe). Cubre el modo DAC: out_fm[5]
+       ya tiene ym2612.dacout asignado, así que mutear el canal 5 también lo
+       silencia. La envolvente/fase del chip sigue avanzando idéntica. */
+    if (aether_audio_mute & 0x3F)
+    {
+      if (AETHER_FM_MUTED(0)) out_fm[0] = 0;
+      if (AETHER_FM_MUTED(1)) out_fm[1] = 0;
+      if (AETHER_FM_MUTED(2)) out_fm[2] = 0;
+      if (AETHER_FM_MUTED(3)) out_fm[3] = 0;
+      if (AETHER_FM_MUTED(4)) out_fm[4] = 0;
+      if (AETHER_FM_MUTED(5)) out_fm[5] = 0;
+    }
+
     #ifdef USE_PER_SOUND_CHANNELS_CONFIG
         /* apply user volume scaling */
         if (config.md_ch_volumes[0] < 100) out_fm[0] = (out_fm[0] * config.md_ch_volumes[0]) / 100;
@@ -2125,6 +2139,9 @@ void YM2612Update(int *buffer, int length)
       /* DAC 'ladder effect' */
       for (i=0; i<6; i++)
       {
+        /* Aether fork delta: un canal muteado tampoco aporta el offset DC del
+           ladder (si no, queda un residual ~0.7% aunque out_fm[i]=0). */
+        if (AETHER_FM_MUTED(i)) continue;
         if (out_fm[i] < 0)
         {
           /* -4 offset (-3 when not muted) on negative channel output (9-bit) */

@@ -3813,6 +3813,17 @@ void *retro_get_memory_data(unsigned id)
          return aether_sprites;
       case 0x10C /* AETHER_MEMORY_PARSED_SPRITE_COUNT */:
          return &aether_sprite_n;
+      /* Aether fork delta: log de escrituras crudas a los chips de sonido (FM
+         YM2612 + PSG SN76489) en orden temporal dentro del frame (AetherAudioWrite,
+         8 bytes c/u: cycle u32 + addr u16 + data u8 + chip u8) + su contador u32
+         (ESCRIBIBLE = reset). Identidad de audio por SECUENCIA DE COMANDOS al chip
+         (estable en replay) vs hash del PCM de salida (no reproducible tras
+         unserialize). El frontend limpia el contador (0x10A=0) antes del produce y
+         lee el log tras run_frame. core/sound/sound.c. */
+      case 0x109 /* AETHER_MEMORY_AUDIO_WRITES */:
+         return aether_audio_writes;
+      case 0x10A /* AETHER_MEMORY_AUDIO_WRITE_COUNT */:
+         return &aether_audio_write_n;
       default:
          return NULL;
    }
@@ -3909,6 +3920,13 @@ size_t retro_get_memory_size(unsigned id)
          return sizeof(aether_sprites);
       case 0x10C /* AETHER_MEMORY_PARSED_SPRITE_COUNT */:
          return 1;
+
+      /* Aether fork delta: log de escrituras a chips de sonido (8192 x 8 bytes) +
+         contador (u32, escribible = reset). */
+      case 0x109 /* AETHER_MEMORY_AUDIO_WRITES */:
+         return sizeof(aether_audio_writes);
+      case 0x10A /* AETHER_MEMORY_AUDIO_WRITE_COUNT */:
+         return sizeof(aether_audio_write_n);
 
       default:
         return 0;

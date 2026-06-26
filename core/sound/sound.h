@@ -52,4 +52,31 @@ extern unsigned int (*fm_read)(unsigned int cycles, unsigned int address);
 extern void save_sound_buffer();
 extern void restore_sound_buffer();
 
+/* ----------------------------------------------------------------------------
+ * Aether fork delta: log de escrituras crudas a los chips de sonido (YM2612 FM +
+ * SN76489 PSG), en orden temporal dentro del frame. El frontend lo lee por los
+ * ids de memoria 0x109 (array) / 0x10A (contador, ESCRIBIBLE = reset) para
+ * identificar eventos de audio por la SECUENCIA DE COMANDOS al chip — estable a
+ * través del replay (la CPU/VDP son byte-deterministas) — en lugar de hashear el
+ * PCM de salida, que NO es reproducible tras unserialize (la fase del FM diverge).
+ * El core queda "tonto": sólo registra (cycle, addr, data, chip); toda la
+ * interpretación (estado de canal, key-on/off, firma) vive en el host. Mismo
+ * patrón frontend-reset que los sprites parseados (ids 0x10B/0x10C). sound.c.
+ * -------------------------------------------------------------------------- */
+#define AETHER_AUDIO_CHIP_FM   0   /* YM2612 (FM)    */
+#define AETHER_AUDIO_CHIP_PSG  1   /* SN76489 (PSG)  */
+#define AETHER_AUDIO_WRITE_CAP 8192
+
+typedef struct
+{
+  uint32 cycle;  /* timestamp en M-cycles del CPU dentro del frame */
+  uint16 addr;   /* FM: bus address 0..3 (port/data; banco vía bit 1). PSG: 0 */
+  uint8  data;   /* byte escrito al bus del chip */
+  uint8  chip;   /* AETHER_AUDIO_CHIP_FM | AETHER_AUDIO_CHIP_PSG */
+} AetherAudioWrite;
+
+extern AetherAudioWrite aether_audio_writes[AETHER_AUDIO_WRITE_CAP];
+extern uint32 aether_audio_write_n;
+extern void aether_record_audio_write(uint8 chip, uint16 addr, uint8 data, uint32 cycle);
+
 #endif /* _SOUND_H_ */

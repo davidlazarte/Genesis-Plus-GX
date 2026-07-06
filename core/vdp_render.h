@@ -114,7 +114,11 @@ extern uint8 aether_layer_mask;
 extern uint8 aether_layer_dim;             /* atenuar capas no-sprite al 25% (id 0x108) */
 /* Sprites realmente parseados por parse_satb en el frame (id 0x10B lista / 0x10C
    contador, escribible=reset). Captura los reescritos in-place a mitad de frame. */
-typedef struct { uint16 yr, xr, attr; uint8 w, h; } AetherSpr;  /* 8 bytes */
+/* 10 bytes. sat_idx = índice de ENTRADA del SAT (link>>2) — el MISMO espacio de
+   índices que la máscara de supresión 0x103 (¡distinto del orden de la lista!).
+   chain_pos = posición en la CADENA de links al parsear = prioridad real de dibujo
+   del VDP entre sprites (menor = más al frente). */
+typedef struct { uint16 yr, xr, attr; uint8 w, h, sat_idx, chain_pos; } AetherSpr;
 extern AetherSpr aether_sprites[128];
 extern uint8 aether_sprite_n;
 extern uint8 aether_sprite_suppress[16];   /* slots SAT suprimidos (id 0x103) */

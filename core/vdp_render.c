@@ -635,18 +635,21 @@ static uint8 aether_sprite_px[0x200];  /* 1 = ese pixel es de sprite (sólo dim 
 #define AETHER_SPR_CAP 128
 AetherSpr aether_sprites[AETHER_SPR_CAP];   /* AetherSpr declarado en vdp_render.h */
 uint8     aether_sprite_n = 0;
-INLINE void aether_record_sprite(uint16 yr, uint16 xr, uint16 attr, uint8 w, uint8 h)
+INLINE void aether_record_sprite(uint16 yr, uint16 xr, uint16 attr, uint8 w, uint8 h,
+                                 uint8 sat_idx, uint8 chain_pos)
 {
   int i;
   for (i = 0; i < aether_sprite_n; i++)
     if (aether_sprites[i].yr == yr && aether_sprites[i].xr == xr
         && aether_sprites[i].attr == attr) return;   /* ya registrado (otra línea) */
   if (aether_sprite_n < AETHER_SPR_CAP) {
-    aether_sprites[aether_sprite_n].yr   = yr;
-    aether_sprites[aether_sprite_n].xr   = xr;
-    aether_sprites[aether_sprite_n].attr = attr;
-    aether_sprites[aether_sprite_n].w    = w;
-    aether_sprites[aether_sprite_n].h    = h;
+    aether_sprites[aether_sprite_n].yr        = yr;
+    aether_sprites[aether_sprite_n].xr        = xr;
+    aether_sprites[aether_sprite_n].attr      = attr;
+    aether_sprites[aether_sprite_n].w         = w;
+    aether_sprites[aether_sprite_n].h         = h;
+    aether_sprites[aether_sprite_n].sat_idx   = sat_idx;
+    aether_sprites[aether_sprite_n].chain_pos = chain_pos;
     aether_sprite_n++;
   }
 }
@@ -4680,6 +4683,7 @@ void parse_satb_m5(int line)
 
   /* max. number of parsed sprites (64 or 80 sprites per line by default) */
   int total = max_sprite_pixels >> 2;
+  int total0 = total;   /* Aether: para chain_pos = total0 - total */
 
   /* Pointer to sprite attribute table */
   uint16 *p = (uint16 *) &vram[satb];
@@ -4732,11 +4736,14 @@ void parse_satb_m5(int line)
         object_info->size  = size & 0x0f;
         /* Aether: registrar el sprite parseado (ids 0x10B/0x10C). q[link] = Y cruda
            (la caché), p[link+3] = X, p[link+2] = attr; w/h desde `size` (q[link+1]>>8,
-           h=bits1:0, w=bits3:2). Captura los sprites reescritos in-place a mitad de
-           frame (genio del logo Sega), deduplicado por (Y,X,attr) entre scanlines. */
+           h=bits1:0, w=bits3:2). sat_idx = link>>2 (espacio de la máscara 0x103);
+           chain_pos = paso en la cadena (prioridad real de dibujo). Captura los
+           sprites reescritos in-place a mitad de frame (genio del logo Sega),
+           deduplicado por (Y,X,attr) entre scanlines. */
         aether_record_sprite((uint16)(q[link] & 0x1FF), (uint16)(p[link + 3] & 0x1ff),
                              (uint16)p[link + 2],
-                             (uint8)(((size >> 2) & 3) + 1), (uint8)((size & 3) + 1));
+                             (uint8)(((size >> 2) & 3) + 1), (uint8)((size & 3) + 1),
+                             (uint8)(link >> 2), (uint8)(total0 - total));
 
         /* Increment Sprite count */
         ++count;
@@ -4781,6 +4788,7 @@ void parse_satb_m5_im2(int line)
 
   /* max. number of parsed sprites (64 or 80 sprites per line by default) */
   int total = max_sprite_pixels >> 2;
+  int total0 = total;   /* Aether: para chain_pos = total0 - total */
 
   /* Pointer to sprite attribute table */
   uint16 *p = (uint16 *) &vram[satb];
@@ -4831,13 +4839,13 @@ void parse_satb_m5_im2(int line)
         object_info->xpos  = p[link + 3] & 0x1ff;
         object_info->ypos  = ypos;
         object_info->size  = size & 0x0f;
-        /* Aether: registrar el sprite parseado (ids 0x10B/0x10C). q[link] = Y cruda
-           (la caché), p[link+3] = X, p[link+2] = attr; w/h desde `size` (q[link+1]>>8,
-           h=bits1:0, w=bits3:2). Captura los sprites reescritos in-place a mitad de
-           frame (genio del logo Sega), deduplicado por (Y,X,attr) entre scanlines. */
+        /* Aether: registrar el sprite parseado (ids 0x10B/0x10C) — variante im2.
+           sat_idx = link>>2 (espacio de la máscara 0x103); chain_pos = paso en la
+           cadena (prioridad real de dibujo). */
         aether_record_sprite((uint16)(q[link] & 0x1FF), (uint16)(p[link + 3] & 0x1ff),
                              (uint16)p[link + 2],
-                             (uint8)(((size >> 2) & 3) + 1), (uint8)((size & 3) + 1));
+                             (uint8)(((size >> 2) & 3) + 1), (uint8)((size & 3) + 1),
+                             (uint8)(link >> 2), (uint8)(total0 - total));
 
         /* Increment Sprite count */
         ++count;

@@ -5444,7 +5444,10 @@ int ayther_recompose_frame(uint16 *out, int cap, unsigned int flags,
     if (reg[1] & 0x40)
     {
       rbg(l);
-      robj(l & 1);
+      /* mismo guard que render_line: la máscara de capas también apaga los
+         sprites (con el override de R-2, "solo plano B" es SOLO plano B) */
+      if (ayther_layer_mask & AYTHER_LAYER_OBJ)
+        robj(l & 1);
 
       /* left-most column blanking (reg 0 bit 5) */
       if (reg[0] & 0x20)

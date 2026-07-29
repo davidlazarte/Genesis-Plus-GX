@@ -126,6 +126,28 @@ extern uint8 ayther_tile_suppress[512];    /* celdas de tile suprimidas (id 0x10
 extern uint8 ayther_plane_tile_suppress[3 * 1024]; /* tiles de plano suprimidos (id 0x105) */
 extern uint8 ayther_plane_suppress_active;  /* id 0x106: 1 = hay algún tile de plano oculto */
 
+/* AYTHER (#270): recomposición del frame desde el estado FINAL del VDP, con el
+   mismo renderer del core (spike de fidelidad del render propio). `flags` apaga
+   comportamientos uno a uno para atribuir el error de no modelarlos. Escribe
+   w*h píxeles RGB565 contiguos en `out` (cap en píxeles) y devuelve 1; 0 si no
+   aplica (no-modo-5, interlace 2, NTSC, buffer chico). No perturba la emulación
+   (todo estado mutado se salva y restaura). Export del DLL: el frontend lo
+   resuelve por nombre (win64 auto-exporta los globals; ver Makefile.libretro). */
+#define AYTHER_RC_NO_SH        0x01u  /* sin shadow/highlight (como reg12.3=0)   */
+#define AYTHER_RC_NO_SPR_LIMIT 0x02u  /* sin límite de sprites/línea ni de px    */
+#define AYTHER_RC_NO_SPR_MASK  0x04u  /* sin máscara de sprites (x=0)            */
+#define AYTHER_RC_NO_WINDOW    0x08u  /* sin plano Window (A ocupa toda la línea)*/
+#define AYTHER_RC_FLAT_HS      0x10u  /* hscroll de la línea 0 para todas        */
+#define AYTHER_RC_FLAT_VS      0x20u  /* vscroll de la columna 0 para todas      */
+/* dllexport explícito: el build libretro marca sus exports (RETRO_API), así
+   que lld NO auto-exporta los globals sin marcar — sin esto el símbolo queda
+   fuera de la tabla de exports y GetProcAddress devuelve NULL. */
+#if defined(_WIN32)
+__declspec(dllexport)
+#endif
+extern int ayther_recompose_frame(uint16 *out, int cap, unsigned int flags,
+                                  int *out_w, int *out_h);
+
 /* Function prototypes */
 extern void render_init(void);
 extern void render_reset(void);

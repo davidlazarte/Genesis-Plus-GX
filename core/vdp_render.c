@@ -595,7 +595,11 @@ typedef struct
   uint16 size;
 } object_info_t;
 
-static object_info_t obj_info[2][MAX_SPRITES_PER_LINE];
+/* AYTHER (#270): 80 en vez de MAX_SPRITES_PER_LINE (20) — headroom para la
+   recomposición con límite de sprites desactivado (ayther_rc_nolimit). El
+   render normal sigue acotado por MODE5_MAX_SPRITES_PER_LINE (bounds por
+   `max`, no por la capacidad del array): cero cambio de comportamiento. */
+static object_info_t obj_info[2][80];
 
 /* Sprite Counter */
 static uint8 object_count[2];
@@ -661,6 +665,12 @@ INLINE void ayther_record_sprite(uint16 yr, uint16 xr, uint16 attr, uint8 w, uin
 uint8 ayther_sprite_suppress[16] = {0};
 #define AYTHER_SPR_SUPPRESSED(slot) \
   (ayther_sprite_suppress[((slot) >> 3) & 0x0F] & (1 << ((slot) & 7)))
+
+/* AYTHER (#270): toggles de la recomposición (ayther_recompose_frame). Sólo esa
+   función los enciende, y los apaga antes de volver: el render normal corre
+   SIEMPRE con ambos en 0 (cero cambio de comportamiento). */
+static uint8 ayther_rc_nolimit = 0;  /* sin límite de sprites por línea (20/línea + presupuesto de px) */
+static uint8 ayther_rc_nomask  = 0;  /* sin máscara de sprites (sprite en x=0 no tapa los siguientes) */
 
 /* AYTHER fork delta: máscara de celdas de tile suprimidas (id de memoria 0x104,
    escribible). Grilla de 8x8 px en coordenadas del frame que ve el frontend
@@ -4027,7 +4037,8 @@ void render_obj_m5(int line)
   int xpos, width;
   int pixelcount = 0;
   int masked = 0;
-  int max_pixels = MODE5_MAX_SPRITE_PIXELS;
+  int max_pixels = ayther_rc_nolimit ? 0x7FFF   /* AYTHER (#270): sin presupuesto */
+                                     : MODE5_MAX_SPRITE_PIXELS;
 
   uint8 *src, *s, *lb;
   uint32 temp, v_line;
@@ -4049,7 +4060,7 @@ void render_obj_m5(int line)
       /* Requires at least one sprite with xpos > 0 */
       spr_ovr = 1;
     }
-    else if (spr_ovr)
+    else if (spr_ovr && !ayther_rc_nomask)   /* AYTHER (#270): nomask la anula */
     {
       /* Remaining sprites are not drawn */
       masked = 1;
@@ -4137,7 +4148,8 @@ void render_obj_m5_ste(int line)
   int xpos, width;
   int pixelcount = 0;
   int masked = 0;
-  int max_pixels = MODE5_MAX_SPRITE_PIXELS;
+  int max_pixels = ayther_rc_nolimit ? 0x7FFF   /* AYTHER (#270): sin presupuesto */
+                                     : MODE5_MAX_SPRITE_PIXELS;
 
   uint8 *src, *s, *lb;
   uint32 temp, v_line;
@@ -4162,7 +4174,7 @@ void render_obj_m5_ste(int line)
       /* Requires at least one sprite with xpos > 0 */
       spr_ovr = 1;
     }
-    else if (spr_ovr)
+    else if (spr_ovr && !ayther_rc_nomask)   /* AYTHER (#270): nomask la anula */
     {
       /* Remaining sprites are not drawn */
       masked = 1;
@@ -4255,7 +4267,8 @@ void render_obj_m5_im2(int line)
   int xpos, width;
   int pixelcount = 0;
   int masked = 0;
-  int max_pixels = MODE5_MAX_SPRITE_PIXELS;
+  int max_pixels = ayther_rc_nolimit ? 0x7FFF   /* AYTHER (#270): sin presupuesto */
+                                     : MODE5_MAX_SPRITE_PIXELS;
 
   uint8 *src, *s, *lb;
   uint32 temp, v_line;
@@ -4277,7 +4290,7 @@ void render_obj_m5_im2(int line)
       /* Requires at least one sprite with xpos > 0 */
       spr_ovr = 1;
     }
-    else if (spr_ovr)
+    else if (spr_ovr && !ayther_rc_nomask)   /* AYTHER (#270): nomask la anula */
     {
       /* Remaining sprites are not drawn */
       masked = 1;
@@ -4364,7 +4377,8 @@ void render_obj_m5_im2_ste(int line)
   int xpos, width;
   int pixelcount = 0;
   int masked = 0;
-  int max_pixels = MODE5_MAX_SPRITE_PIXELS;
+  int max_pixels = ayther_rc_nolimit ? 0x7FFF   /* AYTHER (#270): sin presupuesto */
+                                     : MODE5_MAX_SPRITE_PIXELS;
 
   uint8 *src, *s, *lb;
   uint32 temp, v_line;
@@ -4389,7 +4403,7 @@ void render_obj_m5_im2_ste(int line)
       /* Requires at least one sprite with xpos > 0 */
       spr_ovr = 1;
     }
-    else if (spr_ovr)
+    else if (spr_ovr && !ayther_rc_nomask)   /* AYTHER (#270): nomask la anula */
     {
       /* Remaining sprites are not drawn */
       masked = 1;
@@ -4680,6 +4694,7 @@ void parse_satb_m5(int line)
 
   /* max. number of rendered sprites (16 or 20 sprites per line by default) */
   int max = MODE5_MAX_SPRITES_PER_LINE;
+  if (ayther_rc_nolimit) max = 80;   /* AYTHER (#270): recomposición sin límite */
 
   /* max. number of parsed sprites (64 or 80 sprites per line by default) */
   int total = max_sprite_pixels >> 2;
@@ -4785,6 +4800,7 @@ void parse_satb_m5_im2(int line)
 
   /* max. number of rendered sprites (16 or 20 sprites per line by default) */
   int max = MODE5_MAX_SPRITES_PER_LINE;
+  if (ayther_rc_nolimit) max = 80;   /* AYTHER (#270): recomposición sin límite */
 
   /* max. number of parsed sprites (64 or 80 sprites per line by default) */
   int total = max_sprite_pixels >> 2;
@@ -5290,4 +5306,182 @@ void remap_line(int line)
     }
  #endif
   }
+}
+
+
+/*--------------------------------------------------------------------------*/
+/* AYTHER (#270): recomposición del frame desde el estado FINAL del VDP     */
+/*--------------------------------------------------------------------------*/
+/* Re-renderiza el frame recién emulado con ESTE MISMO renderer, pero con el
+   estado del VDP congelado a fin de frame (VRAM/CRAM/VSRAM/regs/SAT como
+   quedaron). La pantalla real se dibujó línea a línea con el estado VIGENTE
+   en cada línea (efectos raster: scroll/CRAM/regs a media pantalla); la
+   diferencia contra el framebuffer real ES la medida de cuánto pierde una
+   recomposición single-state — el dato que decide la épica del render propio.
+
+   `flags` permite además APAGAR comportamientos del VDP uno a uno para
+   atribuirles su parte del error (¿cuánto cuesta NO modelar shadow/highlight?
+   ¿el límite de sprites? ¿el window?): cada flag renderiza como si ese
+   comportamiento no existiera.
+
+   No perturba la emulación: todo estado mutado (status, spr_ovr/spr_col,
+   obj_info/object_count, clip, regs tocados, bitmap.*, pixel[] si NO_SH) se
+   salva y restaura. Sólo modo 5 no entrelazado, sin filtro NTSC, 16bpp.
+   Devuelve 1 y escribe w*h píxeles RGB565 contiguos en `out` (cap = capacidad
+   en píxeles); 0 si no aplica. */
+
+int ayther_recompose_frame(uint16 *out, int cap, unsigned int flags,
+                           int *out_w, int *out_h)
+{
+#ifndef USE_16BPP_RENDERING
+  (void)out; (void)cap; (void)flags; (void)out_w; (void)out_h;
+  return 0;
+#else
+  uint16 s_status, s_sprcol;
+  uint8  s_sprovr;
+  uint8  s_objcount[2];
+  static object_info_t s_objinfo[2][80];   /* static: fuera del stack */
+  struct clip_t s_clip[2];
+  uint8  s_reg11, s_reg12, s_reg18, s_hsmask;
+  uint8 *s_bdata;
+  int    s_bpitch, s_bvx, s_bvy;
+  int    l, w, h, vs, ste, sh_rebuilt;
+  void (*rbg)(int);
+  void (*robj)(int);
+
+  w = bitmap.viewport.w;
+  h = bitmap.viewport.h;
+
+  if (!(reg[1] & 0x04)) return 0;              /* sólo modo 5 (Mega Drive)   */
+  if ((reg[12] & 0x06) == 0x06) return 0;      /* interlace mode 2: fuera    */
+  if (interlaced && config.render) return 0;   /* salida doblada: fuera      */
+  if (config.ntsc) return 0;                   /* filtro NTSC: otro blitter  */
+  if (!out || w <= 0 || h <= 0 || cap < w * h) return 0;
+
+  /* ---- salvar todo lo que el render muta ---- */
+  s_status = status;
+  s_sprovr = spr_ovr;
+  s_sprcol = spr_col;
+  memcpy(s_objcount, object_count, sizeof(object_count));
+  memcpy(s_objinfo, obj_info, sizeof(obj_info));
+  memcpy(s_clip, clip, sizeof(clip));
+  s_reg11 = reg[11]; s_reg12 = reg[12]; s_reg18 = reg[18];
+  s_hsmask = hscroll_mask;
+  s_bdata  = bitmap.data;
+  s_bpitch = bitmap.pitch;
+  s_bvx = bitmap.viewport.x;
+  s_bvy = bitmap.viewport.y;
+
+  /* tiles sucios pendientes → cache (idéntico al arranque de render_line;
+     el próximo frame real haría exactamente este flush) */
+  if (bg_list_index)
+  {
+    update_bg_pattern_cache(bg_list_index);
+    bg_list_index = 0;
+  }
+
+  /* ---- aplicar flags ---- */
+  if (flags & AYTHER_RC_FLAT_HS)
+  {
+    /* toda línea lee la entrada 0 de la tabla (= el valor de la línea 0): lo
+       que vería un render sin scroll raster. OJO: el fetch del hscroll usa
+       hscroll_mask (`line & hscroll_mask`, cache del write de reg 11), NO
+       reg[11] — clampear el registro acá sería un no-op silencioso. */
+    hscroll_mask = 0x00;
+  }
+  if (flags & AYTHER_RC_NO_WINDOW)
+  {
+    /* window a tamaño 0 (el plano A ocupa toda la línea); clip[] se restaura
+       por memcpy al salir */
+    window_clip(0, reg[12] & 1);
+    reg[18] = 0;
+  }
+  ayther_rc_nolimit = (flags & AYTHER_RC_NO_SPR_LIMIT) ? 1 : 0;
+  ayther_rc_nomask  = (flags & AYTHER_RC_NO_SPR_MASK)  ? 1 : 0;
+
+  vs  = (reg[11] & 0x04) && !(flags & AYTHER_RC_FLAT_VS);
+  ste = (reg[12] & 0x08) && !(flags & AYTHER_RC_NO_SH);
+
+  sh_rebuilt = 0;
+  if ((reg[12] & 0x08) && !ste)
+  {
+    /* apagar shadow/highlight: reconstruir pixel[] como si reg12.3 = 0
+       (mismo patrón que el write de reg 12 en vdp_ctrl.c) */
+    int i;
+    reg[12] &= ~0x08;
+    color_update_m5(0x00, *(uint16 *)&cram[(reg[7] & 0x3F) << 1]);
+    for (i = 1; i < 0x40; i++)
+      color_update_m5(i, *(uint16 *)&cram[i << 1]);
+    sh_rebuilt = 1;
+  }
+
+  rbg  = vs ? (config.enhanced_vscroll ? render_bg_m5_vs_enhanced
+                                       : render_bg_m5_vs)
+            : render_bg_m5;
+  robj = ste ? render_obj_m5_ste : render_obj_m5;
+
+  /* ---- el frame se escribe al buffer del caller ---- */
+  bitmap.data  = (uint8 *)out;
+  bitmap.pitch = w * 2;
+  bitmap.viewport.x = 0;   /* sin bordes en el buffer de salida */
+  bitmap.viewport.y = 0;
+
+  /* obj_info de la línea 0, parseado del estado final (line=-1 → offset
+     0x81-1 = 0x80, el Y crudo de la línea 0 — mismo camino que el parse
+     de fin de vblank) */
+  parse_satb_m5(-1);
+
+  for (l = 0; l < h; l++)
+  {
+    if (reg[1] & 0x40)
+    {
+      rbg(l);
+      robj(l & 1);
+
+      /* left-most column blanking (reg 0 bit 5) */
+      if (reg[0] & 0x20)
+        memset(&linebuf[0][0x20], 0x40, 8);
+
+      /* sprites de la línea siguiente, del mismo estado final */
+      if (l < h - 1)
+        parse_satb_m5(l);
+    }
+    else
+    {
+      /* display off (estado final) → línea al backdrop */
+      memset(&linebuf[0][0x20], 0x40, w);
+    }
+    remap_line(l);
+  }
+
+  /* ---- restaurar ---- */
+  if (sh_rebuilt)
+  {
+    int i;
+    reg[12] = s_reg12;
+    color_update_m5(0x00, *(uint16 *)&cram[(reg[7] & 0x3F) << 1]);
+    for (i = 1; i < 0x40; i++)
+      color_update_m5(i, *(uint16 *)&cram[i << 1]);
+  }
+  reg[11] = s_reg11;
+  reg[12] = s_reg12;
+  reg[18] = s_reg18;
+  hscroll_mask = s_hsmask;
+  memcpy(clip, s_clip, sizeof(clip));
+  ayther_rc_nolimit = 0;
+  ayther_rc_nomask  = 0;
+  bitmap.data  = s_bdata;
+  bitmap.pitch = s_bpitch;
+  bitmap.viewport.x = s_bvx;
+  bitmap.viewport.y = s_bvy;
+  memcpy(obj_info, s_objinfo, sizeof(obj_info));
+  memcpy(object_count, s_objcount, sizeof(object_count));
+  status  = s_status;
+  spr_ovr = s_sprovr;
+  spr_col = s_sprcol;
+
+  if (out_w) *out_w = w;
+  if (out_h) *out_h = h;
+  return 1;
+#endif
 }

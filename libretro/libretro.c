@@ -3813,6 +3813,12 @@ void *retro_get_memory_data(unsigned id)
          return ayther_sprites;
       case 0x10C /* AYTHER_MEMORY_PARSED_SPRITE_COUNT */:
          return &ayther_sprite_n;
+      /* AYTHER (#274): señal de fidelidad por frame (u32, ESCRIBIBLE = reset).
+         Escrituras con efecto visual a mitad de pantalla (CRAM/VSRAM/tabla de
+         hscroll/regs); >0 = el frame no se recompone fiel desde el estado
+         final (R-1) → el frontend cae al blit. core/vdp_ctrl.c. */
+      case 0x10E /* AYTHER_MEMORY_RASTER_DIRTY */:
+         return &ayther_raster_dirty;
       /* AYTHER fork delta: log de escrituras crudas a los chips de sonido (FM
          YM2612 + PSG SN76489) en orden temporal dentro del frame (AytherAudioWrite,
          8 bytes c/u: cycle u32 + addr u16 + data u8 + chip u8) + su contador u32
@@ -3926,6 +3932,10 @@ size_t retro_get_memory_size(unsigned id)
          return sizeof(ayther_sprites);
       case 0x10C /* AYTHER_MEMORY_PARSED_SPRITE_COUNT */:
          return 1;
+
+      /* AYTHER (#274): señal de fidelidad por frame (u32, escribible = reset). */
+      case 0x10E /* AYTHER_MEMORY_RASTER_DIRTY */:
+         return sizeof(ayther_raster_dirty);
 
       /* AYTHER fork delta: log de escrituras a chips de sonido (8192 x 8 bytes) +
          contador (u32, escribible = reset). */

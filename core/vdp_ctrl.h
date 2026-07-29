@@ -65,6 +65,10 @@ extern uint8 bg_name_dirty[0x800];
 extern uint16 bg_name_list[0x800];
 extern uint16 bg_list_index;
 extern uint8 hscroll_mask;
+/* AYTHER (#274): señal de fidelidad por frame (id 0x10E, escribible=reset) —
+   escrituras con efecto visual a mitad de pantalla; >0 = el frame no se
+   recompone fiel desde el estado final → el frontend cae al blit. */
+extern uint32 ayther_raster_dirty;
 extern uint8 playfield_shift;
 extern uint8 playfield_col_mask;
 extern uint16 playfield_row_mask;

@@ -105,6 +105,15 @@ uint16 vc_max;                    /* Vertical counter overflow value */
 uint16 lines_per_frame;           /* PAL: 313 lines, NTSC: 262 lines */
 uint16 max_sprite_pixels;         /* Max. sprites pixels per line (parsing & rendering) */
 uint32 fifo_cycles[4];            /* VDP FIFO read-out cycles */
+
+/* AYTHER (#274): señal de FIDELIDAD por frame — cuenta las escrituras que
+   cambian el render a MITAD de pantalla (v_counter en display activo): CRAM,
+   VSRAM, la tabla de hscroll en VRAM y registros con efecto visual. Un frame
+   con esto NO se recompone fiel desde el estado final del VDP (medido en el
+   spike R-1): el frontend lo lee (id 0x10E, ESCRIBIBLE = reset antes del
+   frame) y ese frame cae al blit del emulador (híbrido). Transiente — no se
+   serializa; el reset por frame lo hace el frontend. */
+uint32 ayther_raster_dirty = 0;
 uint32 hvc_latch;                 /* latched HV counter */
 uint32 vint_cycle;                /* VINT occurence cycle */
 const uint8 *hctab;               /* pointer to H Counter table */
@@ -1582,6 +1591,14 @@ static void vdp_reg_w(unsigned int r, unsigned int d, unsigned int cycles)
     return;
   }
 
+  /* AYTHER (#274): registro con efecto VISUAL cambiado a mitad de pantalla
+     (modo, scroll, bases, window, S/H...). Se excluyen los sin efecto de
+     render: 10 (H-int), 14, 15 (autoincrement — lo tocan los setups de DMA
+     todo el tiempo) y 19-23 (DMA length/source). */
+  if ((v_counter < bitmap.viewport.h) && ((reg[r] ^ d) & 0xFF) &&
+      ((r <= 13 && r != 10) || (r >= 16 && r <= 18)))
+    ayther_raster_dirty++;
+
   switch(r)
   {
     case 0: /* CTRL #1 */
@@ -2264,6 +2281,11 @@ static void vdp_bus_w(unsigned int data)
       {
         int name;
 
+        /* AYTHER (#274): tabla de hscroll reescrita a mitad de pantalla
+           (base hscb, alineada a 0x400; la tabla entra en ese bloque). */
+        if ((v_counter < bitmap.viewport.h) && ((index & 0xFC00) == hscb))
+          ayther_raster_dirty++;
+
         /* Write data to VRAM */
         *p = data;
 
@@ -2295,6 +2317,11 @@ static void vdp_bus_w(unsigned int data)
       {
         /* CRAM index (64 words) */
         int index = (addr >> 1) & 0x3F;
+
+        /* AYTHER (#274): CRAM cambiada a mitad de pantalla (fundidos, líneas
+           de agua, flashes) — la clase de divergencia que midió R-1. */
+        if (v_counter < bitmap.viewport.h)
+          ayther_raster_dirty++;
 
         /* Write CRAM data */
         *p = data;
@@ -2333,6 +2360,10 @@ static void vdp_bus_w(unsigned int data)
 
     case 0x05:  /* VSRAM */
     {
+      /* AYTHER (#274): vscroll cambiado a mitad de pantalla. */
+      if ((v_counter < bitmap.viewport.h) && *(uint16 *)&vsram[addr & 0x7E] != (uint16)data)
+        ayther_raster_dirty++;
+
       *(uint16 *)&vsram[addr & 0x7E] = data;
 
       /* 2-cell Vscroll mode */
@@ -2772,6 +2803,11 @@ static void vdp_z80_data_w_m5(unsigned int data)
       {
         /* CRAM index (64 words) */
         int index = (addr >> 1) & 0x3F;
+
+        /* AYTHER (#274): CRAM cambiada a mitad de pantalla (fundidos, líneas
+           de agua, flashes) — la clase de divergencia que midió R-1. */
+        if (v_counter < bitmap.viewport.h)
+          ayther_raster_dirty++;
 
         /* Write CRAM data */
         *p = data;

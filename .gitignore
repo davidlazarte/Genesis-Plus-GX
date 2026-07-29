@@ -20,3 +20,6 @@ sdl/build_sdl2
 *.o
 *.a
 *.so
+
+# audio_probe unit test binary
+/tests/test_audio_probe

@@ -91,6 +91,10 @@ static struct
   int chanDelta[4][2];
   int chanOut[4][2];
   int chanAmp[4][2];
+#ifdef SOUND_PROBE
+  unsigned int preamp;   /* last preamp value  (for gain refresh) */
+  unsigned int panning;  /* last panning value (for gain refresh) */
+#endif
 } psg;
 
 /* AYTHER fork delta: estado de mute aplicado por canal (para detectar el flanco
@@ -147,6 +151,11 @@ void psg_reset(void)
 
   /* reset internal M-cycles clock counter */
   psg.clocks = 0;
+
+#ifdef SOUND_PROBE
+  psg.preamp  = 0;
+  psg.panning = 0;
+#endif
 }
 
 int psg_context_save(uint8 *state)
@@ -257,6 +266,11 @@ void psg_write(unsigned int clocks, unsigned int data)
     /* update internal M-cycles clock counter */
     psg.clocks += ((clocks - psg.clocks + PSG_MCYCLES_RATIO - 1) / PSG_MCYCLES_RATIO) * PSG_MCYCLES_RATIO;
   }
+
+#ifdef SOUND_PROBE
+  /* report the raw PSG bus write (timestamped) */
+  audio_probe_psg_raw(clocks, data);
+#endif
 
   if (data & 0x80)
   {
@@ -404,6 +418,12 @@ void psg_config(unsigned int clocks, unsigned int preamp, unsigned int panning)
 {
   int i;
 
+#ifdef SOUND_PROBE
+  /* remember settings so audio_probe gain changes can be re-applied live */
+  psg.preamp  = preamp;
+  psg.panning = panning;
+#endif
+
   /* PSG chip synchronization */
   if (clocks > psg.clocks)
   {
@@ -428,6 +448,18 @@ void psg_config(unsigned int clocks, unsigned int preamp, unsigned int panning)
         psg.chanAmp[i][0] = ((preamp * config.psg_ch_volumes[i]) / 100) * ((panning >> (i + 4)) & 1);
         psg.chanAmp[i][1] = ((preamp * config.psg_ch_volumes[i]) / 100) * ((panning >> (i + 0)) & 1);
     #endif
+
+#ifdef SOUND_PROBE
+    /* audio_probe per-channel gain (for HQ audio substitution) */
+    {
+      int pg = audio_probe_get_channel_gain(AP_SRC_PSG, i);
+      if (pg < 100)
+      {
+        psg.chanAmp[i][0] = (psg.chanAmp[i][0] * pg) / 100;
+        psg.chanAmp[i][1] = (psg.chanAmp[i][1] * pg) / 100;
+      }
+    }
+#endif
 
     /* tone channels */
     if (i < 3)
@@ -458,6 +490,16 @@ void psg_config(unsigned int clocks, unsigned int preamp, unsigned int panning)
     psg.chanOut[i][1] = (volume * psg.chanAmp[i][1]) / 100;
   }
 }
+
+#ifdef SOUND_PROBE
+/* Re-apply channel amplification using the last preamp/panning so an
+   audio_probe gain change takes effect immediately (propagated through the
+   same delta path psg_config uses). */
+void psg_refresh_gain(void)
+{
+  psg_config(psg.clocks, psg.preamp, psg.panning);
+}
+#endif
 
 void psg_end_frame(unsigned int clocks)
 {
@@ -615,4 +657,20 @@ static void psg_update(unsigned int clocks)
     /* save channel generator polarity */
     psg.polarity[i] = polarity;
   }
-}  
+}
+
+#ifdef SOUND_PROBE
+/* Snapshot the resolved voice of PSG channel 'ch' (0-3): tone period in
+   block_fnum, attenuation (0-15, 15=off) in op_tl[0], and the noise control
+   nibble (channel 3) in algorithm. */
+void PSG_GetVoice(int ch, ap_voice_t *out)
+{
+  if (!out) return;
+  memset(out, 0, sizeof(*out));
+  if (ch < 0 || ch > 3) return;
+  out->op_tl[0]   = (unsigned char)(psg.regs[ch * 2 + 1] & 0x0f);
+  out->block_fnum = (unsigned int)(psg.regs[ch * 2] & 0x3ff);
+  if (ch == 3)
+    out->algorithm = (unsigned char)(psg.regs[6] & 0x07);
+}
+#endif /* SOUND_PROBE */

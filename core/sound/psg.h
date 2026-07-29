@@ -57,4 +57,14 @@ extern void psg_write(unsigned int clocks, unsigned int data);
 extern void psg_config(unsigned int clocks, unsigned int preamp, unsigned int panning);
 extern void psg_end_frame(unsigned int clocks);
 
+#ifdef SOUND_PROBE
+/* Snapshot the resolved voice state of a PSG channel (0-3). Tone period is
+   reported in block_fnum, attenuation (0-15, 15=off) in op_tl[0], and the
+   noise control nibble (channel 3 only) in algorithm. (ap_voice_t comes from
+   audio_probe.h, included via shared.h.) */
+extern void PSG_GetVoice(int ch, ap_voice_t *out);
+/* Re-apply per-channel amplification immediately after a gain change. */
+extern void psg_refresh_gain(void);
+#endif
+
 #endif /* _PSG_H_ */

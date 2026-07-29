@@ -108,6 +108,22 @@ en AYTHER como `third_party/cores/genesis_plus_gx_libretro_vram.dll`.
 **Rebase con upstream:** revisar que `ekeeke/Genesis-Plus-GX` no haya
 implementado `RETRO_MEMORY_VIDEO_RAM` (entraría en conflicto con `7fcf9bc`).
 
+### `audio_probe` — exposición de gatillos de sonido (opt-in)
+
+Superficie de observación de audio para que el Lab de AYTHER identifique el
+inicio de efectos de sonido y sus componentes (agnóstico de canal), los
+secuencie y sustituya audio. Detrás del flag `SOUND_PROBE` (**costo cero**
+cuando está apagado, igual que `HOOK_CPU`):
+
+- **Eventos** FM (cores MAME y Nuked), PSG y DAC con línea de tiempo monótona,
+  vía callback o ring buffer.
+- **Estado de voz resuelto** + huella canónica **independiente de canal**.
+- **Gain por canal** para sustituir audio.
+- API exportada desde el `.so` (`audio_probe_*`) con `SOUND_PROBE=1`.
+
+Diseño e integración: [`docs/audio_probe.md`](docs/audio_probe.md) · pruebas:
+[`tests/`](tests/) (`cd tests && make check`).
+
 ---
 
 ## Upstream README (Genesis Plus GX)

@@ -97,6 +97,13 @@ static struct
 #endif
 } psg;
 
+/* AYTHER fork delta: estado de mute aplicado por canal (para detectar el flanco
+   y corregir el nivel corriente sin dejar offset DC). NO se serializa: un
+   savestate guarda siempre el audio SIN mutear (el mute es output-only), así que
+   psg_context_load lo resetea a 0 — si no, tras un unserialize (replay/scrub) el
+   shadow queda desincronizado y el mute no corrige el nivel (residual DC). */
+static uint8 psg_ayther_muted[4] = {0};
+
 static void psg_update(unsigned int clocks);
 
 void psg_init(PSG_TYPE type)
@@ -172,8 +179,9 @@ int psg_context_load(uint8 *state)
   int delta[2];
   int i, bufferptr = 0;
 
-  /* initialize delta with current noise channel output */
-  if (psg.noiseShiftValue & 1)
+  /* initialize delta with current noise channel output (AYTHER: si el canal
+     estaba muteado su contribución efectiva era 0 → no la quitamos) */
+  if ((psg.noiseShiftValue & 1) && !psg_ayther_muted[3])
   {
     delta[0] = -psg.chanOut[3][0];
     delta[1] = -psg.chanOut[3][1];
@@ -184,10 +192,10 @@ int psg_context_load(uint8 *state)
     delta[1] = 0;
   }
 
-  /* add current tone channels output */
+  /* add current tone channels output (AYTHER: idem, muted-aware) */
   for (i=0; i<3; i++)
   {
-    if (psg.polarity[i] > 0)
+    if ((psg.polarity[i] > 0) && !psg_ayther_muted[i])
     {
       delta[0] -= psg.chanOut[i][0];
       delta[1] -= psg.chanOut[i][1];
@@ -202,6 +210,13 @@ int psg_context_load(uint8 *state)
   load_param(psg.freqCounter,sizeof(psg.freqCounter));
   load_param(psg.polarity,sizeof(psg.polarity));
   load_param(psg.chanOut,sizeof(psg.chanOut));
+
+  /* AYTHER fork delta: el savestate guarda el audio SIN mutear (el mute es
+     output-only, no toca el estado del chip), así que el estado restaurado está
+     "desmuteado". Reseteamos el shadow a 0 → la próxima máscara del frontend
+     re-dispara la corrección de nivel. Sin esto, tras un replay/scrub el mute no
+     baja la energía (residual DC). El new-output de abajo usa chanOut pleno (OK). */
+  for (i=0; i<4; i++) psg_ayther_muted[i] = 0;
 
   /* add noise channel output variation */
   if (psg.noiseShiftValue & 1)
@@ -236,6 +251,11 @@ int psg_context_load(uint8 *state)
 void psg_write(unsigned int clocks, unsigned int data)
 {
   int index;
+
+  /* AYTHER fork delta: registrar la escritura cruda al PSG (byte ORIGINAL, antes
+     de que el switch de abajo recalcule `data`). El protocolo de latch (bit 7 =
+     latch de registro, si no dato al registro latcheado) lo replica el host. */
+  ayther_record_audio_write(AYTHER_AUDIO_CHIP_PSG, 0, (uint8)(data & 0xff), clocks);
 
   /* PSG chip synchronization */
   if (clocks > psg.clocks)
@@ -343,8 +363,9 @@ void psg_write(unsigned int clocks, unsigned int data)
       chanOut[0] = (data * psg.chanAmp[3][0]) / 100;
       chanOut[1] = (data * psg.chanAmp[3][1]) / 100;
 
-      /* check noise shift register output */
-      if (psg.noiseShiftValue & 1)
+      /* check noise shift register output (AYTHER: si está muteado, no generar
+         delta audible — el nivel real se guarda abajo y se restaura al desmutear) */
+      if ((psg.noiseShiftValue & 1) && !AYTHER_PSG_MUTED(3))
       {
         /* channel output is high, volume variation will be applied at next internal cycle update */
         psg.chanDelta[3][0] += (chanOut[0] - psg.chanOut[3][0]);
@@ -372,8 +393,9 @@ void psg_write(unsigned int clocks, unsigned int data)
       chanOut[0] = (data * psg.chanAmp[i][0]) / 100;
       chanOut[1] = (data * psg.chanAmp[i][1]) / 100;
 
-      /* check tone generator polarity */
-      if (psg.polarity[i] > 0)
+      /* check tone generator polarity (AYTHER: si está muteado, no generar delta
+         audible — el nivel real se guarda abajo y se restaura al desmutear) */
+      if ((psg.polarity[i] > 0) && !AYTHER_PSG_MUTED(i))
       {
         /* channel output is high, volume variation will be applied at next internal cycle update */
         psg.chanDelta[i][0] += (chanOut[0] - psg.chanOut[i][0]);
@@ -509,6 +531,24 @@ static void psg_update(unsigned int clocks)
 
   for (i=0; i<4; i++)
   {
+    /* AYTHER: mute por canal a nivel de salida. eo0/eo1 = salida efectiva (0 si
+       muteado). Al CAMBIAR el mute, corrige el nivel corriente vía chanDelta —
+       como un cambio de volumen a/desde silencio — para no dejar DC ni click. */
+    int aeth_mute = AYTHER_PSG_MUTED(i) ? 1 : 0;
+    if (aeth_mute != psg_ayther_muted[i])
+    {
+      int high = (i < 3) ? (psg.polarity[i] > 0) : (psg.noiseShiftValue & 1);
+      if (high)
+      {
+        int f = aeth_mute ? -1 : 1;   /* mute: -chanOut (a 0); unmute: +chanOut */
+        psg.chanDelta[i][0] += f * psg.chanOut[i][0];
+        psg.chanDelta[i][1] += f * psg.chanOut[i][1];
+      }
+      psg_ayther_muted[i] = aeth_mute;
+    }
+    int eo0 = aeth_mute ? 0 : psg.chanOut[i][0];
+    int eo1 = aeth_mute ? 0 : psg.chanOut[i][1];
+
     /* apply any pending channel volume variations */
     if (psg.chanDelta[i][0] | psg.chanDelta[i][1])
     {
@@ -542,14 +582,14 @@ static void psg_update(unsigned int clocks)
         /* invert tone generator polarity */
         polarity = -polarity;
 
-        /* update channel output */
+        /* update channel output (eo0/eo1 = 0 si el canal está muteado) */
         if (config.hq_psg)
         {
-          blip_add_delta(snd.blips[0], timestamp, polarity*psg.chanOut[i][0], polarity*psg.chanOut[i][1]);
+          blip_add_delta(snd.blips[0], timestamp, polarity*eo0, polarity*eo1);
         }
         else
         {
-          blip_add_delta_fast(snd.blips[0], timestamp, polarity*psg.chanOut[i][0], polarity*psg.chanOut[i][1]);
+          blip_add_delta_fast(snd.blips[0], timestamp, polarity*eo0, polarity*eo1);
         }
 
         /* timestamp of next transition */
@@ -592,14 +632,14 @@ static void psg_update(unsigned int clocks)
           /* shift register output variation */
           shiftOutput = (shiftValue & 0x1) - shiftOutput;
 
-          /* update noise channel output */
+          /* update noise channel output (eo0/eo1 = 0 si el canal está muteado) */
           if (config.hq_psg)
           {
-            blip_add_delta(snd.blips[0], timestamp, shiftOutput*psg.chanOut[3][0], shiftOutput*psg.chanOut[3][1]);
+            blip_add_delta(snd.blips[0], timestamp, shiftOutput*eo0, shiftOutput*eo1);
           }
           else
           {
-            blip_add_delta_fast(snd.blips[0], timestamp, shiftOutput*psg.chanOut[3][0], shiftOutput*psg.chanOut[3][1]);
+            blip_add_delta_fast(snd.blips[0], timestamp, shiftOutput*eo0, shiftOutput*eo1);
           }
         }
 

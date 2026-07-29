@@ -42,6 +42,29 @@
 
 int8 audio_hard_disable = 0;
 
+/* AYTHER fork delta: log por-frame de escrituras crudas a los chips de sonido.
+   Ver sound.h. El frontend resetea ayther_audio_write_n=0 (id 0x10A) antes del
+   frame produce y lee el log tras run_frame (igual que los sprites parseados,
+   ids 0x10B/0x10C). Si se desborda el tope, las escrituras extra se descartan y
+   el host lo detecta (n == CAP). */
+AytherAudioWrite ayther_audio_writes[AYTHER_AUDIO_WRITE_CAP];
+uint32 ayther_audio_write_n = 0;
+
+/* AYTHER fork delta: máscara de mute por canal (ver sound.h). 0 = todo suena. */
+uint16 ayther_audio_mute = 0;
+
+void ayther_record_audio_write(uint8 chip, uint16 addr, uint8 data, uint32 cycle)
+{
+  if (ayther_audio_write_n < AYTHER_AUDIO_WRITE_CAP)
+  {
+    AytherAudioWrite *w = &ayther_audio_writes[ayther_audio_write_n++];
+    w->cycle = cycle;
+    w->addr  = addr;
+    w->data  = data;
+    w->chip  = chip;
+  }
+}
+
 /* YM2612 internal clock = input clock / 6 = (master clock / 7) / 6 */
 #define YM2612_CLOCK_RATIO (7*6)
 
@@ -136,6 +159,11 @@ static void YM2612_Write(unsigned int cycles, unsigned int a, unsigned int v)
     }
   }
 
+  /* AYTHER fork delta: registrar la escritura cruda al bus FM (orden temporal).
+     Loguea address-port (a=0/2) y data-port (a=1/3); el host replica el latch de
+     dirección de YM2612Write para reconstruir el registro (p.ej. 0x28 key-on). */
+  ayther_record_audio_write(AYTHER_AUDIO_CHIP_FM, (uint16)(a & 3), (uint8)(v & 0xff), cycles);
+
   /* write FM register */
   YM2612Write(a, v);
 }
@@ -228,6 +256,9 @@ static void YM3438_Write(unsigned int cycles, unsigned int a, unsigned int v)
 {
   /* synchronize FM chip with CPU */
   fm_update(cycles);
+
+  /* AYTHER fork delta: registrar la escritura cruda al bus FM (core enhanced). */
+  ayther_record_audio_write(AYTHER_AUDIO_CHIP_FM, (uint16)(a & 3), (uint8)(v & 0xff), cycles);
 
   /* write FM register */
   OPN2_Write(&ym3438, a, v);

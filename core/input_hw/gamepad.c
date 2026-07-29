@@ -349,7 +349,7 @@ void mastertap_2_write(unsigned char data, unsigned char mask)
   flipflop[1].Latch = data;
 }
 
-/* AETHER: serialize input-hardware latch state. The 6-button pad multiplexes
+/* AYTHER: serialize input-hardware latch state. The 6-button pad multiplexes
    button reads through State/Counter/Timeout on TH toggles; without this a
    savestate taken mid-replay restores a different pad phase and the game
    reads different buttons (Lab split/scrub determinism). */

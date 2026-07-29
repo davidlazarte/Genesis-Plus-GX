@@ -102,29 +102,29 @@
 /* Global variables */
 extern uint16 spr_col;
 
-/* Aether fork delta: máscara de capas visibles (id de memoria privado 0x102,
+/* AYTHER fork delta: máscara de capas visibles (id de memoria privado 0x102,
    escribible desde el frontend). Bit set = capa visible; default 0xFF. La leen
    render_bg_m5/_vs (planos A/B/Window) y render_line (sprites) para aislar
-   capas en el viewport — autoría en el Lab de Aether. */
-#define AETHER_LAYER_A   0x01   /* Plano A (Scroll A)  */
-#define AETHER_LAYER_B   0x02   /* Plano B (Scroll B)  */
-#define AETHER_LAYER_W   0x04   /* Window              */
-#define AETHER_LAYER_OBJ 0x08   /* Sprites             */
-extern uint8 aether_layer_mask;
-extern uint8 aether_layer_dim;             /* atenuar capas no-sprite al 25% (id 0x108) */
+   capas en el viewport — autoría en el Lab de AYTHER. */
+#define AYTHER_LAYER_A   0x01   /* Plano A (Scroll A)  */
+#define AYTHER_LAYER_B   0x02   /* Plano B (Scroll B)  */
+#define AYTHER_LAYER_W   0x04   /* Window              */
+#define AYTHER_LAYER_OBJ 0x08   /* Sprites             */
+extern uint8 ayther_layer_mask;
+extern uint8 ayther_layer_dim;             /* atenuar capas no-sprite al 25% (id 0x108) */
 /* Sprites realmente parseados por parse_satb en el frame (id 0x10B lista / 0x10C
    contador, escribible=reset). Captura los reescritos in-place a mitad de frame. */
 /* 10 bytes. sat_idx = índice de ENTRADA del SAT (link>>2) — el MISMO espacio de
    índices que la máscara de supresión 0x103 (¡distinto del orden de la lista!).
    chain_pos = posición en la CADENA de links al parsear = prioridad real de dibujo
    del VDP entre sprites (menor = más al frente). */
-typedef struct { uint16 yr, xr, attr; uint8 w, h, sat_idx, chain_pos; } AetherSpr;
-extern AetherSpr aether_sprites[128];
-extern uint8 aether_sprite_n;
-extern uint8 aether_sprite_suppress[16];   /* slots SAT suprimidos (id 0x103) */
-extern uint8 aether_tile_suppress[512];    /* celdas de tile suprimidas (id 0x104, 64x64) */
-extern uint8 aether_plane_tile_suppress[3 * 1024]; /* tiles de plano suprimidos (id 0x105) */
-extern uint8 aether_plane_suppress_active;  /* id 0x106: 1 = hay algún tile de plano oculto */
+typedef struct { uint16 yr, xr, attr; uint8 w, h, sat_idx, chain_pos; } AytherSpr;
+extern AytherSpr ayther_sprites[128];
+extern uint8 ayther_sprite_n;
+extern uint8 ayther_sprite_suppress[16];   /* slots SAT suprimidos (id 0x103) */
+extern uint8 ayther_tile_suppress[512];    /* celdas de tile suprimidas (id 0x104, 64x64) */
+extern uint8 ayther_plane_tile_suppress[3 * 1024]; /* tiles de plano suprimidos (id 0x105) */
+extern uint8 ayther_plane_suppress_active;  /* id 0x106: 1 = hay algún tile de plano oculto */
 
 /* Function prototypes */
 extern void render_init(void);

@@ -3,7 +3,7 @@
 > Documentación del core **`genesis_plus_gx_libretro`** con énfasis en las
 > herramientas y capacidades que ofrece para la **emulación de Mega Drive /
 > Genesis**. Cubre la interfaz libretro completa, el núcleo de emulación y los
-> *deltas* propios del fork **Aether** (rama `aether/expose-vram-video-ram`).
+> *deltas* propios del fork **AYTHER** (rama `aether/expose-vram-video-ram`).
 >
 > Versión del core: **Genesis Plus GX v1.7.4** (`retro_get_system_info`,
 > [libretro/libretro.c:3128](../libretro/libretro.c)). Savestate del fork:
@@ -17,7 +17,7 @@ Genesis Plus GX es un emulador open-source de las consolas **Sega de 8 y 16
 bits**, centrado en **precisión** y **portabilidad**. El core libretro es la
 encarnación del emulador como librería dinámica (`.dll`/`.so`/`.dylib`) que se
 carga desde un frontend libretro (RetroArch, etc.) o desde un runner embebido
-(como el **Lab de Aether**).
+(como el **Lab de AYTHER**).
 
 ### Sistemas emulados
 
@@ -39,7 +39,7 @@ licenciados y piratas, y los modos de retrocompatibilidad.
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│ Frontend libretro (RetroArch / RetroRunner de Aether)     │
+│ Frontend libretro (RetroArch / RetroRunner de AYTHER)     │
 └───────────────▲───────────────────────┬──────────────────┘
    callbacks env/video/audio/input       │ retro_* entry points
 ┌───────────────┴───────────────────────▼──────────────────┐
@@ -173,7 +173,7 @@ hardware de input en §7.
   `GET_AUDIO_VIDEO_ENABLE`, se guarda/restaura además el estado de los blip
   buffers de sonido (`save_sound_buffer`/`restore_sound_buffer`) para evitar
   artefactos al rebobinar.
-- **Delta Aether (`539dc45`)**: el savestate ahora serializa el *latch* de la
+- **Delta AYTHER (`539dc45`)**: el savestate ahora serializa el *latch* de la
   fase TH del pad de 6 botones (`input-hw`), imprescindible para que restaurar
   un estado a mitad de un replay no diverja.
 
@@ -201,7 +201,7 @@ requieren sin recargar el core.
 ## 3. Acceso a memoria — `retro_get_memory_data/size`
 
 Esta es la superficie más relevante para herramientas externas (cheats,
-RetroAchievements, **el pipeline HD de Aether**). El core expone regiones por
+RetroAchievements, **el pipeline HD de AYTHER**). El core expone regiones por
 *id* ([libretro.c:3746](../libretro/libretro.c)).
 
 ### 3.1 Ids estándar de libretro
@@ -210,7 +210,7 @@ RetroAchievements, **el pipeline HD de Aether**). El core expone regiones por
 |---|---|---|---|
 | `RETRO_MEMORY_SAVE_RAM` | SRAM/EEPROM de la cartridge | hasta 64 KB | `NULL` si `sram.on` es falso; el `size` recortado al rango realmente modificado al guardar. |
 | `RETRO_MEMORY_SYSTEM_RAM` | Work RAM | 64 KB (MD) / 8 KB / 2 KB / 1 KB (8-bit) | RAM principal del 68000 en Mega Drive. |
-| `RETRO_MEMORY_VIDEO_RAM` | **VRAM del VDP** | **64 KB** | **Delta Aether `7fcf9bc`** — upstream devuelve `NULL`. |
+| `RETRO_MEMORY_VIDEO_RAM` | **VRAM del VDP** | **64 KB** | **Delta AYTHER `7fcf9bc`** — upstream devuelve `NULL`. |
 
 ### 3.2 Memory map para herramientas
 
@@ -219,23 +219,23 @@ descriptores vía `SET_MEMORY_MAPS`. Actualmente se publica el mapa del
 **Mega CD** (Work RAM en `0xFF0000`, PRG-RAM, Word-RAM) para que cheats y
 achievements direccionen correctamente la memoria del sub-CPU.
 
-### 3.3 Ids privados del fork Aether (≥ `0x100`)
+### 3.3 Ids privados del fork AYTHER (≥ `0x100`)
 
 La convención libretro reserva ids `≥ 0x100` para usos no estandarizados. El
-fork los usa para exponer el estado interno del VDP al **Lab de Aether** (un
+fork los usa para exponer el estado interno del VDP al **Lab de AYTHER** (un
 core stock devuelve `NULL` y el Lab degrada con elegancia). Algunos son
 **escribibles** desde el frontend para manipular el render.
 
 | Id | Nombre lógico | Tamaño | R/W | Contenido |
 |---|---|---|---|---|
-| `0x100` | `AETHER_MEMORY_CRAM` | 128 B | R | **CRAM**: 64 colores de 9 bits (layout `0000BBB0GGG0RRR0`). |
-| `0x101` | `AETHER_MEMORY_VDP_REGS` | 32 B | R | Los 32 registros `reg[0x20]` del VDP (bases de planos, tamaño…). |
-| `0x107` | `AETHER_MEMORY_VSRAM` | 128 B | R | **VSRAM**: 64 entradas de vscroll de 11 bits. |
-| `0x102` | `AETHER_MEMORY_LAYER_MASK` | 1 B | **R/W** | Bitmask de capas visibles (Plano A/B/Window/Sprites). |
-| `0x103` | `AETHER_MEMORY_SPRITE_SUPPRESS` | 16 B | **R/W** | Bitmask de slots del SAT a ocultar (sprite por hash). |
-| `0x104` | `AETHER_MEMORY_TILE_SUPPRESS` | 512 B | **R/W** | Máscara de celdas de tile (rejilla 64×64) a "pelar". |
-| `0x105` | `AETHER_MEMORY_PLANE_TILE_SUPPRESS` | 3072 B | **R/W** | Por-plano: bitmap `(patrón<<2 \| paleta)` a suprimir. |
-| `0x106` | `AETHER_MEMORY_PLANE_SUPPRESS_ACTIVE` | 1 B | **R/W** | Flag de gate del fast-path (¿hay tiles de plano ocultos?). |
+| `0x100` | `AYTHER_MEMORY_CRAM` | 128 B | R | **CRAM**: 64 colores de 9 bits (layout `0000BBB0GGG0RRR0`). |
+| `0x101` | `AYTHER_MEMORY_VDP_REGS` | 32 B | R | Los 32 registros `reg[0x20]` del VDP (bases de planos, tamaño…). |
+| `0x107` | `AYTHER_MEMORY_VSRAM` | 128 B | R | **VSRAM**: 64 entradas de vscroll de 11 bits. |
+| `0x102` | `AYTHER_MEMORY_LAYER_MASK` | 1 B | **R/W** | Bitmask de capas visibles (Plano A/B/Window/Sprites). |
+| `0x103` | `AYTHER_MEMORY_SPRITE_SUPPRESS` | 16 B | **R/W** | Bitmask de slots del SAT a ocultar (sprite por hash). |
+| `0x104` | `AYTHER_MEMORY_TILE_SUPPRESS` | 512 B | **R/W** | Máscara de celdas de tile (rejilla 64×64) a "pelar". |
+| `0x105` | `AYTHER_MEMORY_PLANE_TILE_SUPPRESS` | 3072 B | **R/W** | Por-plano: bitmap `(patrón<<2 \| paleta)` a suprimir. |
+| `0x106` | `AYTHER_MEMORY_PLANE_SUPPRESS_ACTIVE` | 1 B | **R/W** | Flag de gate del fast-path (¿hay tiles de plano ocultos?). |
 
 > **Endianness**: VRAM y CRAM se exponen **word-swapped** en hosts
 > little-endian (igual que la Work RAM): el byte lógico `off` vive en el array
@@ -244,8 +244,8 @@ core stock devuelve `NULL` y el Lab degrada con elegancia). Algunos son
 Estas regiones habilitan, sin tocar el juego, las capacidades de autoría del
 Lab: **aislar capas**, **ocultar sprites/tiles concretos** y **revelar lo que
 hay detrás** (Plano B o backdrop). La implementación del *peel/merge* vive en
-[core/vdp_render.c](../core/vdp_render.c) (`aether_peel_merge`,
-`aether_layer_mask`, `aether_*_suppress`).
+[core/vdp_render.c](../core/vdp_render.c) (`ayther_peel_merge`,
+`ayther_layer_mask`, `ayther_*_suppress`).
 
 ---
 
@@ -333,7 +333,7 @@ errors**, **force DTACK** ante buses no mapeados, y **overclock** opcional.
 
 Implementado en [core/vdp_ctrl.c](../core/vdp_ctrl.c) (control, DMA, timing) y
 [core/vdp_render.c](../core/vdp_render.c) (rasterizado). Es el corazón gráfico
-del Mega Drive y la fuente de todo lo que Aether inspecciona.
+del Mega Drive y la fuente de todo lo que AYTHER inspecciona.
 
 ### 6.1 Qué emula
 
@@ -377,10 +377,10 @@ DMA. **Las cuatro memorias y los registros se exponen por los ids `0x100`,
    (`render_bg_m5`, `render_bg_m5_vs`, `render_bg_m5_vs_enhanced`, variantes
    IM2…).
 3. **Composición de planos**: macro `merge` con LUT de prioridad. **El fork
-   inyecta `aether_peel_merge`**: en las celdas marcadas en `0x104` "pela" el
+   inyecta `ayther_peel_merge`**: en las celdas marcadas en `0x104` "pela" el
    primer plano (A/Window) y revela el Plano B, o el *backdrop* si la celda es
    Plano B puro.
-4. **Sprites**: `parse_satb` (respeta `aether_sprite_suppress`, id `0x103`) +
+4. **Sprites**: `parse_satb` (respeta `ayther_sprite_suppress`, id `0x103`) +
    `render_obj_m5`/`_ste`.
 5. **Remap final** (`remap_line`): CRAM → LUT de pixel → salida, aplicando el
    filtro **NTSC** (`md_ntsc_blit`/`sms_ntsc_blit`) o el **LCD ghosting** si
@@ -393,15 +393,15 @@ DMA. **Las cuatro memorias y los registros se exponen por los ids `0x100`,
 - **Interlaced Mode 2**: 320×448 (NTSC) / 320×512 (PAL) reales.
 - Filtro **Blargg NTSC** en 4 perfiles (monochrome/composite/svideo/rgb).
 
-### 6.5 Herramientas de inspección/manipulación (Aether)
+### 6.5 Herramientas de inspección/manipulación (AYTHER)
 
 | Variable (vdp_render.c) | Id | Efecto |
 |---|---|---|
-| `aether_layer_mask` | `0x102` | Oculta Plano A/B/Window/Sprites en el viewport. |
-| `aether_sprite_suppress[16]` | `0x103` | Saltea slots concretos del SAT en `parse_satb`. |
-| `aether_tile_suppress[512]` | `0x104` | "Pela" celdas (rejilla 64×64) revelando lo de atrás. |
-| `aether_plane_tile_suppress[3072]` | `0x105` | Suprime patrones de plano `(patrón\|paleta)`. |
-| `aether_plane_suppress_active` | `0x106` | Gate del fast-path de `render_bg_m5/_vs`. |
+| `ayther_layer_mask` | `0x102` | Oculta Plano A/B/Window/Sprites en el viewport. |
+| `ayther_sprite_suppress[16]` | `0x103` | Saltea slots concretos del SAT en `parse_satb`. |
+| `ayther_tile_suppress[512]` | `0x104` | "Pela" celdas (rejilla 64×64) revelando lo de atrás. |
+| `ayther_plane_tile_suppress[3072]` | `0x105` | Suprime patrones de plano `(patrón\|paleta)`. |
+| `ayther_plane_suppress_active` | `0x106` | Gate del fast-path de `render_bg_m5/_vs`. |
 
 Junto con las lecturas de VRAM/CRAM/VSRAM/regs, estas escrituras permiten al Lab
 **descomponer la imagen en capas y entidades** sin parchear la ROM — la base del
@@ -520,7 +520,7 @@ add-on de CD:
 
 ---
 
-## 11. Build y despliegue (fork Aether)
+## 11. Build y despliegue (fork AYTHER)
 
 La DLL **no se versiona** (BYOC — *build your own core*). Toolchain requerido:
 **llvm-mingw con runtime MSVCRT**:
@@ -532,7 +532,7 @@ make -f Makefile.libretro platform=win64 -j8
 
 > Un build **UCRT** crashea en `retro_load_game`
 > (`STATUS_STACK_BUFFER_OVERRUN`); el **MSVCRT** es bit-idéntico al DLL stock en
-> emulación. La salida se despliega en Aether como
+> emulación. La salida se despliega en AYTHER como
 > `third_party/cores/genesis_plus_gx_libretro_vram.dll`.
 
 Otros targets: `Makefile.gc`/`Makefile.gc.low-mem` (GameCube), `Makefile.wii`
@@ -555,7 +555,7 @@ implementado `RETRO_MEMORY_VIDEO_RAM` (colisionaría con el delta `7fcf9bc`).
 | [core/system.c](../core/system.c) · [core/genesis.c](../core/genesis.c) | Bucle de sistema, wiring de CPU/VDP/sonido. |
 | [core/loadrom.c](../core/loadrom.c) | Carga de ROM, detección de sistema/región/mapper. |
 | [core/state.c](../core/state.c) | Serialización de savestates (`STATE_VERSION`). |
-| [core/vdp_ctrl.c](../core/vdp_ctrl.c) · [core/vdp_render.c](../core/vdp_render.c) | VDP: control/DMA y rasterizado (+ deltas Aether). |
+| [core/vdp_ctrl.c](../core/vdp_ctrl.c) · [core/vdp_render.c](../core/vdp_render.c) | VDP: control/DMA y rasterizado (+ deltas AYTHER). |
 | [core/io_ctrl.c](../core/io_ctrl.c) · [core/input_hw/](../core/input_hw/) | Puertos de I/O y periféricos. |
 | [core/sound/](../core/sound/) | Chips de sonido y mezcla. |
 | [core/cart_hw/](../core/cart_hw/) · [core/cd_hw/](../core/cd_hw/) | Hardware de cartridge y Sega/Mega CD. |

@@ -3751,85 +3751,85 @@ void *retro_get_memory_data(unsigned id)
          return sram.on ? sram.sram : NULL;
       case RETRO_MEMORY_SYSTEM_RAM:
          return work_ram;
-      /* Aether fork delta: expose VDP VRAM (64KB) so the HD sprite pipeline can
+      /* AYTHER fork delta: expose VDP VRAM (64KB) so the HD sprite pipeline can
          read the Sprite Attribute Table. Upstream returns NULL for VIDEO_RAM.
          vram[] is the VDP's 64KB VRAM, declared in core/vdp_ctrl.c. */
       case RETRO_MEMORY_VIDEO_RAM:
          return vram;
-      /* Aether fork delta: expose VDP CRAM (128 bytes = 64 x 9-bit colour
+      /* AYTHER fork delta: expose VDP CRAM (128 bytes = 64 x 9-bit colour
          entries, stored as host-endian uint16 words in GPX's internal
          0000BBB0GGG0RRR0 layout — core/vdp_ctrl.c). There is no standard
-         libretro id for CRAM, so the Aether frontend uses a private one. */
-      case 0x100 /* AETHER_MEMORY_CRAM */:
+         libretro id for CRAM, so the AYTHER frontend uses a private one. */
+      case 0x100 /* AYTHER_MEMORY_CRAM */:
          return cram;
-      /* Aether fork delta: expose the 32 VDP registers (reg[0x20],
+      /* AYTHER fork delta: expose the 32 VDP registers (reg[0x20],
          core/vdp_ctrl.c) so the Lab can derive the plane name-table bases
          and plane size for the tilemap viewer. No standard libretro id. */
-      case 0x101 /* AETHER_MEMORY_VDP_REGS */:
+      case 0x101 /* AYTHER_MEMORY_VDP_REGS */:
          return reg;
-      /* Aether fork delta: expose VSRAM (128 bytes = 64 x 11-bit vertical
+      /* AYTHER fork delta: expose VSRAM (128 bytes = 64 x 11-bit vertical
          scroll entries, host-endian uint16 words — core/vdp_ctrl.c). Needed to
          resolve la posición en pantalla de un tile de plano (Fase 2c, overlay HD
          scroll-aware). hscroll vive en VRAM; vscroll vive acá. */
-      case 0x107 /* AETHER_MEMORY_VSRAM */:
+      case 0x107 /* AYTHER_MEMORY_VSRAM */:
          return vsram;
-      /* Aether fork delta: máscara de capas visibles (1 byte, ESCRIBIBLE). El
+      /* AYTHER fork delta: máscara de capas visibles (1 byte, ESCRIBIBLE). El
          frontend escribe el bitmask (A/B/Window/Sprites) y el renderer la lee
          para aislar capas en el viewport. core/vdp_render.c. */
-      case 0x102 /* AETHER_MEMORY_LAYER_MASK */:
-         return &aether_layer_mask;
-      /* Aether fork delta: bitmask de slots SAT suprimidos (16 bytes, ESCRIBIBLE).
+      case 0x102 /* AYTHER_MEMORY_LAYER_MASK */:
+         return &ayther_layer_mask;
+      /* AYTHER fork delta: bitmask de slots SAT suprimidos (16 bytes, ESCRIBIBLE).
          El frontend setea el bit de cada slot a ocultar; parse_satb lo saltea.
          core/vdp_render.c. */
-      case 0x103 /* AETHER_MEMORY_SPRITE_SUPPRESS */:
-         return aether_sprite_suppress;
-      /* Aether fork delta: máscara de celdas de tile suprimidas (512 bytes,
+      case 0x103 /* AYTHER_MEMORY_SPRITE_SUPPRESS */:
+         return ayther_sprite_suppress;
+      /* AYTHER fork delta: máscara de celdas de tile suprimidas (512 bytes,
          ESCRIBIBLE). El frontend setea el bit de cada celda (col=x>>3, fila=
          line>>3) a ocultar; render_line la pinta con el backdrop. vdp_render.c. */
-      case 0x104 /* AETHER_MEMORY_TILE_SUPPRESS */:
-         return aether_tile_suppress;
-      /* Aether fork delta: máscara de tiles de PLANO suprimidos (3072 bytes,
+      case 0x104 /* AYTHER_MEMORY_TILE_SUPPRESS */:
+         return ayther_tile_suppress;
+      /* AYTHER fork delta: máscara de tiles de PLANO suprimidos (3072 bytes,
          ESCRIBIBLE). 3 planos × bitmap de (patrón<<2 | paleta); render_bg_m5/_vs
          saltea esas celdas y revela el plano de atrás. vdp_render.c. */
-      case 0x105 /* AETHER_MEMORY_PLANE_TILE_SUPPRESS */:
-         return aether_plane_tile_suppress;
-      /* Aether fork delta: flag (1 byte) "hay tiles de plano ocultos" — gatea el
+      case 0x105 /* AYTHER_MEMORY_PLANE_TILE_SUPPRESS */:
+         return ayther_plane_tile_suppress;
+      /* AYTHER fork delta: flag (1 byte) "hay tiles de plano ocultos" — gatea el
          fast path de render_bg_m5/_vs (0 = DRAW_COLUMN sin costo). Lo setea el
          frontend al escribir 0x105. */
-      case 0x106 /* AETHER_MEMORY_PLANE_SUPPRESS_ACTIVE */:
-         return &aether_plane_suppress_active;
-      /* Aether fork delta: flag (1 byte, ESCRIBIBLE) "atenuar capas no-sprite al
+      case 0x106 /* AYTHER_MEMORY_PLANE_SUPPRESS_ACTIVE */:
+         return &ayther_plane_suppress_active;
+      /* AYTHER fork delta: flag (1 byte, ESCRIBIBLE) "atenuar capas no-sprite al
          25%" — dim mode del viewport de Animación. 0 = render normal. El frontend
          lo setea SÓLO en el frame visible (produce). core/vdp_render.c. */
-      case 0x108 /* AETHER_MEMORY_LAYER_DIM */:
-         return &aether_layer_dim;
-      /* Aether fork delta: lista de sprites que parse_satb PARSEÓ este frame (8
+      case 0x108 /* AYTHER_MEMORY_LAYER_DIM */:
+         return &ayther_layer_dim;
+      /* AYTHER fork delta: lista de sprites que parse_satb PARSEÓ este frame (8
          bytes c/u: yr/xr/attr u16 + w/h u8) + su contador (escribible = reset). Es
          la fuente fiable de "qué sprites se dibujaron" aunque el juego reescriba el
          SAT a mitad de frame / cambie su base (el genio del logo Sega de Aladdin: el
          SAT a fin de frame muestra solo placeholders). El frontend limpia el contador
          (0x10C=0) antes del produce y lee la lista tras run_frame. vdp_render.c. */
-      case 0x10B /* AETHER_MEMORY_PARSED_SPRITES */:
-         return aether_sprites;
-      case 0x10C /* AETHER_MEMORY_PARSED_SPRITE_COUNT */:
-         return &aether_sprite_n;
-      /* Aether fork delta: log de escrituras crudas a los chips de sonido (FM
-         YM2612 + PSG SN76489) en orden temporal dentro del frame (AetherAudioWrite,
+      case 0x10B /* AYTHER_MEMORY_PARSED_SPRITES */:
+         return ayther_sprites;
+      case 0x10C /* AYTHER_MEMORY_PARSED_SPRITE_COUNT */:
+         return &ayther_sprite_n;
+      /* AYTHER fork delta: log de escrituras crudas a los chips de sonido (FM
+         YM2612 + PSG SN76489) en orden temporal dentro del frame (AytherAudioWrite,
          8 bytes c/u: cycle u32 + addr u16 + data u8 + chip u8) + su contador u32
          (ESCRIBIBLE = reset). Identidad de audio por SECUENCIA DE COMANDOS al chip
          (estable en replay) vs hash del PCM de salida (no reproducible tras
          unserialize). El frontend limpia el contador (0x10A=0) antes del produce y
          lee el log tras run_frame. core/sound/sound.c. */
-      case 0x109 /* AETHER_MEMORY_AUDIO_WRITES */:
-         return aether_audio_writes;
-      case 0x10A /* AETHER_MEMORY_AUDIO_WRITE_COUNT */:
-         return &aether_audio_write_n;
-      /* Aether fork delta: máscara de mute por canal de audio (u16, ESCRIBIBLE).
+      case 0x109 /* AYTHER_MEMORY_AUDIO_WRITES */:
+         return ayther_audio_writes;
+      case 0x10A /* AYTHER_MEMORY_AUDIO_WRITE_COUNT */:
+         return &ayther_audio_write_n;
+      /* AYTHER fork delta: máscara de mute por canal de audio (u16, ESCRIBIBLE).
          Bits 0-5 = FM ch 0-5; bits 6-9 = PSG ch 0-3. El canal se pone a 0 en el
          mixer de salida sin tocar el estado del chip (replay-safe). Primitivo de
          la sustitución por evento (C-A3). core/sound/sound.c. */
-      case 0x10D /* AETHER_MEMORY_AUDIO_MUTE */:
-         return &aether_audio_mute;
+      case 0x10D /* AYTHER_MEMORY_AUDIO_MUTE */:
+         return &ayther_audio_mute;
       default:
          return NULL;
    }
@@ -3881,62 +3881,62 @@ size_t retro_get_memory_size(unsigned id)
             return 0x2000; /* 8KB internal RAM */
       }
 
-      /* Aether fork delta: VDP VRAM is a fixed 64KB array (core/vdp_ctrl.c). */
+      /* AYTHER fork delta: VDP VRAM is a fixed 64KB array (core/vdp_ctrl.c). */
       case RETRO_MEMORY_VIDEO_RAM:
          return 0x10000;
 
-      /* Aether fork delta: VDP CRAM is a fixed 128-byte array. */
-      case 0x100 /* AETHER_MEMORY_CRAM */:
+      /* AYTHER fork delta: VDP CRAM is a fixed 128-byte array. */
+      case 0x100 /* AYTHER_MEMORY_CRAM */:
          return 0x80;
 
-      /* Aether fork delta: 32 VDP registers. */
-      case 0x101 /* AETHER_MEMORY_VDP_REGS */:
+      /* AYTHER fork delta: 32 VDP registers. */
+      case 0x101 /* AYTHER_MEMORY_VDP_REGS */:
          return 0x20;
 
-      /* Aether fork delta: VSRAM (128 bytes). */
-      case 0x107 /* AETHER_MEMORY_VSRAM */:
+      /* AYTHER fork delta: VSRAM (128 bytes). */
+      case 0x107 /* AYTHER_MEMORY_VSRAM */:
          return 0x80;
 
-      /* Aether fork delta: máscara de capas visibles (1 byte). */
-      case 0x102 /* AETHER_MEMORY_LAYER_MASK */:
+      /* AYTHER fork delta: máscara de capas visibles (1 byte). */
+      case 0x102 /* AYTHER_MEMORY_LAYER_MASK */:
          return 1;
 
-      /* Aether fork delta: bitmask de slots SAT suprimidos (16 bytes). */
-      case 0x103 /* AETHER_MEMORY_SPRITE_SUPPRESS */:
-         return sizeof(aether_sprite_suppress);
+      /* AYTHER fork delta: bitmask de slots SAT suprimidos (16 bytes). */
+      case 0x103 /* AYTHER_MEMORY_SPRITE_SUPPRESS */:
+         return sizeof(ayther_sprite_suppress);
 
-      /* Aether fork delta: máscara de celdas de tile suprimidas (512 bytes). */
-      case 0x104 /* AETHER_MEMORY_TILE_SUPPRESS */:
-         return sizeof(aether_tile_suppress);
+      /* AYTHER fork delta: máscara de celdas de tile suprimidas (512 bytes). */
+      case 0x104 /* AYTHER_MEMORY_TILE_SUPPRESS */:
+         return sizeof(ayther_tile_suppress);
 
-      /* Aether fork delta: máscara de tiles de plano suprimidos (3072 bytes). */
-      case 0x105 /* AETHER_MEMORY_PLANE_TILE_SUPPRESS */:
-         return sizeof(aether_plane_tile_suppress);
+      /* AYTHER fork delta: máscara de tiles de plano suprimidos (3072 bytes). */
+      case 0x105 /* AYTHER_MEMORY_PLANE_TILE_SUPPRESS */:
+         return sizeof(ayther_plane_tile_suppress);
 
-      /* Aether fork delta: flag de actividad de la supresión por plano (1 byte). */
-      case 0x106 /* AETHER_MEMORY_PLANE_SUPPRESS_ACTIVE */:
+      /* AYTHER fork delta: flag de actividad de la supresión por plano (1 byte). */
+      case 0x106 /* AYTHER_MEMORY_PLANE_SUPPRESS_ACTIVE */:
          return 1;
 
-      /* Aether fork delta: flag de dim de capas no-sprite (1 byte). */
-      case 0x108 /* AETHER_MEMORY_LAYER_DIM */:
+      /* AYTHER fork delta: flag de dim de capas no-sprite (1 byte). */
+      case 0x108 /* AYTHER_MEMORY_LAYER_DIM */:
          return 1;
 
-      /* Aether fork delta: lista de sprites parseados (128 x 8 bytes) + contador. */
-      case 0x10B /* AETHER_MEMORY_PARSED_SPRITES */:
-         return sizeof(aether_sprites);
-      case 0x10C /* AETHER_MEMORY_PARSED_SPRITE_COUNT */:
+      /* AYTHER fork delta: lista de sprites parseados (128 x 8 bytes) + contador. */
+      case 0x10B /* AYTHER_MEMORY_PARSED_SPRITES */:
+         return sizeof(ayther_sprites);
+      case 0x10C /* AYTHER_MEMORY_PARSED_SPRITE_COUNT */:
          return 1;
 
-      /* Aether fork delta: log de escrituras a chips de sonido (8192 x 8 bytes) +
+      /* AYTHER fork delta: log de escrituras a chips de sonido (8192 x 8 bytes) +
          contador (u32, escribible = reset). */
-      case 0x109 /* AETHER_MEMORY_AUDIO_WRITES */:
-         return sizeof(aether_audio_writes);
-      case 0x10A /* AETHER_MEMORY_AUDIO_WRITE_COUNT */:
-         return sizeof(aether_audio_write_n);
+      case 0x109 /* AYTHER_MEMORY_AUDIO_WRITES */:
+         return sizeof(ayther_audio_writes);
+      case 0x10A /* AYTHER_MEMORY_AUDIO_WRITE_COUNT */:
+         return sizeof(ayther_audio_write_n);
 
-      /* Aether fork delta: máscara de mute por canal de audio (u16). */
-      case 0x10D /* AETHER_MEMORY_AUDIO_MUTE */:
-         return sizeof(aether_audio_mute);
+      /* AYTHER fork delta: máscara de mute por canal de audio (u16). */
+      case 0x10D /* AYTHER_MEMORY_AUDIO_MUTE */:
+         return sizeof(ayther_audio_mute);
 
       default:
         return 0;

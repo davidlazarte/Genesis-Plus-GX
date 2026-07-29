@@ -754,7 +754,7 @@ else
    TARGET := $(TARGET_NAME)_libretro.dll
    CC ?= gcc
    CXX ?= g++
-   # Aether fork delta: built with llvm-mingw (lld), which does not accept GNU
+   # AYTHER fork delta: built with llvm-mingw (lld), which does not accept GNU
    # ld's --version-script. Dropping it just auto-exports all globals (the
    # retro_* entry points are still exported), which is fine for our loader.
    SHARED := -shared -static-libgcc -static-libstdc++ -Wl,--no-undefined
@@ -794,7 +794,7 @@ else
 endif
 endif
 
-# Aether fork delta: genesis_plus_gx type-puns heavily and relies on wrapping
+# AYTHER fork delta: genesis_plus_gx type-puns heavily and relies on wrapping
 # signed overflow; modern gcc/clang at -O2 with strict aliasing can miscompile
 # it. These do not change emulation results, only codegen.
 # (MSVC understands neither flag; guard them out for the msvc platforms.)

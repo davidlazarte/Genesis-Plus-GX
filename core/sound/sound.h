@@ -53,7 +53,7 @@ extern void save_sound_buffer();
 extern void restore_sound_buffer();
 
 /* ----------------------------------------------------------------------------
- * Aether fork delta: log de escrituras crudas a los chips de sonido (YM2612 FM +
+ * AYTHER fork delta: log de escrituras crudas a los chips de sonido (YM2612 FM +
  * SN76489 PSG), en orden temporal dentro del frame. El frontend lo lee por los
  * ids de memoria 0x109 (array) / 0x10A (contador, ESCRIBIBLE = reset) para
  * identificar eventos de audio por la SECUENCIA DE COMANDOS al chip — estable a
@@ -63,24 +63,24 @@ extern void restore_sound_buffer();
  * interpretación (estado de canal, key-on/off, firma) vive en el host. Mismo
  * patrón frontend-reset que los sprites parseados (ids 0x10B/0x10C). sound.c.
  * -------------------------------------------------------------------------- */
-#define AETHER_AUDIO_CHIP_FM   0   /* YM2612 (FM)    */
-#define AETHER_AUDIO_CHIP_PSG  1   /* SN76489 (PSG)  */
-#define AETHER_AUDIO_WRITE_CAP 8192
+#define AYTHER_AUDIO_CHIP_FM   0   /* YM2612 (FM)    */
+#define AYTHER_AUDIO_CHIP_PSG  1   /* SN76489 (PSG)  */
+#define AYTHER_AUDIO_WRITE_CAP 8192
 
 typedef struct
 {
   uint32 cycle;  /* timestamp en M-cycles del CPU dentro del frame */
   uint16 addr;   /* FM: bus address 0..3 (port/data; banco vía bit 1). PSG: 0 */
   uint8  data;   /* byte escrito al bus del chip */
-  uint8  chip;   /* AETHER_AUDIO_CHIP_FM | AETHER_AUDIO_CHIP_PSG */
-} AetherAudioWrite;
+  uint8  chip;   /* AYTHER_AUDIO_CHIP_FM | AYTHER_AUDIO_CHIP_PSG */
+} AytherAudioWrite;
 
-extern AetherAudioWrite aether_audio_writes[AETHER_AUDIO_WRITE_CAP];
-extern uint32 aether_audio_write_n;
-extern void aether_record_audio_write(uint8 chip, uint16 addr, uint8 data, uint32 cycle);
+extern AytherAudioWrite ayther_audio_writes[AYTHER_AUDIO_WRITE_CAP];
+extern uint32 ayther_audio_write_n;
+extern void ayther_record_audio_write(uint8 chip, uint16 addr, uint8 data, uint32 cycle);
 
 /* ----------------------------------------------------------------------------
- * Aether fork delta: máscara de SILENCIADO POR CANAL (2 bytes, ESCRIBIBLE desde
+ * AYTHER fork delta: máscara de SILENCIADO POR CANAL (2 bytes, ESCRIBIBLE desde
  * el frontend vía el id de memoria 0x10D). Bits 0-5 = canales FM (YM2612) 0-5;
  * bits 6-9 = canales PSG (SN76489) 0-3. Bit set = ese canal se pone a CERO en el
  * mixer de salida, SIN tocar el estado de los registros del chip (el análogo de
@@ -89,8 +89,8 @@ extern void aether_record_audio_write(uint8 chip, uint16 addr, uint8 data, uint3
  * Es el primitivo de la sustitución por evento (C-A3): mutear los canales de un
  * evento mientras suena su asset HD.
  * -------------------------------------------------------------------------- */
-extern uint16 aether_audio_mute;
-#define AETHER_FM_MUTED(ch)  (aether_audio_mute & (1u << (ch)))        /* ch 0-5 */
-#define AETHER_PSG_MUTED(ch) (aether_audio_mute & (1u << (6 + (ch))))  /* ch 0-3 */
+extern uint16 ayther_audio_mute;
+#define AYTHER_FM_MUTED(ch)  (ayther_audio_mute & (1u << (ch)))        /* ch 0-5 */
+#define AYTHER_PSG_MUTED(ch) (ayther_audio_mute & (1u << (6 + (ch))))  /* ch 0-3 */
 
 #endif /* _SOUND_H_ */

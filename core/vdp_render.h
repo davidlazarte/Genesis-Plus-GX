@@ -139,6 +139,10 @@ extern uint8 ayther_plane_suppress_active;  /* id 0x106: 1 = hay algún tile de 
 #define AYTHER_RC_NO_WINDOW    0x08u  /* sin plano Window (A ocupa toda la línea)*/
 #define AYTHER_RC_FLAT_HS      0x10u  /* hscroll de la línea 0 para todas        */
 #define AYTHER_RC_FLAT_VS      0x20u  /* vscroll de la columna 0 para todas      */
+/* R-2: byte alto = override de ayther_layer_mask durante la recomposición
+   (bits AYTHER_LAYER_*; 0 = mantener la máscara vigente). Recomponer una capa
+   sola = el oráculo CPU del pipeline indexado. */
+#define AYTHER_RC_LAYER_MASK(m) (((unsigned int)(m) & 0xFFu) << 24)
 /* dllexport explícito: el build libretro marca sus exports (RETRO_API), así
    que lld NO auto-exporta los globals sin marcar — sin esto el símbolo queda
    fuera de la tabla de exports y GetProcAddress devuelve NULL. */

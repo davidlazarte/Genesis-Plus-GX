@@ -5338,7 +5338,7 @@ int ayther_recompose_frame(uint16 *out, int cap, unsigned int flags,
   return 0;
 #else
   uint16 s_status, s_sprcol;
-  uint8  s_sprovr;
+  uint8  s_sprovr, s_lmask;
   uint8  s_objcount[2];
   static object_info_t s_objinfo[2][80];   /* static: fuera del stack */
   struct clip_t s_clip[2];
@@ -5398,6 +5398,14 @@ int ayther_recompose_frame(uint16 *out, int cap, unsigned int flags,
   }
   ayther_rc_nolimit = (flags & AYTHER_RC_NO_SPR_LIMIT) ? 1 : 0;
   ayther_rc_nomask  = (flags & AYTHER_RC_NO_SPR_MASK)  ? 1 : 0;
+
+  /* R-2: override de la máscara de capas SÓLO durante la recomposición (byte
+     alto de flags; 0 = mantener la vigente). Recomponer "solo el plano B sobre
+     backdrop" es el oráculo CPU contra el que se valida el pipeline indexado
+     de la GPU — mismo renderer que midió el spike R-1. */
+  s_lmask = ayther_layer_mask;
+  if (flags & AYTHER_RC_LAYER_MASK(0xFF))
+    ayther_layer_mask = (uint8)(flags >> 24);
 
   vs  = (reg[11] & 0x04) && !(flags & AYTHER_RC_FLAT_VS);
   ste = (reg[12] & 0x08) && !(flags & AYTHER_RC_NO_SH);
@@ -5470,6 +5478,7 @@ int ayther_recompose_frame(uint16 *out, int cap, unsigned int flags,
   memcpy(clip, s_clip, sizeof(clip));
   ayther_rc_nolimit = 0;
   ayther_rc_nomask  = 0;
+  ayther_layer_mask = s_lmask;
   bitmap.data  = s_bdata;
   bitmap.pitch = s_bpitch;
   bitmap.viewport.x = s_bvx;

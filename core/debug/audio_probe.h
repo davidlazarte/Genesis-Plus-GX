@@ -54,6 +54,15 @@
 extern "C" {
 #endif
 
+/* The libretro build must expose the consumer API from Windows DLLs. Unix
+   exports are constrained by libretro/link.T; isolated tests intentionally do
+   not define __LIBRETRO__ and therefore need no import/export decoration. */
+#if defined(_WIN32) && defined(__LIBRETRO__)
+#define AUDIO_PROBE_API __declspec(dllexport)
+#else
+#define AUDIO_PROBE_API
+#endif
+
 #define AUDIO_PROBE_SCHEMA 1
 
 /* internal event ring buffer size (must be a power of two) */
@@ -125,19 +134,20 @@ typedef struct {
 /* Register a callback invoked inline for every event. When no callback is set,
    events are buffered and must be drained with audio_probe_poll(). */
 typedef void (*ap_callback_t)(const ap_event_t *ev, void *user);
-void audio_probe_set_callback(ap_callback_t cb, void *user);
+AUDIO_PROBE_API void audio_probe_set_callback(ap_callback_t cb, void *user);
 
 /* Drain up to 'max' buffered events into 'out'; returns the number copied. */
-int  audio_probe_poll(ap_event_t *out, int max);
+AUDIO_PROBE_API int audio_probe_poll(ap_event_t *out, int max);
 
 /* Fill the current emulation context/identity. */
-void audio_probe_get_context(ap_context_t *out);
+AUDIO_PROBE_API void audio_probe_get_context(ap_context_t *out);
 
 /* Per-channel output gain in percent (0 = mute, 100 = unchanged), applied to
    the audio mixer. FM channels 0-5 use AP_SRC_FM; while DAC mode is active,
    channel 6 uses AP_SRC_DAC. PSG channels 0-3 use AP_SRC_PSG. */
-void audio_probe_set_channel_gain(ap_source_t src, int ch, int gain_percent);
-int  audio_probe_get_channel_gain(ap_source_t src, int ch);
+AUDIO_PROBE_API void audio_probe_set_channel_gain(ap_source_t src, int ch,
+                                                  int gain_percent);
+AUDIO_PROBE_API int audio_probe_get_channel_gain(ap_source_t src, int ch);
 
 /* ---------------- core-internal emit API (chips/system) ---------------- */
 

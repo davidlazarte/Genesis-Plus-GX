@@ -1,7 +1,7 @@
 # Tests
 
-Standalone unit tests for Genesis Plus GX modules that can be exercised in
-isolation.
+Standalone unit and deterministic contract tests for Genesis Plus GX modules
+that can be exercised without distributing a ROM.
 
 ## audio_probe
 
@@ -25,6 +25,16 @@ audio_probe unit tests: 49 passed, 0 failed
 
 `make check` exits non-zero if any check fails (CI-friendly).
 
+The command also runs `ayther/audio_probe_trace.c`. That harness emits a fixed
+sequence of FM, PSG, DAC, frame and state events, serializes every logical field
+in an explicit little-endian format, and compares the resulting FNV-1a digest
+against `ayther/golden/audio_probe_trace.json`. Struct padding and host byte
+order are never hashed.
+
+On a mismatch, the actual trace summary remains in
+`tests/artifacts/audio_probe_trace.actual.json` so CI can publish it as a
+diagnostic artifact.
+
 ### What is covered
 
 | Area | Checks |
@@ -42,14 +52,21 @@ audio_probe unit tests: 49 passed, 0 failed
 | Ring buffer | overflow drops cleanly, keeps capacity-1 |
 | Callback | bypasses the ring buffer |
 | Context | reflects ROM checksum / region / clock / cycles-per-frame |
+| Determinism | canonical event trace matches the versioned golden digest |
 
 ### Layout
 
 ```
 tests/
-├── Makefile            # `make check`
+├── Makefile            # portable `make check` (Linux and Windows)
 ├── README.md
+├── ayther/
+│   ├── audio_probe_trace.c
+│   └── golden/audio_probe_trace.json
 ├── stub/
 │   └── shared.h        # minimal emulator stand-in for isolated builds
 └── test_audio_probe.c  # the test runner (self-contained assert framework)
 ```
+
+Generated binaries and mismatch reports live under `.build/` and `artifacts/`;
+both directories are ignored by Git.

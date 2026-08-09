@@ -1,0 +1,239 @@
+name: AYTHER CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ayther-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  LLVM_MINGW_VERSION: "20260519"
+  LLVM_MINGW_SHA256: "2fa481d30909cbdcf740c6dce11a3f1e72224070cde76c0683289f0bb44f4dd9"
+
+jobs:
+  source-quality:
+    name: Source quality
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check whitespace in changed lines
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            git diff --check "$BASE_SHA...HEAD"
+          else
+            git show --check --format=fuller --no-renames HEAD
+          fi
+
+      - name: Enforce LF in AYTHER automation and fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git ls-files --eol .github/workflows tests bench | grep -E 'w/(crlf|mixed)'; then
+            echo "AYTHER CI, test and benchmark files must use LF line endings." >&2
+            exit 1
+          fi
+
+  linux-core:
+    name: Linux core (${{ matrix.compiler }}, probe=${{ matrix.sound_probe }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - compiler: gcc
+            cc: gcc
+            cxx: g++
+            sound_probe: 0
+          - compiler: gcc
+            cc: gcc
+            cxx: g++
+            sound_probe: 1
+          - compiler: clang
+            cc: clang
+            cxx: clang++
+            sound_probe: 1
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Build libretro core
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: make -f Makefile.libretro platform=unix SOUND_PROBE=${{ matrix.sound_probe }} -j2
+
+      - name: Verify shared-library exports
+        shell: bash
+        env:
+          CC: ${{ matrix.cc }}
+          SOUND_PROBE: ${{ matrix.sound_probe }}
+        run: |
+          set -euo pipefail
+          mkdir -p ayther-artifacts
+          nm -D --defined-only genesis_plus_gx_libretro.so > ayther-artifacts/exports.txt
+          grep -Eq '[[:space:]]retro_init$' ayther-artifacts/exports.txt
+          grep -Eq '[[:space:]]retro_run$' ayther-artifacts/exports.txt
+          if [[ "$SOUND_PROBE" == "1" ]]; then
+            grep -Eq '[[:space:]]audio_probe_poll$' ayther-artifacts/exports.txt
+            grep -Eq '[[:space:]]audio_probe_set_callback$' ayther-artifacts/exports.txt
+          elif grep -Eq '[[:space:]]audio_probe_' ayther-artifacts/exports.txt; then
+            echo "audio_probe symbols leaked from the feature-off build" >&2
+            exit 1
+          fi
+          "$CC" -O2 -Wall -Wextra -o ayther-artifacts/load_core tests/ci/load_core.c -ldl
+          required=(retro_init retro_run)
+          if [[ "$SOUND_PROBE" == "1" ]]; then
+            required+=(
+              audio_probe_poll
+              audio_probe_set_callback
+              audio_probe_get_context
+              audio_probe_set_channel_gain
+              audio_probe_get_channel_gain
+            )
+          fi
+          ayther-artifacts/load_core "$(pwd)/genesis_plus_gx_libretro.so" "${required[@]}"
+
+      - name: Preserve export diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-exports-${{ matrix.compiler }}-probe-${{ matrix.sound_probe }}
+          path: ayther-artifacts/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  deterministic-tests:
+    name: Determinism and microbenchmark (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Run unit and golden-trace tests
+        run: make -C tests check CC=clang
+
+      - name: Run audio_probe performance baseline
+        run: make -C bench run CC=clang
+
+      - name: Upload deterministic and benchmark reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ayther-linux-reports
+          path: |
+            tests/artifacts/
+            bench/artifacts/
+          if-no-files-found: error
+          retention-days: 30
+
+  sanitizers:
+    name: ASan and UBSan
+    runs-on: ubuntu-latest
+    env:
+      ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Run isolated tests under ASan and UBSan
+        run: >-
+          make -C tests check
+          CC=clang
+          BUILD_DIR=.build-sanitize
+          ARTIFACT_DIR=artifacts-sanitize
+          CFLAGS="-O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-omit-frame-pointer"
+          LDFLAGS="-fsanitize=address,undefined"
+
+      - name: Upload sanitizer trace on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ayther-sanitizer-diagnostics
+          path: tests/artifacts-sanitize/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  windows-msvcrt:
+    name: Windows x64 MSVCRT (probe=${{ matrix.sound_probe }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sound_probe: [0, 1]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install pinned llvm-mingw MSVCRT toolchain
+        shell: pwsh
+        run: >-
+          ./.github/scripts/setup-llvm-mingw.ps1
+          -Version $env:LLVM_MINGW_VERSION
+          -Sha256 $env:LLVM_MINGW_SHA256
+
+      - name: Build libretro core
+        shell: pwsh
+        run: make -f Makefile.libretro platform=win64 SOUND_PROBE=${{ matrix.sound_probe }} -j2
+
+      - name: Verify PE runtime, loadability and exports
+        shell: pwsh
+        run: >-
+          ./.github/scripts/verify-windows-core.ps1
+          -DllPath genesis_plus_gx_libretro.dll
+          -SoundProbe ${{ matrix.sound_probe }}
+
+      - name: Run Windows deterministic tests
+        if: matrix.sound_probe == 1
+        shell: pwsh
+        run: make -C tests check CC=clang
+
+      - name: Capture Windows performance baseline
+        if: matrix.sound_probe == 1
+        shell: pwsh
+        run: make -C bench run CC=clang
+
+      - name: Upload Windows reports
+        if: always() && matrix.sound_probe == 1
+        uses: actions/upload-artifact@v7
+        with:
+          name: ayther-windows-msvcrt-reports
+          path: |
+            ayther-artifacts/
+            tests/artifacts/
+            bench/artifacts/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Preserve Windows diagnostics on feature-off failure
+        if: failure() && matrix.sound_probe == 0
+        uses: actions/upload-artifact@v7
+        with:
+          name: ayther-windows-msvcrt-probe-off-diagnostics
+          path: ayther-artifacts/
+          if-no-files-found: ignore
+          retention-days: 14

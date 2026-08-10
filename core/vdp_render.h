@@ -43,7 +43,13 @@
 #ifndef _RENDER_H_
 #define _RENDER_H_
 
+#ifdef AYTHER_EXTENSIONS
 #include "ayther/ayther_api.h"
+#include "ayther/ayther_runtime.h"
+#ifdef AYTHER_EXTENSIONS
+#include "ayther/ayther_sprite_capture.h"
+#endif
+#endif
 
 /* 3:3:2 RGB */
 #if defined(USE_8BPP_RENDERING)
@@ -104,6 +110,7 @@
 /* Global variables */
 extern uint16 spr_col;
 
+#ifdef AYTHER_EXTENSIONS
 /* AYTHER fork delta: máscara de capas visibles (id de memoria privado 0x102,
    escribible desde el frontend). Bit set = capa visible; default 0xFF. La leen
    render_bg_m5/_vs (planos A/B/Window) y render_line (sprites) para aislar
@@ -121,10 +128,6 @@ extern uint8 ayther_layer_dim;             /* atenuar capas no-sprite al 25% (id
    índices que la máscara de supresión 0x103 (¡distinto del orden de la lista!).
    chain_pos = posición en la CADENA de links al parsear = prioridad real de dibujo
    del VDP entre sprites (menor = más al frente). */
-typedef ayther_sprite_v1 AytherSpr;
-extern AytherSpr ayther_sprites[128];
-extern uint8 ayther_sprite_n;
-extern uint32 ayther_sprite_overflow;
 extern uint8 ayther_sprite_suppress[16];   /* slots SAT suprimidos (id 0x103) */
 extern uint8 ayther_tile_suppress[512];    /* celdas de tile suprimidas (id 0x104, 64x64) */
 extern uint8 ayther_plane_tile_suppress[3 * 1024]; /* tiles de plano suprimidos (id 0x105) */
@@ -151,6 +154,7 @@ extern uint8 ayther_plane_suppress_active;  /* id 0x106: 1 = hay algún tile de 
    recompose_frame; no se agrega un segundo símbolo AYTHER al DLL/so. */
 extern int ayther_recompose_frame(uint16 *out, int cap, unsigned int flags,
                                   int *out_w, int *out_h);
+#endif /* AYTHER_EXTENSIONS */
 
 /* Function prototypes */
 extern void render_init(void);

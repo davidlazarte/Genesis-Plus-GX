@@ -599,7 +599,11 @@ typedef struct
    recomposición con límite de sprites desactivado (ayther_rc_nolimit). El
    render normal sigue acotado por MODE5_MAX_SPRITES_PER_LINE (bounds por
    `max`, no por la capacidad del array): cero cambio de comportamiento. */
+#ifdef AYTHER_EXTENSIONS
 static object_info_t obj_info[2][80];
+#else
+static object_info_t obj_info[2][MAX_SPRITES_PER_LINE];
+#endif
 
 /* Sprite Counter */
 static uint8 object_count[2];
@@ -607,12 +611,21 @@ static uint8 object_count[2];
 /* Sprite Collision Info */
 uint16 spr_col;
 
+#ifdef AYTHER_EXTENSIONS
+
 /* AYTHER fork delta: máscara de capas visibles (id de memoria privado 0x102).
    Bit set = visible. La leen render_bg_m5/_vs (planos) y render_line (sprites). */
 uint8 ayther_layer_mask = 0xFF;
-#define AYTHER_HIDE_A (!(ayther_layer_mask & AYTHER_LAYER_A))
-#define AYTHER_HIDE_B (!(ayther_layer_mask & AYTHER_LAYER_B))
-#define AYTHER_HIDE_W (!(ayther_layer_mask & AYTHER_LAYER_W))
+#define AYTHER_CONTROLS_ACTIVE \
+  AYTHER_SUBSCRIBED(AYTHER_SUB_RENDER_CONTROLS)
+#define AYTHER_HIDE_A \
+  (AYTHER_CONTROLS_ACTIVE && !(ayther_layer_mask & AYTHER_LAYER_A))
+#define AYTHER_HIDE_B \
+  (AYTHER_CONTROLS_ACTIVE && !(ayther_layer_mask & AYTHER_LAYER_B))
+#define AYTHER_HIDE_W \
+  (AYTHER_CONTROLS_ACTIVE && !(ayther_layer_mask & AYTHER_LAYER_W))
+#define AYTHER_SHOW_OBJ \
+  (!AYTHER_CONTROLS_ACTIVE || (ayther_layer_mask & AYTHER_LAYER_OBJ))
 
 /* AYTHER fork delta: atenuar las capas NO-sprite (id de memoria 0x108, escribible).
    0 = render normal (bit-exact, sin costo). !=0 = "dim mode": los píxeles que NO
@@ -633,43 +646,19 @@ static uint8 ayther_sprite_px[0x200];  /* 1 = ese pixel es de sprite (sólo dim 
    después), así que NINGÚN estado del SAT a un instante fijo (fin de frame, línea 0)
    tiene todos los sprites. La única fuente fiable es lo que parse_satb parsea EN SUS
    LÍNEAS. Registramos cada sprite agregado (Y/X/attr ya resueltos + w/h), deduplicado
-   por (Y,X,attr). La capa libretro reinicia contador y overflow antes del frame;
+   por su identidad completa mediante hash fijo O(1) amortizado. La capa libretro
+   avanza la generación de captura antes del frame;
    los resets manuales legacy siguen siendo válidos. Produce-only; no afecta render. Valores (no bytes) →
    sin problemas de endianness. */
-#define AYTHER_SPR_CAP 128
-AytherSpr ayther_sprites[AYTHER_SPR_CAP];   /* AytherSpr declarado en vdp_render.h */
-uint8     ayther_sprite_n = 0;
-uint32    ayther_sprite_overflow = 0;
-INLINE void ayther_record_sprite(uint16 yr, uint16 xr, uint16 attr, uint8 w, uint8 h,
-                                 uint8 sat_idx, uint8 chain_pos)
-{
-  int i;
-  for (i = 0; i < ayther_sprite_n; i++)
-    if (ayther_sprites[i].yr == yr && ayther_sprites[i].xr == xr
-        && ayther_sprites[i].attr == attr) return;   /* ya registrado (otra línea) */
-  if (ayther_sprite_n < AYTHER_SPR_CAP) {
-    ayther_sprites[ayther_sprite_n].yr        = yr;
-    ayther_sprites[ayther_sprite_n].xr        = xr;
-    ayther_sprites[ayther_sprite_n].attr      = attr;
-    ayther_sprites[ayther_sprite_n].w         = w;
-    ayther_sprites[ayther_sprite_n].h         = h;
-    ayther_sprites[ayther_sprite_n].sat_idx   = sat_idx;
-    ayther_sprites[ayther_sprite_n].chain_pos = chain_pos;
-    ayther_sprite_n++;
-  }
-  else
-  {
-    ayther_sprite_overflow = 1;
-  }
-}
 
 /* AYTHER fork delta: bitmask de slots SAT suprimidos (id de memoria 0x103,
    escribible). Bit set = ese slot NO se parsea → su sprite no se dibuja (ocultar
    sprite por hash en el Lab). El frontend lo setea SÓLO para el frame visible
    (produce) y lo vacía para la re-simulación bare → status del VDP intacto. */
 uint8 ayther_sprite_suppress[16] = {0};
-#define AYTHER_SPR_SUPPRESSED(slot) \
-  (ayther_sprite_suppress[((slot) >> 3) & 0x0F] & (1 << ((slot) & 7)))
+#define AYTHER_SPR_SUPPRESSED_ACTIVE(active, slot) \
+  ((active) && \
+   (ayther_sprite_suppress[((slot) >> 3) & 0x0F] & (1 << ((slot) & 7))))
 
 /* AYTHER (#270): toggles de la recomposición (ayther_recompose_frame). Sólo esa
    función los enciende, y los apaga antes de volver: el render normal corre
@@ -707,7 +696,8 @@ uint8 ayther_tile_suppress[(AYTHER_TILE_COLS * AYTHER_TILE_ROWS) / 8] = {0};
 uint8 ayther_plane_tile_suppress[3 * 1024] = {0};
 uint8 ayther_plane_suppress_active = 0;   /* id 0x106: lo setea el frontend (1 = hay algo oculto) */
 #define AYTHER_PSUP(plane) \
-  (ayther_plane_suppress_active ? &ayther_plane_tile_suppress[(plane) * 1024] : (const uint8 *)0)
+  ((AYTHER_CONTROLS_ACTIVE && ayther_plane_suppress_active) \
+    ? &ayther_plane_tile_suppress[(plane) * 1024] : (const uint8 *)0)
 /* Clave e índice de bit de una celda de 16 bits (patrón 0x7FF | paleta bits 13-14). */
 #define AYTHER_PTKEY(cell)     ((((uint32)(cell) & 0x7FFu) << 2) | (((uint32)(cell) >> 13) & 3u))
 #define AYTHER_PTSUP(ps, cell) ((ps)[AYTHER_PTKEY(cell) >> 3] & (1u << (AYTHER_PTKEY(cell) & 7u)))
@@ -719,6 +709,27 @@ uint8 ayther_plane_suppress_active = 0;   /* id 0x106: lo setea el frontend (1 =
 static int ayther_peel_active = 0;   /* la línea actual tiene celdas marcadas */
 static int ayther_peel_row    = 0;   /* fila de celda (frame, con borde) de la línea */
 static int ayther_peel_vx     = 0;   /* desplazamiento del borde izquierdo (viewport.x) */
+
+#define AYTHER_LAYER_DIM_ACTIVE \
+  (AYTHER_CONTROLS_ACTIVE && ayther_layer_dim)
+#define AYTHER_RC_NOLIMIT_ACTIVE ayther_rc_nolimit
+#define AYTHER_RC_NOMASK_ACTIVE ayther_rc_nomask
+
+#else
+
+#define AYTHER_CONTROLS_ACTIVE 0
+#define AYTHER_HIDE_A 0
+#define AYTHER_HIDE_B 0
+#define AYTHER_HIDE_W 0
+#define AYTHER_SHOW_OBJ 1
+#define AYTHER_LAYER_DIM_ACTIVE 0
+#define AYTHER_RC_NOLIMIT_ACTIVE 0
+#define AYTHER_RC_NOMASK_ACTIVE 0
+#define AYTHER_SPR_SUPPRESSED_ACTIVE(active, slot) ((void)(active), 0)
+#define AYTHER_PSUP(plane) ((const uint8 *)0)
+#define ayther_sprite_capture_record(yr, xr, attr, w, h, sat_idx, chain_pos) ((void)0)
+
+#endif /* AYTHER_EXTENSIONS */
 
 /* Function pointers */
 void (*render_bg)(int line);
@@ -1084,6 +1095,7 @@ static uint32 make_lut_bgobj_m4(uint32 bx, uint32 sx)
    puro (sin primer plano en ninguna fila) queda limpio en backdrop, y un elemento
    de primer plano revela B de forma uniforme. Función aparte (no inline) para no
    inflar el fast path de merge(), que sigue intacto. */
+#ifdef AYTHER_EXTENSIONS
 static void ayther_peel_merge(uint8 *srca, uint8 *srcb, uint8 *dst, uint8 *table, int width)
 {
   int x = 0;
@@ -1109,10 +1121,24 @@ static void ayther_peel_merge(uint8 *srca, uint8 *srcb, uint8 *dst, uint8 *table
     srca += seg; srcb += seg; dst += seg; x += seg; width -= seg;
   }
 }
+#endif
 
 INLINE void merge(uint8 *srca, uint8 *srcb, uint8 *dst, uint8 *table, int width)
 {
+#ifdef AYTHER_EXTENSIONS
   if (ayther_peel_active) { ayther_peel_merge(srca, srcb, dst, table, width); return; }
+#endif
+  do
+  {
+    *dst++ = table[(*srcb++ << 8) | (*srca++)];
+  }
+  while (--width);
+}
+
+/* Branch-free stock merge used by the compiled-idle Mode 5 renderer. */
+INLINE void merge_fast(uint8 *srca, uint8 *srcb, uint8 *dst,
+                       uint8 *table, int width)
+{
   do
   {
     *dst++ = table[(*srcb++ << 8) | (*srca++)];
@@ -1690,6 +1716,7 @@ void render_bg_m4(int line)
    máscara de supresión por-plano `ps` (id 0x105). `ps == NULL` → camino idéntico a
    DRAW_COLUMN (sin costo para los demás juegos). Respeta el orden de dibujo
    (LSB/MSB) según el endianness, igual que DRAW_COLUMN. Devuelve el `dst` avanzado. */
+#ifdef AYTHER_EXTENSIONS
 #ifdef ALIGN_LONG
 #define AYTHER_PUT0()  do { WRITE_LONG(dst, 0); dst++; WRITE_LONG(dst, 0); dst++; } while (0)
 #define AYTHER_PUTS()  do { WRITE_LONG(dst, src[0] | atex); dst++; WRITE_LONG(dst, src[1] | atex); dst++; } while (0)
@@ -1716,10 +1743,26 @@ INLINE uint32 *ayther_draw_col(uint32 *dst, uint32 atbuf, uint32 v_line, const u
 /* Atajo: usa el fast path (DRAW_COLUMN) cuando no hay supresión en este plano. */
 #define DRAW_COLUMN_AE(ATTR, LINE, PS) \
   do { if (PS) dst = ayther_draw_col(dst, (ATTR), (LINE), (PS)); else { DRAW_COLUMN((ATTR), (LINE)) } } while (0)
+#else
+#define DRAW_COLUMN_AE(ATTR, LINE, PS) DRAW_COLUMN((ATTR), (LINE))
+#endif
+
+#if defined(AYTHER_EXTENSIONS) && defined(__GNUC__)
+#define AYTHER_HOT_INLINE static inline __attribute__((always_inline))
+#else
+#define AYTHER_HOT_INLINE INLINE
+#endif
+
+#if defined(__GNUC__) || defined(__clang__)
+#define AYTHER_NOINLINE __attribute__((noinline))
+#else
+#define AYTHER_NOINLINE
+#endif
 
 /* Mode 5 */
 #ifndef ALT_RENDERER
-void render_bg_m5(int line)
+
+AYTHER_HOT_INLINE void render_bg_m5_impl(int line, int ayther_observed)
 {
   int column;
   uint32 atex, atbuf, *src, *dst;
@@ -1732,9 +1775,21 @@ void render_bg_m5(int line)
   uint32 pf_shift     = playfield_shift;
 
   /* AYTHER: máscaras de supresión por plano (id 0x105); NULL = fast path. */
-  const uint8 *psupA = AYTHER_PSUP(0);
-  const uint8 *psupB = AYTHER_PSUP(1);
-  const uint8 *psupW = AYTHER_PSUP(2);
+  const uint8 *psupA = ayther_observed ? AYTHER_PSUP(0) : (const uint8 *)0;
+  const uint8 *psupB = ayther_observed ? AYTHER_PSUP(1) : (const uint8 *)0;
+  const uint8 *psupW = ayther_observed ? AYTHER_PSUP(2) : (const uint8 *)0;
+#ifdef AYTHER_EXTENSIONS
+  const int hide_a = ayther_observed &&
+    !(ayther_layer_mask & AYTHER_LAYER_A);
+  const int hide_b = ayther_observed &&
+    !(ayther_layer_mask & AYTHER_LAYER_B);
+  const int hide_w = ayther_observed &&
+    !(ayther_layer_mask & AYTHER_LAYER_W);
+#else
+  const int hide_a = 0;
+  const int hide_b = 0;
+  const int hide_w = 0;
+#endif
 
   /* Window & Plane A */
   int a = (reg[18] & 0x1F) << 3;
@@ -1783,7 +1838,7 @@ void render_bg_m5(int line)
 
   /* AYTHER: ocultar Plano A o Window → limpiar su buffer compartido (linebuf[1])
      antes de dibujar; lo no dibujado queda transparente y se ve Plano B. */
-  if (AYTHER_HIDE_A || AYTHER_HIDE_W)
+  if (hide_a || hide_w)
     memset(&linebuf[1][0x20], 0, bitmap.viewport.w);
 
   if (w == (line >= a))
@@ -1802,7 +1857,7 @@ void render_bg_m5(int line)
   /* Plane A */
   if (a)
   {
-    if (!AYTHER_HIDE_A)   /* AYTHER: gate Plano A (el rango de Window se fija igual abajo) */
+    if (!hide_a)   /* AYTHER: gate Plano A (el rango de Window se fija igual abajo) */
     {
     /* Plane A width */
     start = clip[0].left;
@@ -1861,7 +1916,7 @@ void render_bg_m5(int line)
   }
 
   /* Window */
-  if (w && !AYTHER_HIDE_W)   /* AYTHER: gate Window */
+  if (w && !hide_w)   /* AYTHER: gate Window */
   {
     /* Window name table */
     nt = (uint32 *)&vram[ntwb | ((line >> 3) << (6 + (reg[12] & 1)))];
@@ -1880,23 +1935,64 @@ void render_bg_m5(int line)
   }
 
   /* AYTHER: ocultar Plano B → limpiar su buffer antes del merge. */
-  if (AYTHER_HIDE_B)
+  if (hide_b)
     memset(&linebuf[0][0x20], 0, bitmap.viewport.w);
 
   /* Merge background layers */
-  merge(&linebuf[1][0x20], &linebuf[0][0x20], &linebuf[0][0x20], lut[(reg[12] & 0x08) >> 2], bitmap.viewport.w);
+  if (ayther_observed)
+    merge(&linebuf[1][0x20], &linebuf[0][0x20], &linebuf[0][0x20],
+          lut[(reg[12] & 0x08) >> 2], bitmap.viewport.w);
+  else
+    merge_fast(&linebuf[1][0x20], &linebuf[0][0x20], &linebuf[0][0x20],
+               lut[(reg[12] & 0x08) >> 2], bitmap.viewport.w);
 }
 
-void render_bg_m5_vs(int line)
+#ifdef AYTHER_EXTENSIONS
+static AYTHER_NOINLINE void render_bg_m5_fast_path(int line)
+{
+  render_bg_m5_impl(line, 0);
+}
+
+static AYTHER_NOINLINE void render_bg_m5_observed_path(int line)
+{
+  render_bg_m5_impl(line, 1);
+}
+#endif
+
+void render_bg_m5(int line)
+{
+#ifdef AYTHER_EXTENSIONS
+  if (AYTHER_CONTROLS_ACTIVE)
+    render_bg_m5_observed_path(line);
+  else
+    render_bg_m5_fast_path(line);
+#else
+  render_bg_m5_impl(line, 0);
+#endif
+}
+
+AYTHER_HOT_INLINE void render_bg_m5_vs_impl(int line, int ayther_observed)
 {
   int column;
   uint32 atex, atbuf, *src, *dst;
   uint32 v_line, *nt;
 
   /* AYTHER: máscaras de supresión por plano (id 0x105); NULL = fast path. */
-  const uint8 *psupA = AYTHER_PSUP(0);
-  const uint8 *psupB = AYTHER_PSUP(1);
-  const uint8 *psupW = AYTHER_PSUP(2);
+  const uint8 *psupA = ayther_observed ? AYTHER_PSUP(0) : (const uint8 *)0;
+  const uint8 *psupB = ayther_observed ? AYTHER_PSUP(1) : (const uint8 *)0;
+  const uint8 *psupW = ayther_observed ? AYTHER_PSUP(2) : (const uint8 *)0;
+#ifdef AYTHER_EXTENSIONS
+  const int hide_a = ayther_observed &&
+    !(ayther_layer_mask & AYTHER_LAYER_A);
+  const int hide_b = ayther_observed &&
+    !(ayther_layer_mask & AYTHER_LAYER_B);
+  const int hide_w = ayther_observed &&
+    !(ayther_layer_mask & AYTHER_LAYER_W);
+#else
+  const int hide_a = 0;
+  const int hide_b = 0;
+  const int hide_w = 0;
+#endif
 
   /* Common data */
   uint32 xscroll      = *(uint32 *)&vram[hscb + ((line & hscroll_mask) << 2)];
@@ -1975,7 +2071,7 @@ void render_bg_m5_vs(int line)
   }
 
   /* AYTHER: ocultar Plano A o Window → limpiar su buffer compartido (linebuf[1]). */
-  if (AYTHER_HIDE_A || AYTHER_HIDE_W)
+  if (hide_a || hide_w)
     memset(&linebuf[1][0x20], 0, bitmap.viewport.w);
 
   if (w == (line >= a))
@@ -1994,7 +2090,7 @@ void render_bg_m5_vs(int line)
   /* Plane A */
   if (a)
   {
-    if (!AYTHER_HIDE_A)   /* AYTHER: gate Plano A */
+    if (!hide_a)   /* AYTHER: gate Plano A */
     {
     /* Plane A width */
     start = clip[0].left;
@@ -2067,7 +2163,7 @@ void render_bg_m5_vs(int line)
   }
 
   /* Window */
-  if (w && !AYTHER_HIDE_W)   /* AYTHER: gate Window */
+  if (w && !hide_w)   /* AYTHER: gate Window */
   {
     /* Window name table */
     nt = (uint32 *)&vram[ntwb | ((line >> 3) << (6 + (reg[12] & 1)))];
@@ -2086,11 +2182,40 @@ void render_bg_m5_vs(int line)
   }
 
   /* AYTHER: ocultar Plano B → limpiar su buffer antes del merge. */
-  if (AYTHER_HIDE_B)
+  if (hide_b)
     memset(&linebuf[0][0x20], 0, bitmap.viewport.w);
 
   /* Merge background layers */
-  merge(&linebuf[1][0x20], &linebuf[0][0x20], &linebuf[0][0x20], lut[(reg[12] & 0x08) >> 2], bitmap.viewport.w);
+  if (ayther_observed)
+    merge(&linebuf[1][0x20], &linebuf[0][0x20], &linebuf[0][0x20],
+          lut[(reg[12] & 0x08) >> 2], bitmap.viewport.w);
+  else
+    merge_fast(&linebuf[1][0x20], &linebuf[0][0x20], &linebuf[0][0x20],
+               lut[(reg[12] & 0x08) >> 2], bitmap.viewport.w);
+}
+
+#ifdef AYTHER_EXTENSIONS
+static AYTHER_NOINLINE void render_bg_m5_vs_fast_path(int line)
+{
+  render_bg_m5_vs_impl(line, 0);
+}
+
+static AYTHER_NOINLINE void render_bg_m5_vs_observed_path(int line)
+{
+  render_bg_m5_vs_impl(line, 1);
+}
+#endif
+
+void render_bg_m5_vs(int line)
+{
+#ifdef AYTHER_EXTENSIONS
+  if (AYTHER_CONTROLS_ACTIVE)
+    render_bg_m5_vs_observed_path(line);
+  else
+    render_bg_m5_vs_fast_path(line);
+#else
+  render_bg_m5_vs_impl(line, 0);
+#endif
 }
 
 /* Enhanced function that allows each cell to be vscrolled individually, instead of being limited to 2-cell */
@@ -4042,7 +4167,7 @@ void render_obj_m5(int line)
   int xpos, width;
   int pixelcount = 0;
   int masked = 0;
-  int max_pixels = ayther_rc_nolimit ? 0x7FFF   /* AYTHER (#270): sin presupuesto */
+  int max_pixels = AYTHER_RC_NOLIMIT_ACTIVE ? 0x7FFF   /* AYTHER (#270): sin presupuesto */
                                      : MODE5_MAX_SPRITE_PIXELS;
 
   uint8 *src, *s, *lb;
@@ -4065,7 +4190,7 @@ void render_obj_m5(int line)
       /* Requires at least one sprite with xpos > 0 */
       spr_ovr = 1;
     }
-    else if (spr_ovr && !ayther_rc_nomask)   /* AYTHER (#270): nomask la anula */
+    else if (spr_ovr && !AYTHER_RC_NOMASK_ACTIVE)   /* AYTHER (#270): nomask la anula */
     {
       /* Remaining sprites are not drawn */
       masked = 1;
@@ -4153,7 +4278,7 @@ void render_obj_m5_ste(int line)
   int xpos, width;
   int pixelcount = 0;
   int masked = 0;
-  int max_pixels = ayther_rc_nolimit ? 0x7FFF   /* AYTHER (#270): sin presupuesto */
+  int max_pixels = AYTHER_RC_NOLIMIT_ACTIVE ? 0x7FFF   /* AYTHER (#270): sin presupuesto */
                                      : MODE5_MAX_SPRITE_PIXELS;
 
   uint8 *src, *s, *lb;
@@ -4179,7 +4304,7 @@ void render_obj_m5_ste(int line)
       /* Requires at least one sprite with xpos > 0 */
       spr_ovr = 1;
     }
-    else if (spr_ovr && !ayther_rc_nomask)   /* AYTHER (#270): nomask la anula */
+    else if (spr_ovr && !AYTHER_RC_NOMASK_ACTIVE)   /* AYTHER (#270): nomask la anula */
     {
       /* Remaining sprites are not drawn */
       masked = 1;
@@ -4272,7 +4397,7 @@ void render_obj_m5_im2(int line)
   int xpos, width;
   int pixelcount = 0;
   int masked = 0;
-  int max_pixels = ayther_rc_nolimit ? 0x7FFF   /* AYTHER (#270): sin presupuesto */
+  int max_pixels = AYTHER_RC_NOLIMIT_ACTIVE ? 0x7FFF   /* AYTHER (#270): sin presupuesto */
                                      : MODE5_MAX_SPRITE_PIXELS;
 
   uint8 *src, *s, *lb;
@@ -4295,7 +4420,7 @@ void render_obj_m5_im2(int line)
       /* Requires at least one sprite with xpos > 0 */
       spr_ovr = 1;
     }
-    else if (spr_ovr && !ayther_rc_nomask)   /* AYTHER (#270): nomask la anula */
+    else if (spr_ovr && !AYTHER_RC_NOMASK_ACTIVE)   /* AYTHER (#270): nomask la anula */
     {
       /* Remaining sprites are not drawn */
       masked = 1;
@@ -4382,7 +4507,7 @@ void render_obj_m5_im2_ste(int line)
   int xpos, width;
   int pixelcount = 0;
   int masked = 0;
-  int max_pixels = ayther_rc_nolimit ? 0x7FFF   /* AYTHER (#270): sin presupuesto */
+  int max_pixels = AYTHER_RC_NOLIMIT_ACTIVE ? 0x7FFF   /* AYTHER (#270): sin presupuesto */
                                      : MODE5_MAX_SPRITE_PIXELS;
 
   uint8 *src, *s, *lb;
@@ -4408,7 +4533,7 @@ void render_obj_m5_im2_ste(int line)
       /* Requires at least one sprite with xpos > 0 */
       spr_ovr = 1;
     }
-    else if (spr_ovr && !ayther_rc_nomask)   /* AYTHER (#270): nomask la anula */
+    else if (spr_ovr && !AYTHER_RC_NOMASK_ACTIVE)   /* AYTHER (#270): nomask la anula */
     {
       /* Remaining sprites are not drawn */
       masked = 1;
@@ -4680,8 +4805,66 @@ void parse_satb_m4(int line)
   object_count[(line + 1) & 1] = count;
 }
 
+#ifdef AYTHER_EXTENSIONS
+/* Stock Mode 5 parser selected once per scanline when sprite observation and
+   render controls are idle. It avoids subscription/suppression branches in
+   the SAT chain loop. */
+static void parse_satb_m5_fast(int line, int im2)
+{
+  int ypos;
+  int height;
+  int size;
+  int link = 0;
+  int count = 0;
+  int total = max_sprite_pixels >> 2;
+  uint16 *p = (uint16 *)&vram[satb];
+  uint16 *q = (uint16 *)&sat[0];
+  object_info_t *object_info = obj_info[(line + 1) & 1];
+
+  line = im2 ? (((line + 0x81) << 1) + odd_frame) : (line + 0x81);
+  do
+  {
+    ypos = q[link] & (im2 ? 0x3FF : 0x1FF);
+    if (line >= ypos)
+    {
+      size = q[link + 1] >> 8;
+      height = (im2 ? 16 : 8) +
+        ((size & 3) << (im2 ? 4 : 3));
+      ypos = line - ypos;
+      if (ypos < height)
+      {
+        if (count == MODE5_MAX_SPRITES_PER_LINE)
+        {
+          status |= 0x40;
+          break;
+        }
+        object_info->attr = p[link + 2];
+        object_info->xpos = p[link + 3] & 0x1ff;
+        object_info->ypos = ypos;
+        object_info->size = size & 0x0f;
+        ++count;
+        ++object_info;
+      }
+    }
+    link = (q[link + 1] & 0x7F) << 2;
+    if ((link == 0) || (link >= bitmap.viewport.w)) break;
+  }
+  while (--total);
+  object_count[im2 ? ((line >> 1) & 1) : (line & 1)] = count;
+}
+#endif
+
 void parse_satb_m5(int line)
 {
+#ifdef AYTHER_EXTENSIONS
+  if (!AYTHER_SUBSCRIBED(AYTHER_SUB_SPRITE_CAPTURE |
+                         AYTHER_SUB_RENDER_CONTROLS) &&
+      !ayther_rc_nolimit)
+  {
+    parse_satb_m5_fast(line, 0);
+    return;
+  }
+#endif
   /* Sprite Y position */
   int ypos;
 
@@ -4699,11 +4882,22 @@ void parse_satb_m5(int line)
 
   /* max. number of rendered sprites (16 or 20 sprites per line by default) */
   int max = MODE5_MAX_SPRITES_PER_LINE;
-  if (ayther_rc_nolimit) max = 80;   /* AYTHER (#270): recomposición sin límite */
+  if (AYTHER_RC_NOLIMIT_ACTIVE) max = 80;   /* AYTHER (#270): recomposición sin límite */
 
   /* max. number of parsed sprites (64 or 80 sprites per line by default) */
   int total = max_sprite_pixels >> 2;
   int total0 = total;   /* AYTHER: para chain_pos = total0 - total */
+
+  /* Runtime feature state is latched once per scanline, outside the SAT loop. */
+#ifdef AYTHER_EXTENSIONS
+  const int ayther_capture_active =
+    AYTHER_SUBSCRIBED(AYTHER_SUB_SPRITE_CAPTURE);
+  const int ayther_suppression_active =
+    AYTHER_SUBSCRIBED(AYTHER_SUB_RENDER_CONTROLS);
+#else
+  const int ayther_capture_active = 0;
+  const int ayther_suppression_active = 0;
+#endif
 
   /* Pointer to sprite attribute table */
   uint16 *p = (uint16 *) &vram[satb];
@@ -4740,7 +4934,8 @@ void parse_satb_m5(int line)
         /* AYTHER: ocultar sprite por hash — saltear el slot SAT suprimido (no se
            agrega → no se dibuja). Sólo el frame visible suprime; la re-sim bare
            corre con la máscara vacía → status del VDP intacto, replay sin drift. */
-        if (!AYTHER_SPR_SUPPRESSED(link >> 2))
+        if (!AYTHER_SPR_SUPPRESSED_ACTIVE(
+              ayther_suppression_active, link >> 2))
         {
         /* Sprite overflow */
         if (count == max)
@@ -4760,10 +4955,13 @@ void parse_satb_m5(int line)
            chain_pos = paso en la cadena (prioridad real de dibujo). Captura los
            sprites reescritos in-place a mitad de frame (genio del logo Sega),
            deduplicado por (Y,X,attr) entre scanlines. */
-        ayther_record_sprite((uint16)(q[link] & 0x1FF), (uint16)(p[link + 3] & 0x1ff),
-                             (uint16)p[link + 2],
-                             (uint8)(((size >> 2) & 3) + 1), (uint8)((size & 3) + 1),
-                             (uint8)(link >> 2), (uint8)(total0 - total));
+        if (ayther_capture_active)
+          ayther_sprite_capture_record(
+              (uint16)(q[link] & 0x1FF),
+              (uint16)(p[link + 3] & 0x1ff), (uint16)p[link + 2],
+              (uint8)(((size >> 2) & 3) + 1),
+              (uint8)((size & 3) + 1),
+              (uint8)(link >> 2), (uint8)(total0 - total));
 
         /* Increment Sprite count */
         ++count;
@@ -4788,6 +4986,15 @@ void parse_satb_m5(int line)
 
 void parse_satb_m5_im2(int line)
 {
+#ifdef AYTHER_EXTENSIONS
+  if (!AYTHER_SUBSCRIBED(AYTHER_SUB_SPRITE_CAPTURE |
+                         AYTHER_SUB_RENDER_CONTROLS) &&
+      !ayther_rc_nolimit)
+  {
+    parse_satb_m5_fast(line, 1);
+    return;
+  }
+#endif
   /* Sprite Y position */
   int ypos;
 
@@ -4805,11 +5012,22 @@ void parse_satb_m5_im2(int line)
 
   /* max. number of rendered sprites (16 or 20 sprites per line by default) */
   int max = MODE5_MAX_SPRITES_PER_LINE;
-  if (ayther_rc_nolimit) max = 80;   /* AYTHER (#270): recomposición sin límite */
+  if (AYTHER_RC_NOLIMIT_ACTIVE) max = 80;   /* AYTHER (#270): recomposición sin límite */
 
   /* max. number of parsed sprites (64 or 80 sprites per line by default) */
   int total = max_sprite_pixels >> 2;
   int total0 = total;   /* AYTHER: para chain_pos = total0 - total */
+
+  /* Runtime feature state is latched once per scanline, outside the SAT loop. */
+#ifdef AYTHER_EXTENSIONS
+  const int ayther_capture_active =
+    AYTHER_SUBSCRIBED(AYTHER_SUB_SPRITE_CAPTURE);
+  const int ayther_suppression_active =
+    AYTHER_SUBSCRIBED(AYTHER_SUB_RENDER_CONTROLS);
+#else
+  const int ayther_capture_active = 0;
+  const int ayther_suppression_active = 0;
+#endif
 
   /* Pointer to sprite attribute table */
   uint16 *p = (uint16 *) &vram[satb];
@@ -4846,7 +5064,8 @@ void parse_satb_m5_im2(int line)
         /* AYTHER: ocultar sprite por hash — saltear el slot SAT suprimido (no se
            agrega → no se dibuja). Sólo el frame visible suprime; la re-sim bare
            corre con la máscara vacía → status del VDP intacto, replay sin drift. */
-        if (!AYTHER_SPR_SUPPRESSED(link >> 2))
+        if (!AYTHER_SPR_SUPPRESSED_ACTIVE(
+              ayther_suppression_active, link >> 2))
         {
         /* Sprite overflow */
         if (count == max)
@@ -4863,10 +5082,13 @@ void parse_satb_m5_im2(int line)
         /* AYTHER: registrar el sprite parseado (ids 0x10B/0x10C) — variante im2.
            sat_idx = link>>2 (espacio de la máscara 0x103); chain_pos = paso en la
            cadena (prioridad real de dibujo). */
-        ayther_record_sprite((uint16)(q[link] & 0x1FF), (uint16)(p[link + 3] & 0x1ff),
-                             (uint16)p[link + 2],
-                             (uint8)(((size >> 2) & 3) + 1), (uint8)((size & 3) + 1),
-                             (uint8)(link >> 2), (uint8)(total0 - total));
+        if (ayther_capture_active)
+          ayther_sprite_capture_record(
+              (uint16)(q[link] & 0x3FF),
+              (uint16)(p[link + 3] & 0x1ff), (uint16)p[link + 2],
+              (uint8)(((size >> 2) & 3) + 1),
+              (uint8)((size & 3) + 1),
+              (uint8)(link >> 2), (uint8)(total0 - total));
 
         /* Increment Sprite count */
         ++count;
@@ -5118,8 +5340,16 @@ void render_reset(void)
 /* Line rendering functions                                                 */
 /*--------------------------------------------------------------------------*/
 
-void render_line(int line)
+AYTHER_HOT_INLINE void render_line_impl(int line, int ayther_observed)
 {
+#ifdef AYTHER_EXTENSIONS
+  const int ayther_dim_active = ayther_observed && ayther_layer_dim;
+  const int ayther_show_obj = !ayther_observed ||
+    (ayther_layer_mask & AYTHER_LAYER_OBJ);
+#else
+  const int ayther_dim_active = 0;
+  const int ayther_show_obj = 1;
+#endif
   /* Check display status */
   if (reg[1] & 0x40)
   {
@@ -5130,6 +5360,7 @@ void render_line(int line)
       bg_list_index = 0;
     }
 
+#ifdef AYTHER_EXTENSIONS
     /* AYTHER: ocultar tile por celda (id 0x104) → "pela una capa" en el merge de
        render_bg, revelando el plano de atrás (ver ayther_peel_merge). Se activa
        sólo si esta línea tiene alguna celda marcada (descarte rápido: 8 bytes de
@@ -5137,6 +5368,7 @@ void render_line(int line)
        overscan off, el caso normal de MD). Se apaga antes de los sprites para no
        pelar sus merges (un sprite sobre un tile oculto sigue visible). */
     ayther_peel_active = 0;
+    if (ayther_observed)
     {
       const int frow = (line + bitmap.viewport.y) >> 3;
       if (frow >= 0 && frow < AYTHER_TILE_ROWS)
@@ -5150,10 +5382,12 @@ void render_line(int line)
         }
       }
     }
+#endif
 
     /* Render BG layer(s) */
     render_bg(line);
 
+#ifdef AYTHER_EXTENSIONS
     /* AYTHER: el peel sólo aplica a los merges de BG, no a los de sprites. */
     ayther_peel_active = 0;
 
@@ -5161,17 +5395,20 @@ void render_line(int line)
        AYTHER dim (id 0x108): snapshot de linebuf[0] tras render_bg + diff tras
        render_obj → los píxeles que cambió render_obj son sprites (los demás son
        fondo, que remap_line atenúa). No toca las internas de render_obj. */
-    if (ayther_layer_dim)
+    if (ayther_dim_active)
     {
       int i;
       memcpy(ayther_bg_snap, linebuf[0], sizeof(ayther_bg_snap));
-      if (ayther_layer_mask & AYTHER_LAYER_OBJ)
+      if (ayther_show_obj)
         render_obj(line & 1);
       for (i = 0; i < 0x200; i++)
         ayther_sprite_px[i] = (linebuf[0][i] != ayther_bg_snap[i]);
     }
-    else if (ayther_layer_mask & AYTHER_LAYER_OBJ)
+    else if (ayther_show_obj)
       render_obj(line & 1);
+#else
+    render_obj(line & 1);
+#endif
 
     /* Left-most column blanking */
     if (reg[0] & 0x20)
@@ -5211,21 +5448,49 @@ void render_line(int line)
     /* Blanked line */
     memset(&linebuf[0][0x20 - bitmap.viewport.x], 0x40, bitmap.viewport.w + 2*bitmap.viewport.x);
 
+#ifdef AYTHER_EXTENSIONS
     /* AYTHER dim: línea en blanco → ningún pixel es sprite (todo se atenúa). */
-    if (ayther_layer_dim)
+    if (ayther_dim_active)
       memset(ayther_sprite_px, 0, sizeof(ayther_sprite_px));
+#endif
   }
 
   /* Pixel color remapping */
   remap_line(line);
 }
 
+#ifdef AYTHER_EXTENSIONS
+static AYTHER_NOINLINE void render_line_fast_path(int line)
+{
+  render_line_impl(line, 0);
+}
+
+static AYTHER_NOINLINE void render_line_observed_path(int line)
+{
+  render_line_impl(line, 1);
+}
+#endif
+
+void render_line(int line)
+{
+#ifdef AYTHER_EXTENSIONS
+  if (AYTHER_CONTROLS_ACTIVE)
+    render_line_observed_path(line);
+  else
+    render_line_fast_path(line);
+#else
+  render_line_impl(line, 0);
+#endif
+}
+
 void blank_line(int line, int offset, int width)
 {
   memset(&linebuf[0][0x20 + offset], 0x40, width);
+#ifdef AYTHER_EXTENSIONS
   /* AYTHER dim: línea en blanco → ningún pixel es sprite (todo se atenúa). */
-  if (ayther_layer_dim)
+  if (AYTHER_LAYER_DIM_ACTIVE)
     memset(ayther_sprite_px, 0, sizeof(ayther_sprite_px));
+#endif
   remap_line(line);
 }
 
@@ -5278,7 +5543,8 @@ void remap_line(int line)
       }
       while (--width);
     }
-    else if (ayther_layer_dim)
+#ifdef AYTHER_EXTENSIONS
+    else if (AYTHER_LAYER_DIM_ACTIVE)
     {
       /* AYTHER dim (id 0x108): los píxeles que NO son sprite se emiten al 25%
          (cuarteo por canal RGB565). ayther_sprite_px es paralelo a linebuf[0], con
@@ -5301,6 +5567,7 @@ void remap_line(int line)
       }
       while (--width);
     }
+#endif
     else
     {
       do
@@ -5335,6 +5602,7 @@ void remap_line(int line)
    Devuelve 1 y escribe w*h píxeles RGB565 contiguos en `out` (cap = capacidad
    en píxeles); 0 si no aplica. */
 
+#ifdef AYTHER_EXTENSIONS
 int ayther_recompose_frame(uint16 *out, int cap, unsigned int flags,
                            int *out_w, int *out_h)
 {
@@ -5502,3 +5770,4 @@ int ayther_recompose_frame(uint16 *out, int cap, unsigned int flags,
   return 1;
 #endif
 }
+#endif /* AYTHER_EXTENSIONS */

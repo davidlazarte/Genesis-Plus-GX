@@ -110,7 +110,9 @@ uint32 fifo_cycles[4];            /* VDP FIFO read-out cycles */
    puede recomponer fielmente desde el estado final del VDP. El id privado
    0x10E sigue siendo un u32 escribible; consumidores legacy que usan `> 0`
    conservan su comportamiento. Se reinicia automáticamente por frame. */
+#ifdef AYTHER_EXTENSIONS
 uint32 ayther_raster_dirty = 0;
+#endif
 uint32 hvc_latch;                 /* latched HV counter */
 uint32 vint_cycle;                /* VINT occurence cycle */
 const uint8 *hctab;               /* pointer to H Counter table */
@@ -164,6 +166,7 @@ static int *fifo_timing;        /* FIFO slots timing table */
 static int hblank_start_cycle;  /* HBLANK flag set cycle */
 static int hblank_end_cycle;    /* HBLANK flag clear cycle */
 
+#ifdef AYTHER_EXTENSIONS
 static unsigned int ayther_raster_line_at(unsigned int cycles)
 {
   unsigned int line = v_counter;
@@ -179,10 +182,11 @@ static int ayther_raster_visible_at(unsigned int cycles)
   return ayther_raster_line_at(cycles) < bitmap.viewport.h;
 }
 
-static void ayther_raster_mark_visible(unsigned int reason, int changed,
+INLINE void ayther_raster_mark_visible(unsigned int reason, int changed,
                                        int from_dma, unsigned int cycles,
                                        int visible_while_blanked)
 {
+  if (!AYTHER_SUBSCRIBED(AYTHER_SUB_RASTER_TRACKING)) return;
   ayther_raster_dirty = AYTHER_RASTER_MERGE(ayther_raster_dirty, reason,
                                              ayther_raster_visible_at(cycles) &&
                                              ((reg[1] & 0x40) ||
@@ -190,16 +194,18 @@ static void ayther_raster_mark_visible(unsigned int reason, int changed,
                                              changed, from_dma);
 }
 
-static void ayther_raster_mark(unsigned int reason, int changed, int from_dma,
+INLINE void ayther_raster_mark(unsigned int reason, int changed, int from_dma,
                                unsigned int cycles)
 {
   ayther_raster_mark_visible(reason, changed, from_dma, cycles, 0);
 }
 
-static void ayther_raster_mark_vram(unsigned int address, int changed,
+INLINE void ayther_raster_mark_vram(unsigned int address, int changed,
                                     int from_dma, unsigned int cycles)
 {
-  unsigned int reason = AYTHER_RASTER_VRAM_REASON(address, hscb);
+  unsigned int reason;
+  if (!AYTHER_SUBSCRIBED(AYTHER_SUB_RASTER_TRACKING)) return;
+  reason = AYTHER_RASTER_VRAM_REASON(address, hscb);
   if (reason)
   {
     ayther_raster_mark(reason, changed, from_dma, cycles);
@@ -219,6 +225,12 @@ static int ayther_recompose_mode_supported(void)
   return 0;
 #endif
 }
+#else
+#define ayther_raster_mark_visible(reason, changed, from_dma, cycles, blanked) \
+  ((void)0)
+#define ayther_raster_mark(reason, changed, from_dma, cycles) ((void)0)
+#define ayther_raster_mark_vram(address, changed, from_dma, cycles) ((void)0)
+#endif
 
  /* set Z80 or 68k interrupt lines */
 static void (*set_irq_line)(unsigned int level);
@@ -320,11 +332,15 @@ void vdp_init(void)
   }
 }
 
+#ifdef AYTHER_EXTENSIONS
 void vdp_ayther_begin_frame(void)
 {
-  ayther_raster_dirty = ayther_recompose_mode_supported()
-    ? 0u : AYTHER_RASTER_REASON_UNSUPPORTED_MODE;
+  ayther_raster_dirty = 0;
+  if (AYTHER_SUBSCRIBED(AYTHER_SUB_RASTER_TRACKING))
+    ayther_raster_dirty = ayther_recompose_mode_supported()
+      ? 0u : AYTHER_RASTER_REASON_UNSUPPORTED_MODE;
 }
+#endif
 
 void vdp_reset(void)
 {
@@ -1656,11 +1672,13 @@ static void vdp_reg_w(unsigned int r, unsigned int d, unsigned int cycles)
     return;
   }
 
+#ifdef AYTHER_EXTENSIONS
   /* Visual register changes are temporal state when the display is active.
      Register #1 is special: toggling display enable is visual even when its
      previous value was disabled. Registers 10, 14, 15 and 19-23 do not affect
      rendering directly. */
-  if (((reg[r] ^ d) & 0xFF) &&
+  if (AYTHER_SUBSCRIBED(AYTHER_SUB_RASTER_TRACKING) &&
+      ((reg[r] ^ d) & 0xFF) &&
       ((r <= 13 && r != 10) || (r >= 16 && r <= 18)) &&
       ayther_raster_visible_at(cycles) &&
       ((reg[1] & 0x40) || (r == 7) ||
@@ -1671,11 +1689,13 @@ static void vdp_reg_w(unsigned int r, unsigned int d, unsigned int cycles)
 
   /* Unsupported final modes are a fallback reason even when selected during
      blanking, where no raster REG reason should be produced. */
-  if (((r == 1) && ((reg[1] ^ d) & 0x04) && !(d & 0x04)) ||
-      ((r == 12) && ((reg[12] ^ d) & 0x06) && ((d & 0x06) == 0x06)))
+  if (AYTHER_SUBSCRIBED(AYTHER_SUB_RASTER_TRACKING) &&
+      (((r == 1) && ((reg[1] ^ d) & 0x04) && !(d & 0x04)) ||
+      ((r == 12) && ((reg[12] ^ d) & 0x06) && ((d & 0x06) == 0x06))))
   {
     ayther_raster_dirty |= AYTHER_RASTER_REASON_UNSUPPORTED_MODE;
   }
+#endif
 
   switch(r)
   {

@@ -42,7 +42,10 @@
 #ifndef _VDP_H_
 #define _VDP_H_
 
+#ifdef AYTHER_EXTENSIONS
 #include "ayther_raster.h"
+#include "ayther/ayther_runtime.h"
+#endif
 
 /* VDP context */
 extern uint8 reg[0x20];
@@ -67,9 +70,11 @@ extern uint8 bg_name_dirty[0x800];
 extern uint16 bg_name_list[0x800];
 extern uint16 bg_list_index;
 extern uint8 hscroll_mask;
+#ifdef AYTHER_EXTENSIONS
 /* AYTHER (#5/#274): bitmask transiente de motivos de fallback por frame.
    Se expone por el id privado 0x10E; `> 0` conserva el contrato booleano. */
 extern uint32 ayther_raster_dirty;
+#endif
 extern uint8 playfield_shift;
 extern uint8 playfield_col_mask;
 extern uint16 playfield_row_mask;
@@ -97,7 +102,11 @@ extern unsigned int (*vdp_z80_data_r)(void);
 /* Function prototypes */
 extern void vdp_init(void);
 extern void vdp_reset(void);
+#ifdef AYTHER_EXTENSIONS
 extern void vdp_ayther_begin_frame(void);
+#else
+#define vdp_ayther_begin_frame() ((void)0)
+#endif
 extern int vdp_context_save(uint8 *state);
 extern int vdp_context_load(uint8 *state);
 extern void vdp_dma_update(unsigned int cycles);

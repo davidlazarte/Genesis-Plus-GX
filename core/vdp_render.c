@@ -627,18 +627,19 @@ static uint8 ayther_bg_snap[0x200];    /* linebuf[0] tras render_bg (sólo dim m
 static uint8 ayther_sprite_px[0x200];  /* 1 = ese pixel es de sprite (sólo dim mode) */
 
 /* AYTHER fork delta: CAPTURA de los sprites realmente PARSEADOS por parse_satb
-   durante el frame (ids 0x10B lista / 0x10C contador, escribible = reset). Algunos
+   durante el frame (ids 0x10B lista / 0x10C contador, reset legacy). Algunos
    intros reescriben el SAT in-place a MITAD de frame (el genio del logo Sega: el
    juego carga su SAT justo antes de sus scanlines y lo sobreescribe con placeholders
    después), así que NINGÚN estado del SAT a un instante fijo (fin de frame, línea 0)
    tiene todos los sprites. La única fuente fiable es lo que parse_satb parsea EN SUS
    LÍNEAS. Registramos cada sprite agregado (Y/X/attr ya resueltos + w/h), deduplicado
-   por (Y,X,attr). El frontend limpia el contador antes del produce y lee la lista
-   tras run_frame. Produce-only; no afecta render ni estado. Valores (no bytes) →
+   por (Y,X,attr). La capa libretro reinicia contador y overflow antes del frame;
+   los resets manuales legacy siguen siendo válidos. Produce-only; no afecta render. Valores (no bytes) →
    sin problemas de endianness. */
 #define AYTHER_SPR_CAP 128
 AytherSpr ayther_sprites[AYTHER_SPR_CAP];   /* AytherSpr declarado en vdp_render.h */
 uint8     ayther_sprite_n = 0;
+uint32    ayther_sprite_overflow = 0;
 INLINE void ayther_record_sprite(uint16 yr, uint16 xr, uint16 attr, uint8 w, uint8 h,
                                  uint8 sat_idx, uint8 chain_pos)
 {
@@ -655,6 +656,10 @@ INLINE void ayther_record_sprite(uint16 yr, uint16 xr, uint16 attr, uint8 w, uin
     ayther_sprites[ayther_sprite_n].sat_idx   = sat_idx;
     ayther_sprites[ayther_sprite_n].chain_pos = chain_pos;
     ayther_sprite_n++;
+  }
+  else
+  {
+    ayther_sprite_overflow = 1;
   }
 }
 

@@ -43,12 +43,13 @@
 int8 audio_hard_disable = 0;
 
 /* AYTHER fork delta: log por-frame de escrituras crudas a los chips de sonido.
-   Ver sound.h. El frontend resetea ayther_audio_write_n=0 (id 0x10A) antes del
-   frame produce y lee el log tras run_frame (igual que los sprites parseados,
-   ids 0x10B/0x10C). Si se desborda el tope, las escrituras extra se descartan y
-   el host lo detecta (n == CAP). */
+   Ver sound.h. La capa libretro reinicia el contador antes de cada frame; los
+   frontends legacy todavía pueden escribir 0x10A=0 sin alterar el contrato. Si
+   se desborda el tope, las escrituras extra se descartan y la ABI v1 expone un
+   flag de overflow explícito. */
 AytherAudioWrite ayther_audio_writes[AYTHER_AUDIO_WRITE_CAP];
 uint32 ayther_audio_write_n = 0;
+uint32 ayther_audio_write_overflow = 0;
 
 /* AYTHER fork delta: máscara de mute por canal (ver sound.h). 0 = todo suena. */
 uint16 ayther_audio_mute = 0;
@@ -62,6 +63,10 @@ void ayther_record_audio_write(uint8 chip, uint16 addr, uint8 data, uint32 cycle
     w->addr  = addr;
     w->data  = data;
     w->chip  = chip;
+  }
+  else
+  {
+    ayther_audio_write_overflow = 1;
   }
 }
 

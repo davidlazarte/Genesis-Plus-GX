@@ -40,6 +40,8 @@
 #ifndef _SOUND_H_
 #define _SOUND_H_
 
+#include "../ayther/ayther_api.h"
+
 /* Function prototypes */
 extern void sound_init(void);
 extern void sound_reset(void);
@@ -60,23 +62,19 @@ extern void restore_sound_buffer();
  * través del replay (la CPU/VDP son byte-deterministas) — en lugar de hashear el
  * PCM de salida, que NO es reproducible tras unserialize (la fase del FM diverge).
  * El core queda "tonto": sólo registra (cycle, addr, data, chip); toda la
- * interpretación (estado de canal, key-on/off, firma) vive en el host. Mismo
- * patrón frontend-reset que los sprites parseados (ids 0x10B/0x10C). sound.c.
+ * interpretación (estado de canal, key-on/off, firma) vive en el host. La ABI
+ * v1 hace que el core reinicie contadores/overflow por frame; la escritura de
+ * reset por IDs legacy sigue aceptada durante la transición. sound.c.
  * -------------------------------------------------------------------------- */
 #define AYTHER_AUDIO_CHIP_FM   0   /* YM2612 (FM)    */
 #define AYTHER_AUDIO_CHIP_PSG  1   /* SN76489 (PSG)  */
 #define AYTHER_AUDIO_WRITE_CAP 8192
 
-typedef struct
-{
-  uint32 cycle;  /* timestamp en M-cycles del CPU dentro del frame */
-  uint16 addr;   /* FM: bus address 0..3 (port/data; banco vía bit 1). PSG: 0 */
-  uint8  data;   /* byte escrito al bus del chip */
-  uint8  chip;   /* AYTHER_AUDIO_CHIP_FM | AYTHER_AUDIO_CHIP_PSG */
-} AytherAudioWrite;
+typedef ayther_audio_write_v1 AytherAudioWrite;
 
 extern AytherAudioWrite ayther_audio_writes[AYTHER_AUDIO_WRITE_CAP];
 extern uint32 ayther_audio_write_n;
+extern uint32 ayther_audio_write_overflow;
 extern void ayther_record_audio_write(uint8 chip, uint16 addr, uint8 data, uint32 cycle);
 
 /* ----------------------------------------------------------------------------

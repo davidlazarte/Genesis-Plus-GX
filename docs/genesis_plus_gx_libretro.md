@@ -204,6 +204,11 @@ Esta es la superficie más relevante para herramientas externas (cheats,
 RetroAchievements, **el pipeline HD de AYTHER**). El core expone regiones por
 *id* ([libretro.c:3746](../libretro/libretro.c)).
 
+Para integraciones AYTHER nuevas, la superficie recomendada es la ABI
+versionada descubierta mediante `ayther_get_interface()`: negocia capabilities,
+tamaños y versiones antes de copiar datos, y mantiene estos IDs como adapter
+legacy. Contrato completo: [ayther_abi_v1.md](ayther_abi_v1.md).
+
 ### 3.1 Ids estándar de libretro
 
 | Id | Región | Tamaño | Notas |
@@ -224,7 +229,8 @@ achievements direccionen correctamente la memoria del sub-CPU.
 La convención libretro reserva ids `≥ 0x100` para usos no estandarizados. El
 fork los usa para exponer el estado interno del VDP al **Lab de AYTHER** (un
 core stock devuelve `NULL` y el Lab degrada con elegancia). Algunos son
-**escribibles** desde el frontend para manipular el render.
+**escribibles** desde el frontend para manipular el render. Esta superficie es
+legacy y se conserva durante la migración de ABI v1.
 
 | Id | Nombre lógico | Tamaño | R/W | Contenido |
 |---|---|---|---|---|
@@ -236,6 +242,13 @@ core stock devuelve `NULL` y el Lab degrada con elegancia). Algunos son
 | `0x104` | `AYTHER_MEMORY_TILE_SUPPRESS` | 512 B | **R/W** | Máscara de celdas de tile (rejilla 64×64) a "pelar". |
 | `0x105` | `AYTHER_MEMORY_PLANE_TILE_SUPPRESS` | 3072 B | **R/W** | Por-plano: bitmap `(patrón<<2 \| paleta)` a suprimir. |
 | `0x106` | `AYTHER_MEMORY_PLANE_SUPPRESS_ACTIVE` | 1 B | **R/W** | Flag de gate del fast-path (¿hay tiles de plano ocultos?). |
+| `0x108` | `AYTHER_MEMORY_LAYER_DIM` | 1 B | **R/W** | Atenuado de capas no-sprite. |
+| `0x109` | `AYTHER_MEMORY_AUDIO_WRITES` | 65536 B | R | 8192 escrituras de audio de 8 bytes. |
+| `0x10A` | `AYTHER_MEMORY_AUDIO_WRITE_COUNT` | 4 B | **R/W legacy** | Cantidad válida; la ABI v1 la reinicia automáticamente por frame. |
+| `0x10B` | `AYTHER_MEMORY_PARSED_SPRITES` | 1280 B | R | 128 sprites de layout v1 congelado en 10 bytes. |
+| `0x10C` | `AYTHER_MEMORY_PARSED_SPRITE_COUNT` | 1 B | **R/W legacy** | Cantidad válida; la ABI v1 la reinicia automáticamente por frame. |
+| `0x10D` | `AYTHER_MEMORY_AUDIO_MUTE` | 2 B | **R/W** | Máscara de mute FM/PSG. |
+| `0x10E` | `AYTHER_MEMORY_RASTER_DIRTY` | 4 B | **R/W** | Bitmask transiente por frame con motivos de fallback raster; `> 0` conserva el contrato booleano legacy. |
 
 > **Endianness**: VRAM y CRAM se exponen **word-swapped** en hosts
 > little-endian (igual que la Work RAM): el byte lógico `off` vive en el array

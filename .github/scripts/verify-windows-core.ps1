@@ -40,7 +40,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 $exports | Set-Content -Encoding utf8 (Join-Path $artifactRoot 'exports.txt')
 
-$requiredExports = @('retro_init', 'retro_run')
+$requiredExports = @('retro_init', 'retro_run', 'ayther_get_interface')
 $probeExports = @(
     'audio_probe_poll',
     'audio_probe_set_callback',
@@ -57,6 +57,9 @@ foreach ($symbol in $requiredExports) {
         throw "Missing PE export: $symbol"
     }
 }
+if ($exports -match '(?m)^\s*Name: ayther_(?!get_interface\s*$)') {
+    throw 'An unexpected additional AYTHER entry point was exported.'
+}
 if ($SoundProbe -eq 0 -and $exports -match '(?m)^\s*Name: audio_probe_') {
     throw 'audio_probe symbols leaked from the feature-off build.'
 }
@@ -72,4 +75,29 @@ if ($LASTEXITCODE -ne 0) {
 & $loader $dll @requiredExports
 if ($LASTEXITCODE -ne 0) {
     throw 'The x64 DLL load/export verification failed.'
+}
+
+$abiSource = Join-Path $repositoryRoot 'tests\ci\verify_ayther_api.c'
+$abiVerifier = Join-Path $artifactRoot 'verify_ayther_api.exe'
+$coreInclude = Join-Path $repositoryRoot 'core'
+& $Compiler -O2 -Wall -Wextra -I $coreInclude -o $abiVerifier $abiSource
+if ($LASTEXITCODE -ne 0) {
+    throw 'Failed to build the AYTHER ABI verifier.'
+}
+
+& $abiVerifier $dll --require
+if ($LASTEXITCODE -ne 0) {
+    throw 'The AYTHER ABI negotiation/compatibility verification failed.'
+}
+
+$mockSource = Join-Path $repositoryRoot 'tests\ci\mock_stock_core.c'
+$mockCore = Join-Path $artifactRoot 'mock_stock_core.dll'
+& $Compiler -shared -o $mockCore $mockSource
+if ($LASTEXITCODE -ne 0) {
+    throw 'Failed to build the stock-core discovery fixture.'
+}
+
+& $abiVerifier $mockCore
+if ($LASTEXITCODE -ne 0) {
+    throw 'A stock/pre-ABI core was not handled safely.'
 }

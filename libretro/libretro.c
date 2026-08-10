@@ -42,9 +42,11 @@
 #ifndef _MSC_VER
 #include <stdbool.h>
 #endif
+#include <limits.h>
 #include <stddef.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <string.h>
 
 #ifdef _MSC_VER
 #define snprintf _snprintf
@@ -77,7 +79,9 @@
 
 #include "libretro_core_options.h"
 
+#define AYTHER_CORE_EXPORTS 1
 #include "shared.h"
+#include "ayther/ayther_api.h"
 #include "md_ntsc.h"
 #include "sms_ntsc.h"
 #include "osd.h"
@@ -86,6 +90,10 @@
 #define M68K_MAX_CYCLES 1107
 #define Z80_MAX_CYCLES 345
 #define OVERCLOCK_FRAME_DELAY 100
+
+#ifndef GIT_VERSION
+#define GIT_VERSION ""
+#endif
 
 #ifdef M68K_OVERCLOCK_SHIFT
 #ifndef HAVE_OVERCLOCK
@@ -102,6 +110,17 @@ STATIC_ASSERT(m68k_overflow,
 STATIC_ASSERT(z80_overflow,
               Z80_MAX_CYCLES <= UINT_MAX >> (Z80_OVERCLOCK_SHIFT + 1));
 #endif
+
+STATIC_ASSERT(ayther_sprite_v1_size, sizeof(ayther_sprite_v1) == 10);
+STATIC_ASSERT(ayther_sprite_internal_size, sizeof(AytherSpr) == sizeof(ayther_sprite_v1));
+STATIC_ASSERT(ayther_sprite_sat_idx_offset, offsetof(AytherSpr, sat_idx) == 8);
+STATIC_ASSERT(ayther_audio_write_v1_size, sizeof(ayther_audio_write_v1) == 8);
+STATIC_ASSERT(ayther_audio_write_internal_size,
+              sizeof(AytherAudioWrite) == sizeof(ayther_audio_write_v1));
+STATIC_ASSERT(ayther_audio_write_data_offset,
+              offsetof(AytherAudioWrite, data) == 6);
+STATIC_ASSERT(ayther_region_info_v1_size, sizeof(ayther_region_info_v1) == 32);
+STATIC_ASSERT(ayther_frame_snapshot_v1_size, sizeof(ayther_frame_snapshot_v1) == 48);
 
 t_config config;
 
@@ -145,6 +164,10 @@ static uint8_t brm_format[0x40] =
 uint8_t cart_size;
 
 static bool is_running = 0;
+static bool ayther_content_loaded = false;
+static bool ayther_frame_active = false;
+static uint64_t ayther_frame_generation = 0;
+static uint64_t ayther_snapshot_generation = 1;
 static bool restart_eq = false;
 static uint8_t temp[0x10000];
 static int16 soundbuffer[3068];
@@ -156,6 +179,29 @@ static char g_rom_name[256];
 static const void *g_rom_data = NULL;
 static size_t g_rom_size      = 0;
 static char *save_dir         = NULL;
+
+static void ayther_clear_frame_capture(void)
+{
+   ayther_sprite_n = 0;
+   ayther_sprite_overflow = 0;
+   ayther_audio_write_n = 0;
+   ayther_audio_write_overflow = 0;
+}
+
+static void ayther_invalidate_snapshot(void)
+{
+   ayther_frame_active = false;
+   ayther_clear_frame_capture();
+   ayther_raster_dirty = 0;
+   ayther_snapshot_generation++;
+}
+
+static void ayther_reset_session(bool content_loaded)
+{
+   ayther_content_loaded = content_loaded;
+   ayther_frame_generation = 0;
+   ayther_invalidate_snapshot();
+}
 
 retro_log_printf_t log_cb;
 static retro_video_refresh_t video_cb;
@@ -3122,9 +3168,6 @@ void retro_set_input_state(retro_input_state_t cb) { input_state_cb = cb; }
 void retro_get_system_info(struct retro_system_info *info)
 {
    info->library_name = "Genesis Plus GX";
-#ifndef GIT_VERSION
-#define GIT_VERSION ""
-#endif
    info->library_version = "v1.7.4" GIT_VERSION;
    info->valid_extensions = "m3u|mdx|md|smd|gen|bin|cue|iso|chd|bms|sms|gg|sg|68k|sgd";
    info->block_extract = false;
@@ -3350,6 +3393,8 @@ bool retro_unserialize(const void *data, size_t size)
 #ifdef HAVE_OVERCLOCK
    update_overclock();
 #endif
+
+   ayther_invalidate_snapshot();
 
    return TRUE;
 }
@@ -3687,6 +3732,8 @@ bool retro_load_game(const struct retro_game_info *info)
 
    init_frameskip();
 
+   ayther_reset_session(true);
+
    return true;
 
 error:
@@ -3699,6 +3746,7 @@ error:
    md_ntsc   = NULL;
 
    system_hw = 0;
+   ayther_reset_session(false);
 
    return false;
 }
@@ -3739,9 +3787,415 @@ void retro_unload_game(void)
    sms_ntsc  = NULL;
 
    system_hw = 0;
+   is_running = false;
+   ayther_reset_session(false);
 }
 
 unsigned retro_get_region(void) { return vdp_pal ? RETRO_REGION_PAL : RETRO_REGION_NTSC; }
+
+typedef struct ayther_region_mapping
+{
+   void *data;
+   uint32_t data_version;
+   uint32_t element_size;
+   uint32_t capacity;
+   uint32_t byte_size;
+   uint32_t access_flags;
+   uint32_t legacy_memory_id;
+} ayther_region_mapping;
+
+static int32_t ayther_map_region(uint32_t region_id,
+      ayther_region_mapping *mapping)
+{
+   memset(mapping, 0, sizeof(*mapping));
+   mapping->data_version = AYTHER_LAYOUT_RAW_V1;
+   mapping->access_flags = AYTHER_REGION_ACCESS_READ |
+      AYTHER_REGION_DEPRECATED_LEGACY;
+
+   switch (region_id)
+   {
+      case AYTHER_REGION_VRAM:
+         mapping->data = vram;
+         mapping->element_size = 1;
+         mapping->capacity = sizeof(vram);
+         mapping->byte_size = sizeof(vram);
+         mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_VRAM;
+         break;
+      case AYTHER_REGION_CRAM:
+         mapping->data = cram;
+         mapping->element_size = sizeof(cram[0]);
+         mapping->capacity = sizeof(cram) / sizeof(cram[0]);
+         mapping->byte_size = sizeof(cram);
+         mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_CRAM;
+         break;
+      case AYTHER_REGION_VDP_REGS:
+         mapping->data = reg;
+         mapping->element_size = sizeof(reg[0]);
+         mapping->capacity = sizeof(reg) / sizeof(reg[0]);
+         mapping->byte_size = sizeof(reg);
+         mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_VDP_REGS;
+         break;
+      case AYTHER_REGION_VSRAM:
+         mapping->data = vsram;
+         mapping->element_size = sizeof(vsram[0]);
+         mapping->capacity = sizeof(vsram) / sizeof(vsram[0]);
+         mapping->byte_size = sizeof(vsram);
+         mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_VSRAM;
+         break;
+      case AYTHER_REGION_LAYER_MASK:
+         mapping->data = &ayther_layer_mask;
+         mapping->element_size = sizeof(ayther_layer_mask);
+         mapping->capacity = 1;
+         mapping->byte_size = sizeof(ayther_layer_mask);
+         mapping->access_flags |= AYTHER_REGION_ACCESS_CONTROL_WRITE;
+         mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_LAYER_MASK;
+         break;
+      case AYTHER_REGION_SPRITE_SUPPRESS:
+         mapping->data = ayther_sprite_suppress;
+         mapping->element_size = sizeof(ayther_sprite_suppress[0]);
+         mapping->capacity = sizeof(ayther_sprite_suppress);
+         mapping->byte_size = sizeof(ayther_sprite_suppress);
+         mapping->access_flags |= AYTHER_REGION_ACCESS_CONTROL_WRITE;
+         mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_SPRITE_SUPPRESS;
+         break;
+      case AYTHER_REGION_TILE_SUPPRESS:
+         mapping->data = ayther_tile_suppress;
+         mapping->element_size = sizeof(ayther_tile_suppress[0]);
+         mapping->capacity = sizeof(ayther_tile_suppress);
+         mapping->byte_size = sizeof(ayther_tile_suppress);
+         mapping->access_flags |= AYTHER_REGION_ACCESS_CONTROL_WRITE;
+         mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_TILE_SUPPRESS;
+         break;
+      case AYTHER_REGION_PLANE_TILE_SUPPRESS:
+         mapping->data = ayther_plane_tile_suppress;
+         mapping->element_size = sizeof(ayther_plane_tile_suppress[0]);
+         mapping->capacity = sizeof(ayther_plane_tile_suppress);
+         mapping->byte_size = sizeof(ayther_plane_tile_suppress);
+         mapping->access_flags |= AYTHER_REGION_ACCESS_CONTROL_WRITE;
+         mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_PLANE_TILE_SUPPRESS;
+         break;
+      case AYTHER_REGION_PLANE_SUPPRESS_ACTIVE:
+         mapping->data = &ayther_plane_suppress_active;
+         mapping->element_size = sizeof(ayther_plane_suppress_active);
+         mapping->capacity = 1;
+         mapping->byte_size = sizeof(ayther_plane_suppress_active);
+         mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_PLANE_SUPPRESS_ACTIVE;
+         break;
+      case AYTHER_REGION_LAYER_DIM:
+         mapping->data = &ayther_layer_dim;
+         mapping->element_size = sizeof(ayther_layer_dim);
+         mapping->capacity = 1;
+         mapping->byte_size = sizeof(ayther_layer_dim);
+         mapping->access_flags |= AYTHER_REGION_ACCESS_CONTROL_WRITE;
+         mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_LAYER_DIM;
+         break;
+      case AYTHER_REGION_AUDIO_WRITES:
+         mapping->data = ayther_audio_writes;
+         mapping->data_version = AYTHER_LAYOUT_AUDIO_WRITE_V1;
+         mapping->element_size = sizeof(ayther_audio_writes[0]);
+         mapping->capacity = sizeof(ayther_audio_writes) /
+            sizeof(ayther_audio_writes[0]);
+         mapping->byte_size = sizeof(ayther_audio_writes);
+         mapping->access_flags |= AYTHER_REGION_FRAME_SCOPED;
+         mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_AUDIO_WRITES;
+         break;
+      case AYTHER_REGION_AUDIO_WRITE_COUNT:
+         mapping->data = &ayther_audio_write_n;
+         mapping->element_size = sizeof(ayther_audio_write_n);
+         mapping->capacity = 1;
+         mapping->byte_size = sizeof(ayther_audio_write_n);
+         mapping->access_flags |= AYTHER_REGION_FRAME_SCOPED;
+         mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_AUDIO_WRITE_COUNT;
+         break;
+      case AYTHER_REGION_PARSED_SPRITES:
+         mapping->data = ayther_sprites;
+         mapping->data_version = AYTHER_LAYOUT_SPRITE_V1;
+         mapping->element_size = sizeof(ayther_sprites[0]);
+         mapping->capacity = sizeof(ayther_sprites) / sizeof(ayther_sprites[0]);
+         mapping->byte_size = sizeof(ayther_sprites);
+         mapping->access_flags |= AYTHER_REGION_FRAME_SCOPED;
+         mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_PARSED_SPRITES;
+         break;
+      case AYTHER_REGION_PARSED_SPRITE_COUNT:
+         mapping->data = &ayther_sprite_n;
+         mapping->element_size = sizeof(ayther_sprite_n);
+         mapping->capacity = 1;
+         mapping->byte_size = sizeof(ayther_sprite_n);
+         mapping->access_flags |= AYTHER_REGION_FRAME_SCOPED;
+         mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_PARSED_SPRITE_COUNT;
+         break;
+      case AYTHER_REGION_AUDIO_MUTE:
+         mapping->data = &ayther_audio_mute;
+         mapping->element_size = sizeof(ayther_audio_mute);
+         mapping->capacity = 1;
+         mapping->byte_size = sizeof(ayther_audio_mute);
+         mapping->access_flags |= AYTHER_REGION_ACCESS_CONTROL_WRITE;
+         mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_AUDIO_MUTE;
+         break;
+      case AYTHER_REGION_RASTER_FALLBACK_REASONS:
+         mapping->data = &ayther_raster_dirty;
+         mapping->element_size = sizeof(ayther_raster_dirty);
+         mapping->capacity = 1;
+         mapping->byte_size = sizeof(ayther_raster_dirty);
+         mapping->access_flags |= AYTHER_REGION_FRAME_SCOPED;
+         mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_RASTER_DIRTY;
+         break;
+      default:
+         return AYTHER_STATUS_NOT_FOUND;
+   }
+
+   if (mapping->element_size > 1)
+      mapping->access_flags |= AYTHER_REGION_NATIVE_ENDIAN;
+
+   return AYTHER_STATUS_OK;
+}
+
+static int32_t AYTHER_CALL ayther_query_region_v1(uint32_t region_id,
+      ayther_region_info_v1 *out, uint32_t out_size)
+{
+   ayther_region_mapping mapping;
+   int32_t status;
+
+   if (!out)
+      return AYTHER_STATUS_INVALID_ARGUMENT;
+   if (out_size < sizeof(*out))
+      return AYTHER_STATUS_BUFFER_TOO_SMALL;
+
+   status = ayther_map_region(region_id, &mapping);
+   if (status != AYTHER_STATUS_OK)
+      return status;
+
+   memset(out, 0, sizeof(*out));
+   out->struct_size = sizeof(*out);
+   out->region_id = region_id;
+   out->data_version = mapping.data_version;
+   out->element_size = mapping.element_size;
+   out->capacity = mapping.capacity;
+   out->byte_size = mapping.byte_size;
+   out->access_flags = mapping.access_flags;
+   out->legacy_memory_id = mapping.legacy_memory_id;
+   return AYTHER_STATUS_OK;
+}
+
+static int32_t AYTHER_CALL ayther_read_region_v1(uint32_t region_id,
+      uint32_t offset, void *out, uint32_t byte_count,
+      uint64_t expected_generation, uint64_t *actual_generation)
+{
+   ayther_region_mapping mapping;
+   uint64_t generation = ayther_snapshot_generation;
+   int32_t status;
+
+   if (actual_generation)
+      *actual_generation = generation;
+   if (ayther_frame_active)
+      return AYTHER_STATUS_BUSY;
+   if (byte_count && !out)
+      return AYTHER_STATUS_INVALID_ARGUMENT;
+   if ((expected_generation != AYTHER_GENERATION_ANY) &&
+       (expected_generation != generation))
+      return AYTHER_STATUS_STALE_GENERATION;
+
+   status = ayther_map_region(region_id, &mapping);
+   if (status != AYTHER_STATUS_OK)
+      return status;
+   if ((offset > mapping.byte_size) ||
+       (byte_count > (mapping.byte_size - offset)))
+      return AYTHER_STATUS_OUT_OF_BOUNDS;
+   if (!byte_count)
+      return AYTHER_STATUS_OK;
+
+   if (byte_count)
+      memcpy(out, (const uint8_t *)mapping.data + offset, byte_count);
+
+   if (generation != ayther_snapshot_generation)
+   {
+      if (actual_generation)
+         *actual_generation = ayther_snapshot_generation;
+      return AYTHER_STATUS_STALE_GENERATION;
+   }
+
+   return AYTHER_STATUS_OK;
+}
+
+static int ayther_plane_suppress_nonzero(void)
+{
+   size_t i;
+   for (i = 0; i < sizeof(ayther_plane_tile_suppress); ++i)
+      if (ayther_plane_tile_suppress[i])
+         return 1;
+   return 0;
+}
+
+static int32_t AYTHER_CALL ayther_write_control_v1(uint32_t region_id,
+      uint32_t offset, const void *data, uint32_t byte_count,
+      uint64_t expected_generation, uint64_t *new_generation)
+{
+   ayther_region_mapping mapping;
+   uint64_t generation = ayther_snapshot_generation;
+   int32_t status;
+
+   if (new_generation)
+      *new_generation = generation;
+   if (ayther_frame_active)
+      return AYTHER_STATUS_BUSY;
+   if (byte_count && !data)
+      return AYTHER_STATUS_INVALID_ARGUMENT;
+   if ((expected_generation != AYTHER_GENERATION_ANY) &&
+       (expected_generation != generation))
+      return AYTHER_STATUS_STALE_GENERATION;
+
+   status = ayther_map_region(region_id, &mapping);
+   if (status != AYTHER_STATUS_OK)
+      return status;
+   if (!(mapping.access_flags & AYTHER_REGION_ACCESS_CONTROL_WRITE))
+      return AYTHER_STATUS_READ_ONLY;
+   if ((offset > mapping.byte_size) ||
+       (byte_count > (mapping.byte_size - offset)))
+      return AYTHER_STATUS_OUT_OF_BOUNDS;
+   if (!byte_count)
+      return AYTHER_STATUS_OK;
+
+   if ((region_id == AYTHER_REGION_LAYER_MASK) ||
+       (region_id == AYTHER_REGION_LAYER_DIM) ||
+       (region_id == AYTHER_REGION_AUDIO_MUTE))
+   {
+      if ((offset != 0) || (byte_count != mapping.byte_size))
+         return AYTHER_STATUS_INVALID_ARGUMENT;
+   }
+
+   if ((region_id == AYTHER_REGION_LAYER_MASK) &&
+       ((*(const uint8_t *)data & UINT8_C(0xF0)) != 0))
+      return AYTHER_STATUS_INVALID_ARGUMENT;
+   if ((region_id == AYTHER_REGION_LAYER_DIM) &&
+       (*(const uint8_t *)data > 1))
+      return AYTHER_STATUS_INVALID_ARGUMENT;
+   if ((region_id == AYTHER_REGION_AUDIO_MUTE) &&
+       byte_count == sizeof(uint16_t))
+   {
+      uint16_t mute;
+      memcpy(&mute, data, sizeof(mute));
+      if ((mute & UINT16_C(0xFC00)) != 0)
+         return AYTHER_STATUS_INVALID_ARGUMENT;
+   }
+
+   if (byte_count)
+      memcpy((uint8_t *)mapping.data + offset, data, byte_count);
+
+   if (region_id == AYTHER_REGION_PLANE_TILE_SUPPRESS)
+      ayther_plane_suppress_active = ayther_plane_suppress_nonzero() ? 1 : 0;
+
+   ayther_snapshot_generation++;
+   if (new_generation)
+      *new_generation = ayther_snapshot_generation;
+   return AYTHER_STATUS_OK;
+}
+
+static int32_t AYTHER_CALL ayther_capture_snapshot_v1(
+      ayther_frame_snapshot_v1 *out, uint32_t out_size)
+{
+   if (!out)
+      return AYTHER_STATUS_INVALID_ARGUMENT;
+   if (out_size < sizeof(*out))
+      return AYTHER_STATUS_BUFFER_TOO_SMALL;
+   if (ayther_frame_active)
+      return AYTHER_STATUS_BUSY;
+
+   memset(out, 0, sizeof(*out));
+   out->struct_size = sizeof(*out);
+   out->snapshot_version = 1;
+   out->snapshot_generation = ayther_snapshot_generation;
+   out->frame_generation = ayther_frame_generation;
+   if (ayther_content_loaded)
+      out->flags |= AYTHER_SNAPSHOT_CONTENT_LOADED;
+   if (ayther_frame_active)
+      out->flags |= AYTHER_SNAPSHOT_FRAME_ACTIVE;
+   if (ayther_sprite_overflow)
+      out->overflow_flags |= AYTHER_OVERFLOW_PARSED_SPRITES;
+   if (ayther_audio_write_overflow)
+      out->overflow_flags |= AYTHER_OVERFLOW_AUDIO_WRITES;
+   out->fallback_reasons = ayther_raster_dirty;
+   out->parsed_sprite_count = ayther_sprite_n;
+   out->audio_write_count = ayther_audio_write_n;
+   return AYTHER_STATUS_OK;
+}
+
+static int32_t AYTHER_CALL ayther_recompose_frame_v1(uint16_t *out_pixels,
+      uint32_t pixel_capacity, uint32_t flags, uint32_t *out_width,
+      uint32_t *out_height)
+{
+   AytherSpr saved_sprites[128];
+   uint8 saved_sprite_n;
+   uint32 saved_sprite_overflow;
+   int width;
+   int height;
+   int supported;
+
+   if (!out_width || !out_height)
+      return AYTHER_STATUS_INVALID_ARGUMENT;
+   if (pixel_capacity > INT_MAX)
+      return AYTHER_STATUS_OUT_OF_BOUNDS;
+   if (ayther_frame_active)
+      return AYTHER_STATUS_BUSY;
+
+   memcpy(saved_sprites, ayther_sprites, sizeof(saved_sprites));
+   saved_sprite_n = ayther_sprite_n;
+   saved_sprite_overflow = ayther_sprite_overflow;
+   supported = ayther_recompose_frame(out_pixels, (int)pixel_capacity, flags,
+         &width, &height);
+   memcpy(ayther_sprites, saved_sprites, sizeof(saved_sprites));
+   ayther_sprite_n = saved_sprite_n;
+   ayther_sprite_overflow = saved_sprite_overflow;
+
+   if (!supported)
+      return AYTHER_STATUS_UNSUPPORTED;
+
+   *out_width = (uint32_t)width;
+   *out_height = (uint32_t)height;
+   return AYTHER_STATUS_OK;
+}
+
+static const char ayther_build_id[] =
+   "Genesis Plus GX AYTHER ABI 1.0; core v1.7.4" GIT_VERSION;
+
+#if defined(LSB_FIRST) || defined(_WIN32) || defined(__LITTLE_ENDIAN__)
+#define AYTHER_HOST_ENDIANNESS AYTHER_ENDIAN_LITTLE
+#else
+#define AYTHER_HOST_ENDIANNESS AYTHER_ENDIAN_BIG
+#endif
+
+static const ayther_interface_v1 ayther_interface_1 =
+{
+   AYTHER_ABI_VERSION_1_0,
+   sizeof(ayther_interface_v1),
+   AYTHER_CAP_LEGACY_MEMORY | AYTHER_CAP_REGION_QUERY |
+      AYTHER_CAP_REGION_READ | AYTHER_CAP_CONTROL_WRITE |
+      AYTHER_CAP_FRAME_SNAPSHOT | AYTHER_CAP_PARSED_SPRITES_V1 |
+      AYTHER_CAP_AUDIO_WRITES_V1 | AYTHER_CAP_RASTER_FALLBACK_V1 |
+      AYTHER_CAP_RECOMPOSE_V1,
+   AYTHER_HOST_ENDIANNESS,
+   sizeof(void *),
+   sizeof(ayther_region_info_v1),
+   sizeof(ayther_frame_snapshot_v1),
+   sizeof(ayther_sprite_v1),
+   sizeof(ayther_audio_write_v1),
+   ayther_build_id,
+   sizeof(ayther_build_id) - 1,
+   0,
+   ayther_query_region_v1,
+   ayther_read_region_v1,
+   ayther_write_control_v1,
+   ayther_capture_snapshot_v1,
+   ayther_recompose_frame_v1
+};
+
+AYTHER_API const ayther_interface_v1 *AYTHER_CALL ayther_get_interface(
+      uint32_t requested_version)
+{
+   if ((requested_version == 0) ||
+       (requested_version == AYTHER_ABI_VERSION_1_0))
+      return &ayther_interface_1;
+   return NULL;
+}
 
 void *retro_get_memory_data(unsigned id)
 {
@@ -3803,20 +4257,20 @@ void *retro_get_memory_data(unsigned id)
          lo setea SÓLO en el frame visible (produce). core/vdp_render.c. */
       case 0x108 /* AYTHER_MEMORY_LAYER_DIM */:
          return &ayther_layer_dim;
-      /* AYTHER fork delta: lista de sprites que parse_satb PARSEÓ este frame (8
-         bytes c/u: yr/xr/attr u16 + w/h u8) + su contador (escribible = reset). Es
+      /* AYTHER fork delta: lista de sprites que parse_satb PARSEÓ este frame (10
+         bytes c/u: yr/xr/attr u16 + w/h/sat_idx/chain_pos u8) + su contador
+         (escribible = reset legacy). Es
          la fuente fiable de "qué sprites se dibujaron" aunque el juego reescriba el
          SAT a mitad de frame / cambie su base (el genio del logo Sega de Aladdin: el
-         SAT a fin de frame muestra solo placeholders). El frontend limpia el contador
-         (0x10C=0) antes del produce y lee la lista tras run_frame. vdp_render.c. */
+         SAT a fin de frame muestra solo placeholders). La ABI v1 reinicia el
+         contador; el reset manual 0x10C=0 sigue aceptado. vdp_render.c. */
       case 0x10B /* AYTHER_MEMORY_PARSED_SPRITES */:
          return ayther_sprites;
       case 0x10C /* AYTHER_MEMORY_PARSED_SPRITE_COUNT */:
          return &ayther_sprite_n;
-      /* AYTHER (#274): señal de fidelidad por frame (u32, ESCRIBIBLE = reset).
-         Escrituras con efecto visual a mitad de pantalla (CRAM/VSRAM/tabla de
-         hscroll/regs); >0 = el frame no se recompone fiel desde el estado
-         final (R-1) → el frontend cae al blit. core/vdp_ctrl.c. */
+      /* AYTHER (#5/#274): bitmask u32 de fallback por frame, automáticamente
+         reiniciado por el core y todavía ESCRIBIBLE por compatibilidad.
+         Bits AYTHER_RASTER_REASON_*; >0 conserva el booleano legacy. */
       case 0x10E /* AYTHER_MEMORY_RASTER_DIRTY */:
          return &ayther_raster_dirty;
       /* AYTHER fork delta: log de escrituras crudas a los chips de sonido (FM
@@ -3824,8 +4278,8 @@ void *retro_get_memory_data(unsigned id)
          8 bytes c/u: cycle u32 + addr u16 + data u8 + chip u8) + su contador u32
          (ESCRIBIBLE = reset). Identidad de audio por SECUENCIA DE COMANDOS al chip
          (estable en replay) vs hash del PCM de salida (no reproducible tras
-         unserialize). El frontend limpia el contador (0x10A=0) antes del produce y
-         lee el log tras run_frame. core/sound/sound.c. */
+         unserialize). La ABI v1 reinicia el contador por frame; el reset manual
+         0x10A=0 sigue aceptado. core/sound/sound.c. */
       case 0x109 /* AYTHER_MEMORY_AUDIO_WRITES */:
          return ayther_audio_writes;
       case 0x10A /* AYTHER_MEMORY_AUDIO_WRITE_COUNT */:
@@ -3927,13 +4381,13 @@ size_t retro_get_memory_size(unsigned id)
       case 0x108 /* AYTHER_MEMORY_LAYER_DIM */:
          return 1;
 
-      /* AYTHER fork delta: lista de sprites parseados (128 x 8 bytes) + contador. */
+      /* AYTHER fork delta: lista de sprites parseados (128 x 10 bytes) + contador. */
       case 0x10B /* AYTHER_MEMORY_PARSED_SPRITES */:
          return sizeof(ayther_sprites);
       case 0x10C /* AYTHER_MEMORY_PARSED_SPRITE_COUNT */:
          return 1;
 
-      /* AYTHER (#274): señal de fidelidad por frame (u32, escribible = reset). */
+      /* AYTHER (#5/#274): bitmask de motivos (u32, escribible = reset). */
       case 0x10E /* AYTHER_MEMORY_RASTER_DIRTY */:
          return sizeof(ayther_raster_dirty);
 
@@ -3988,6 +4442,7 @@ void retro_init(void)
    retro_audio_buff_underrun  = false;
    audio_latency              = 0;
    update_audio_latency       = false;
+   ayther_reset_session(false);
 }
 
 void retro_deinit(void)
@@ -3997,6 +4452,8 @@ void retro_deinit(void)
 
    g_rom_data = NULL;
    g_rom_size = 0;
+   is_running = false;
+   ayther_reset_session(false);
 }
 
 void retro_reset(void)
@@ -4006,13 +4463,14 @@ void retro_reset(void)
    update_overclock();
 #endif
    gen_reset(0);
+   ayther_invalidate_snapshot();
 }
 
 extern int8 audio_hard_disable;
 
 extern void sound_update_fm_function_pointers(void);
 
-void retro_run(void) 
+void retro_run(void)
 {
    bool okay = false;
    int result = -1;
@@ -4021,6 +4479,8 @@ void retro_run(void)
    int soundbuffer_size = 0;
 
    is_running = true;
+   ayther_clear_frame_capture();
+   ayther_frame_active = true;
 
 #ifdef HAVE_OVERCLOCK
   /* update overclock delay */
@@ -4109,6 +4569,9 @@ void retro_run(void)
    }
 
    soundbuffer_size = audio_update(soundbuffer);
+   ayther_frame_active = false;
+   ayther_frame_generation++;
+   ayther_snapshot_generation++;
 
    /* Force viewport update when SMS border changes after startup undetected */
    if (     ((system_hw == SYSTEM_MARKIII) || (system_hw & SYSTEM_SMS) || (system_hw == SYSTEM_PBC))

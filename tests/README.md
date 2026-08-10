@@ -25,6 +25,16 @@ audio_probe unit tests: 49 passed, 0 failed
 
 `make check` exits non-zero if any check fails (CI-friendly).
 
+## AYTHER ABI v1
+
+`test_ayther_api.c` freezes the public fixed-width layouts and constants from
+`core/ayther/ayther_api.h`. CI additionally compiles
+`ci/verify_ayther_api.c`, loads the produced DLL/so, negotiates v1 and validates
+capabilities, all region sizes, generation handling, controlled writes and the
+complete legacy adapter. Without `--require`, that verifier also exercises the
+safe stock/pre-ABI path: a missing symbol is reported as zero capabilities
+instead of being called. CI proves that branch with `ci/mock_stock_core.c`.
+
 The command also runs `ayther/audio_probe_trace.c`. That harness emits a fixed
 sequence of FM, PSG, DAC, frame and state events, serializes every logical field
 in an explicit little-endian format, and compares the resulting FNV-1a digest
@@ -34,6 +44,13 @@ order are never hashed.
 On a mismatch, the actual trace summary remains in
 `tests/artifacts/audio_probe_trace.actual.json` so CI can publish it as a
 diagnostic artifact.
+
+## Raster fallback guard
+
+`test_raster_guard.c` validates issue #5's stable reason bits and centralized
+classification rules: effective-change gating, active-display gating, aligned
+hscroll detection, reason accumulation, DMA origin and legacy boolean
+compatibility. The production 68K, Z80 and DMA paths all feed these same rules.
 
 ### What is covered
 
@@ -53,6 +70,7 @@ diagnostic artifact.
 | Callback | bypasses the ring buffer |
 | Context | reflects ROM checksum / region / clock / cycles-per-frame |
 | Determinism | canonical event trace matches the versioned golden digest |
+| Raster guard | REG/VRAM/CRAM/VSRAM/HSCROLL/DMA/mode reason classification |
 
 ### Layout
 
@@ -62,10 +80,14 @@ tests/
 ├── README.md
 ├── ayther/
 │   ├── audio_probe_trace.c
+│   ├── raster_rom_probe.c
 │   └── golden/audio_probe_trace.json
+├── ci/verify_ayther_api.c # dynamic ABI/symbol verifier
 ├── stub/
 │   └── shared.h        # minimal emulator stand-in for isolated builds
-└── test_audio_probe.c  # the test runner (self-contained assert framework)
+├── test_audio_probe.c  # audio probe unit runner
+├── test_ayther_api.c    # public ABI layout/constant runner
+└── test_raster_guard.c # raster fallback reason unit runner
 ```
 
 Generated binaries and mismatch reports live under `.build/` and `artifacts/`;

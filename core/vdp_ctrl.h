@@ -42,6 +42,8 @@
 #ifndef _VDP_H_
 #define _VDP_H_
 
+#include "ayther_raster.h"
+
 /* VDP context */
 extern uint8 reg[0x20];
 extern uint8 sat[0x400];
@@ -65,9 +67,8 @@ extern uint8 bg_name_dirty[0x800];
 extern uint16 bg_name_list[0x800];
 extern uint16 bg_list_index;
 extern uint8 hscroll_mask;
-/* AYTHER (#274): señal de fidelidad por frame (id 0x10E, escribible=reset) —
-   escrituras con efecto visual a mitad de pantalla; >0 = el frame no se
-   recompone fiel desde el estado final → el frontend cae al blit. */
+/* AYTHER (#5/#274): bitmask transiente de motivos de fallback por frame.
+   Se expone por el id privado 0x10E; `> 0` conserva el contrato booleano. */
 extern uint32 ayther_raster_dirty;
 extern uint8 playfield_shift;
 extern uint8 playfield_col_mask;
@@ -96,6 +97,7 @@ extern unsigned int (*vdp_z80_data_r)(void);
 /* Function prototypes */
 extern void vdp_init(void);
 extern void vdp_reset(void);
+extern void vdp_ayther_begin_frame(void);
 extern int vdp_context_save(uint8 *state);
 extern int vdp_context_load(uint8 *state);
 extern void vdp_dma_update(unsigned int cycles);

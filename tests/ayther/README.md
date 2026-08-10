@@ -24,9 +24,38 @@ If the contract changes intentionally, inspect
 change in the pull request, and only then update the golden file. Never update a
 golden merely to make CI green.
 
+## Local ROM raster validation
+
+`raster_rom_probe.c` is an end-to-end safety probe for issue #5. It loads a
+test core dynamically, captures the RGB565 frame emitted by libretro and
+compares it with ABI v1 `recompose_frame` from the same final VDP state. A
+different frame is safe only when private memory id `0x10E` exposes a non-zero
+fallback reason.
+
+The core used for this test must export the single discovery symbol
+`ayther_get_interface`. The probe also checks `frame_generation`, snapshot
+fallback reasons and capture bounds on every frame. Build and run it without
+copying ROMs into the repository:
+
+```sh
+make -C tests raster-rom-probe
+tests/.build/raster_rom_probe \
+  --frames 600 --output tests/artifacts/raster-roms.jsonl \
+  ./genesis_plus_gx_libretro.dll /path/to/roms/*.md
+```
+
+The JSON-lines report contains ROM filenames, sizes and aggregate frame
+statistics, never ROM contents. The process exits with status 2 when it finds a
+recomposition mismatch with mask zero or an unavailable recomposition without
+`UNSUPPORTED_MODE`.
+
+The first recorded local-corpus execution is summarized in
+`docs/validation/raster-roms-2026-08-09.md` (14 ROMs, 25,200 frames). The ROMs
+and generated JSON/images remain outside version control.
+
 ## Next fixture families
 
-The full core replay harness remains part of issue #8. Its fixtures will add a
+The full deterministic replay harness remains part of issue #8. Its fixtures will add a
 generated/open ROM payload, initial savestate, input/config stream, and hashes
 for video, audio and serialized state. Raster, sprite pressure, plane scroll
 and repeated save/load scenarios cannot be represented honestly by this

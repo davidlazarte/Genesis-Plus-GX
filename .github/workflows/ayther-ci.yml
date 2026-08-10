@@ -91,6 +91,12 @@ jobs:
           nm -D --defined-only genesis_plus_gx_libretro.so > ayther-artifacts/exports.txt
           grep -Eq '[[:space:]]retro_init$' ayther-artifacts/exports.txt
           grep -Eq '[[:space:]]retro_run$' ayther-artifacts/exports.txt
+          grep -Eq '[[:space:]]ayther_get_interface$' ayther-artifacts/exports.txt
+          if grep -E '[[:space:]]ayther_' ayther-artifacts/exports.txt | \
+             grep -Ev '[[:space:]]ayther_get_interface$'; then
+            echo "unexpected additional AYTHER export" >&2
+            exit 1
+          fi
           if [[ "$SOUND_PROBE" == "1" ]]; then
             grep -Eq '[[:space:]]audio_probe_poll$' ayther-artifacts/exports.txt
             grep -Eq '[[:space:]]audio_probe_set_callback$' ayther-artifacts/exports.txt
@@ -99,7 +105,7 @@ jobs:
             exit 1
           fi
           "$CC" -O2 -Wall -Wextra -o ayther-artifacts/load_core tests/ci/load_core.c -ldl
-          required=(retro_init retro_run)
+          required=(retro_init retro_run ayther_get_interface)
           if [[ "$SOUND_PROBE" == "1" ]]; then
             required+=(
               audio_probe_poll
@@ -110,6 +116,14 @@ jobs:
             )
           fi
           ayther-artifacts/load_core "$(pwd)/genesis_plus_gx_libretro.so" "${required[@]}"
+          "$CC" -O2 -Wall -Wextra -Icore -o ayther-artifacts/verify_ayther_api \
+            tests/ci/verify_ayther_api.c -ldl
+          ayther-artifacts/verify_ayther_api \
+            "$(pwd)/genesis_plus_gx_libretro.so" --require
+          "$CC" -shared -fPIC -o ayther-artifacts/mock_stock_core.so \
+            tests/ci/mock_stock_core.c
+          ayther-artifacts/verify_ayther_api \
+            "$(pwd)/ayther-artifacts/mock_stock_core.so"
 
       - name: Preserve export diagnostics on failure
         if: failure()

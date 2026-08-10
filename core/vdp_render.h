@@ -43,6 +43,8 @@
 #ifndef _RENDER_H_
 #define _RENDER_H_
 
+#include "ayther/ayther_api.h"
+
 /* 3:3:2 RGB */
 #if defined(USE_8BPP_RENDERING)
 #define PIXEL(r,g,b) (((r) << 5) | ((g) << 2) | (b))
@@ -113,14 +115,16 @@ extern uint16 spr_col;
 extern uint8 ayther_layer_mask;
 extern uint8 ayther_layer_dim;             /* atenuar capas no-sprite al 25% (id 0x108) */
 /* Sprites realmente parseados por parse_satb en el frame (id 0x10B lista / 0x10C
-   contador, escribible=reset). Captura los reescritos in-place a mitad de frame. */
+   contador, escribible=reset legacy). La ABI v1 reinicia contador/overflow antes
+   de cada frame. Captura los reescritos in-place a mitad de frame. */
 /* 10 bytes. sat_idx = índice de ENTRADA del SAT (link>>2) — el MISMO espacio de
    índices que la máscara de supresión 0x103 (¡distinto del orden de la lista!).
    chain_pos = posición en la CADENA de links al parsear = prioridad real de dibujo
    del VDP entre sprites (menor = más al frente). */
-typedef struct { uint16 yr, xr, attr; uint8 w, h, sat_idx, chain_pos; } AytherSpr;
+typedef ayther_sprite_v1 AytherSpr;
 extern AytherSpr ayther_sprites[128];
 extern uint8 ayther_sprite_n;
+extern uint32 ayther_sprite_overflow;
 extern uint8 ayther_sprite_suppress[16];   /* slots SAT suprimidos (id 0x103) */
 extern uint8 ayther_tile_suppress[512];    /* celdas de tile suprimidas (id 0x104, 64x64) */
 extern uint8 ayther_plane_tile_suppress[3 * 1024]; /* tiles de plano suprimidos (id 0x105) */
@@ -143,12 +147,8 @@ extern uint8 ayther_plane_suppress_active;  /* id 0x106: 1 = hay algún tile de 
    (bits AYTHER_LAYER_*; 0 = mantener la máscara vigente). Recomponer una capa
    sola = el oráculo CPU del pipeline indexado. */
 #define AYTHER_RC_LAYER_MASK(m) (((unsigned int)(m) & 0xFFu) << 24)
-/* dllexport explícito: el build libretro marca sus exports (RETRO_API), así
-   que lld NO auto-exporta los globals sin marcar — sin esto el símbolo queda
-   fuera de la tabla de exports y GetProcAddress devuelve NULL. */
-#if defined(_WIN32)
-__declspec(dllexport)
-#endif
+/* Función interna. La ABI pública la expone mediante el function pointer
+   recompose_frame; no se agrega un segundo símbolo AYTHER al DLL/so. */
 extern int ayther_recompose_frame(uint16 *out, int cap, unsigned int flags,
                                   int *out_w, int *out_h);
 

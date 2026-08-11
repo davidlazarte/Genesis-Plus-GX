@@ -17,13 +17,20 @@ cd tests
 make check
 ```
 
-Expected output:
+Expected unit output includes:
 
 ```
-audio_probe unit tests: 49 passed, 0 failed
+audio_probe unit tests: 64 passed, 0 failed
+audio_probe concurrency tests: 10 passed, 0 failed; events=3000000
+sprite capture unit tests: 13 passed, 0 failed
 ```
 
 `make check` exits non-zero if any check fails (CI-friendly).
+
+`test_sprite_capture.c` separately validates issue #10's generation-tagged
+hash: exact duplicate removal, complete identity fields, deterministic order,
+mid-frame rewrites of one SAT slot, 10-bit interlace Y coordinates, overflow
+and frame isolation. Production builds compile out its metrics counters.
 
 ## AYTHER ABI v1
 
@@ -45,6 +52,42 @@ On a mismatch, the actual trace summary remains in
 `tests/artifacts/audio_probe_trace.actual.json` so CI can publish it as a
 diagnostic artifact.
 
+## Full-core deterministic replay
+
+`ayther/full_core_replay.c` loads the real libretro DLL/so and runs a generated
+64 KiB Mega Drive ROM. The generator emits only repository-owned bytes and
+exercises CRAM raster writes, per-line plane scroll, a 24-sprite pressure band
+with a scanline-time SAT attribute rewrite, and recurring PSG/YM2612 traffic.
+The frontend supplies a fixed input/config
+stream, captures an initial savestate, and executes one reference plus two
+independent restore/replay passes.
+
+Every frame hashes visible RGB565 pixels, stereo samples, zero-initialized
+serialized state, canonical audio telemetry, input and configuration. It also
+compares ABI v1 recomposition with the emitted frame and records fallback
+reasons, parsed sprites and audio writes. Run it after building a probe-enabled
+core:
+
+```sh
+make -f Makefile.libretro platform=unix SOUND_PROBE=1 -j2
+make -C tests check-full-core CORE=../genesis_plus_gx_libretro.so
+```
+
+The x64 golden summary is `ayther/golden/full_core_replay-x64.json`. Video,
+audio, serialized state, telemetry, input, configuration and replay hashes are
+byte-identical on Linux x64 and Windows x64 MSVCRT. The actual summary,
+per-frame JSONL trace, first-frame savestate diagnostic and p50/p95/p99 frame
+benchmark remain in `tests/artifacts/`; CI uploads them even when the golden or
+replay differs.
+
+The same harness begins with every subscription idle, verifies that sprite,
+raster and audio capture remain empty, activates the supported mask at the next
+frame boundary, then replays both modes from one checkpoint. Video, audio and
+serialized state must stay byte-identical. `--compare-profiles` alternates an
+extensions-off and a standard-idle binary for seven rounds and fails if their
+paired median overhead reaches 1%; see
+[`docs/ayther_subscriptions.md`](../docs/ayther_subscriptions.md).
+
 ## Raster fallback guard
 
 `test_raster_guard.c` validates issue #5's stable reason bits and centralized
@@ -56,7 +99,7 @@ compatibility. The production 68K, Z80 and DMA paths all feed these same rules.
 
 | Area | Checks |
 |------|--------|
-| Lifecycle | reset clears the buffer |
+| Lifecycle | core reset preserves already-published SPSC events |
 | Raw events | source/type/reg/data/schema/timestamp round-trip |
 | Timeline | frame markers advance `t_frame` and accumulate `t_global` |
 | Voice decode | TL/AR/DR/SR/RR/MUL/DT, algorithm, feedback, pan, fms, block_fnum from the register shadow |
@@ -64,10 +107,11 @@ compatibility. The production 68K, Z80 and DMA paths all feed these same rules.
 | Notes | NOTE_ON on key-on, NOTE_OFF on key-off |
 | DAC | start/stop on channel 6 |
 | PSG | raw write source/data/time |
-| Gain | set/get, negative clamps to 0, out-of-range ignored |
-| Grouping | coincidence window groups near events, splits far ones |
-| Ring buffer | overflow drops cleanly, keeps capacity-1 |
-| Callback | bypasses the ring buffer |
+| Gain | atomic set/get, negative clamps to 0, out-of-range ignored |
+| Grouping | only NOTE_ON/DAC_START anchor a fixed first-anchor window; RAW stays at group 0 |
+| Ring buffer | acquire/release publication, wrap-around, exact overflow, capacity/pending/high-water stats |
+| Concurrency | three million events across one producer/consumer plus callback reconfiguration |
+| Callback | coherent callback/user pair, explicit active-mode statistic |
 | Context | reflects ROM checksum / region / clock / cycles-per-frame |
 | Determinism | canonical event trace matches the versioned golden digest |
 | Raster guard | REG/VRAM/CRAM/VSRAM/HSCROLL/DMA/mode reason classification |
@@ -80,13 +124,17 @@ tests/
 ├── README.md
 ├── ayther/
 │   ├── audio_probe_trace.c
+│   ├── generated_rom.c/.h
+│   ├── full_core_replay.c
 │   ├── raster_rom_probe.c
-│   └── golden/audio_probe_trace.json
+│   └── golden/{audio_probe_trace,full_core_replay-x64}.json
 ├── ci/verify_ayther_api.c # dynamic ABI/symbol verifier
 ├── stub/
 │   └── shared.h        # minimal emulator stand-in for isolated builds
 ├── test_audio_probe.c  # audio probe unit runner
+├── test_audio_probe_concurrency.c # SPSC/callback stress runner
 ├── test_ayther_api.c    # public ABI layout/constant runner
+├── test_sprite_capture.c # fixed-hash identity/overflow runner
 └── test_raster_guard.c # raster fallback reason unit runner
 ```
 

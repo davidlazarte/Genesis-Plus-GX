@@ -6,6 +6,12 @@ param(
     [ValidateSet(0, 1)]
     [int]$SoundProbe,
 
+    [ValidateSet(0, 1)]
+    [int]$AytherExtensions = 1,
+
+    [ValidateSet(0, 1)]
+    [int]$LegacyProfile = 0,
+
     [string]$Compiler = 'clang',
     [string]$ArtifactDirectory = 'ayther-artifacts'
 )
@@ -40,15 +46,20 @@ if ($LASTEXITCODE -ne 0) {
 }
 $exports | Set-Content -Encoding utf8 (Join-Path $artifactRoot 'exports.txt')
 
-$requiredExports = @('retro_init', 'retro_run', 'ayther_get_interface')
+$requiredExports = @('retro_init', 'retro_run')
 $probeExports = @(
     'audio_probe_poll',
     'audio_probe_set_callback',
+    'audio_probe_get_transport_stats',
+    'audio_probe_reset_transport_stats',
     'audio_probe_get_context',
     'audio_probe_set_channel_gain',
     'audio_probe_get_channel_gain'
 )
-if ($SoundProbe -eq 1) {
+if ($AytherExtensions -eq 1) {
+    $requiredExports += 'ayther_get_interface'
+}
+if ($AytherExtensions -eq 1 -and $SoundProbe -eq 1) {
     $requiredExports += $probeExports
 }
 
@@ -57,10 +68,16 @@ foreach ($symbol in $requiredExports) {
         throw "Missing PE export: $symbol"
     }
 }
-if ($exports -match '(?m)^\s*Name: ayther_(?!get_interface\s*$)') {
+if ($AytherExtensions -eq 1 -and
+    $exports -match '(?m)^\s*Name: ayther_(?!get_interface\s*$)') {
     throw 'An unexpected additional AYTHER entry point was exported.'
 }
-if ($SoundProbe -eq 0 -and $exports -match '(?m)^\s*Name: audio_probe_') {
+if ($AytherExtensions -eq 0 -and
+    ($symbols -match '(?m)\bayther_' -or $symbols -match '(?m)\baudio_probe_')) {
+    throw 'AYTHER implementation symbols or buffers leaked from the extensions-off build.'
+}
+if (($AytherExtensions -eq 0 -or $SoundProbe -eq 0) -and
+    $exports -match '(?m)^\s*Name: audio_probe_') {
     throw 'audio_probe symbols leaked from the feature-off build.'
 }
 
@@ -85,7 +102,15 @@ if ($LASTEXITCODE -ne 0) {
     throw 'Failed to build the AYTHER ABI verifier.'
 }
 
-& $abiVerifier $dll --require
+if ($AytherExtensions -eq 1) {
+    $abiArguments = @($dll, '--require')
+    if ($LegacyProfile -eq 1) {
+        $abiArguments += '--legacy'
+    }
+    & $abiVerifier @abiArguments
+} else {
+    & $abiVerifier $dll
+}
 if ($LASTEXITCODE -ne 0) {
     throw 'The AYTHER ABI negotiation/compatibility verification failed.'
 }

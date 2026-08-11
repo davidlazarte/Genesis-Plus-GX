@@ -11,37 +11,69 @@ LDFLAGS     ?=
 
 COMMON_CPPFLAGS := -DSOUND_PROBE -Istub -I$(CORE_DIR)/core/debug
 PROBE_SRC       := $(CORE_DIR)/core/debug/audio_probe.c
-PROBE_HEADERS   := stub/shared.h $(CORE_DIR)/core/debug/audio_probe.h
+PROBE_HEADERS   := stub/shared.h $(CORE_DIR)/core/debug/audio_probe.h \
+	$(CORE_DIR)/core/debug/audio_probe_atomic.h \
+	$(CORE_DIR)/core/ayther/ayther_api.h
+SPRITE_CAPTURE_SRC := $(CORE_DIR)/core/ayther/ayther_sprite_capture.c
+SPRITE_CAPTURE_HEADERS := $(CORE_DIR)/core/ayther/ayther_sprite_capture.h \
+	$(CORE_DIR)/core/ayther/ayther_api.h
 
 ifeq ($(OS),Windows_NT)
 EXE_EXT := .exe
+THREAD_FLAGS :=
 define make_dir
 	@if not exist "$(subst /,\,$1)" mkdir "$(subst /,\,$1)"
 endef
 define remove_build_dir
 	@if exist "$(subst /,\,$1)" rmdir /S /Q "$(subst /,\,$1)"
 endef
+define require_core
+	@if "$(CORE)"=="" (echo CORE=path-to-libretro-core is required 1>&2 & exit /B 2)
+endef
+define require_profile_cores
+	@if "$(PROFILE_OFF_CORE)"=="" (echo PROFILE_OFF_CORE is required 1>&2 & exit /B 2)
+	@if "$(PROFILE_IDLE_CORE)"=="" (echo PROFILE_IDLE_CORE is required 1>&2 & exit /B 2)
+endef
 else
 EXE_EXT :=
+THREAD_FLAGS := -pthread
 define make_dir
 	@mkdir -p "$1"
 endef
 define remove_build_dir
 	@rm -rf -- "$1"
 endef
+define require_core
+	@test -n "$(CORE)" || (echo "CORE=/path/to/libretro core is required" >&2; exit 2)
+endef
+define require_profile_cores
+	@test -n "$(PROFILE_OFF_CORE)" || (echo "PROFILE_OFF_CORE is required" >&2; exit 2)
+	@test -n "$(PROFILE_IDLE_CORE)" || (echo "PROFILE_IDLE_CORE is required" >&2; exit 2)
+endef
 endif
 
 UNIT_BIN  := $(BUILD_DIR)/test_audio_probe$(EXE_EXT)
+CONCURRENCY_BIN := $(BUILD_DIR)/test_audio_probe_concurrency$(EXE_EXT)
 API_BIN := $(BUILD_DIR)/test_ayther_api$(EXE_EXT)
 RASTER_BIN := $(BUILD_DIR)/test_raster_guard$(EXE_EXT)
+SPRITE_CAPTURE_BIN := $(BUILD_DIR)/test_sprite_capture$(EXE_EXT)
 ROM_PROBE_BIN := $(BUILD_DIR)/raster_rom_probe$(EXE_EXT)
+FULL_CORE_BIN := $(BUILD_DIR)/full_core_replay$(EXE_EXT)
 TRACE_BIN := $(BUILD_DIR)/audio_probe_trace$(EXE_EXT)
 TRACE_GOLDEN := ayther/golden/audio_probe_trace.json
 TRACE_ACTUAL := $(ARTIFACT_DIR)/audio_probe_trace.actual.json
+FULL_CORE_GOLDEN := ayther/golden/full_core_replay-x64.json
+FULL_CORE_ACTUAL := $(ARTIFACT_DIR)/full_core_replay.actual.json
+FULL_CORE_REPORT := $(ARTIFACT_DIR)/full_core_replay.frames.jsonl
+FULL_CORE_BENCHMARK := $(ARTIFACT_DIR)/full_core_benchmark.json
+PROFILE_COMPARISON := $(ARTIFACT_DIR)/feature_gate_profiles.json
 
-.PHONY: all check check-unit check-determinism raster-rom-probe clean
+.PHONY: all check check-unit check-concurrency check-determinism \
+	check-full-core check-profile-comparison raster-rom-probe \
+	full-core-replay clean
 
-all: $(UNIT_BIN) $(API_BIN) $(RASTER_BIN) $(TRACE_BIN)
+all: $(UNIT_BIN) $(CONCURRENCY_BIN) $(API_BIN) $(RASTER_BIN) \
+	$(SPRITE_CAPTURE_BIN) $(TRACE_BIN)
 
 $(BUILD_DIR):
 	$(call make_dir,$@)
@@ -52,11 +84,21 @@ $(ARTIFACT_DIR):
 $(UNIT_BIN): test_audio_probe.c $(PROBE_SRC) $(PROBE_HEADERS) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(COMMON_CPPFLAGS) -o $@ test_audio_probe.c $(PROBE_SRC) $(LDFLAGS)
 
+$(CONCURRENCY_BIN): test_audio_probe_concurrency.c $(PROBE_SRC) $(PROBE_HEADERS) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) $(COMMON_CPPFLAGS) -DAUDIO_PROBE_RING_SIZE=64 \
+		-o $@ test_audio_probe_concurrency.c $(PROBE_SRC) $(LDFLAGS) $(THREAD_FLAGS)
+
 $(API_BIN): test_ayther_api.c $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core -o $@ test_ayther_api.c $(LDFLAGS)
 
 $(RASTER_BIN): test_raster_guard.c $(CORE_DIR)/core/ayther_raster.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core -o $@ test_raster_guard.c $(LDFLAGS)
+
+$(SPRITE_CAPTURE_BIN): test_sprite_capture.c $(SPRITE_CAPTURE_SRC) \
+		$(SPRITE_CAPTURE_HEADERS) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -DAYTHER_SPRITE_CAPTURE_METRICS \
+		-I$(CORE_DIR)/core -o $@ test_sprite_capture.c \
+		$(SPRITE_CAPTURE_SRC) $(LDFLAGS)
 
 ifeq ($(OS),Windows_NT)
 ROM_PROBE_LIBS :=
@@ -69,15 +111,40 @@ $(ROM_PROBE_BIN): ayther/raster_rom_probe.c | $(BUILD_DIR)
 
 raster-rom-probe: $(ROM_PROBE_BIN)
 
+$(FULL_CORE_BIN): ayther/full_core_replay.c ayther/generated_rom.c \
+		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core \
+		-I$(CORE_DIR)/libretro/libretro-common/include -Iayther \
+		-o $@ ayther/full_core_replay.c ayther/generated_rom.c \
+		$(LDFLAGS) $(ROM_PROBE_LIBS)
+
+full-core-replay: $(FULL_CORE_BIN)
+
+check-full-core: $(FULL_CORE_BIN) | $(ARTIFACT_DIR)
+	$(call require_core)
+	$(FULL_CORE_BIN) "$(CORE)" $(FULL_CORE_GOLDEN) $(FULL_CORE_ACTUAL) \
+		$(FULL_CORE_REPORT) $(FULL_CORE_BENCHMARK)
+
+check-profile-comparison: $(FULL_CORE_BIN) | $(ARTIFACT_DIR)
+	$(call require_profile_cores)
+	$(FULL_CORE_BIN) --compare-profiles "$(PROFILE_OFF_CORE)" \
+		"$(PROFILE_IDLE_CORE)" $(PROFILE_COMPARISON)
+
 $(TRACE_BIN): ayther/audio_probe_trace.c $(PROBE_SRC) $(PROBE_HEADERS) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(COMMON_CPPFLAGS) -o $@ ayther/audio_probe_trace.c $(PROBE_SRC) $(LDFLAGS)
 
 check: check-unit check-determinism
 
-check-unit: $(UNIT_BIN) $(API_BIN) $(RASTER_BIN) $(ROM_PROBE_BIN)
+check-unit: $(UNIT_BIN) $(CONCURRENCY_BIN) $(API_BIN) $(RASTER_BIN) \
+		$(SPRITE_CAPTURE_BIN) $(ROM_PROBE_BIN)
 	$(UNIT_BIN)
+	$(CONCURRENCY_BIN)
 	$(API_BIN)
 	$(RASTER_BIN)
+	$(SPRITE_CAPTURE_BIN)
+
+check-concurrency: $(CONCURRENCY_BIN)
+	$(CONCURRENCY_BIN)
 
 check-determinism: $(TRACE_BIN) | $(ARTIFACT_DIR)
 	$(TRACE_BIN) $(TRACE_GOLDEN) $(TRACE_ACTUAL)

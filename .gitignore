@@ -1,6 +1,6 @@
 .vs/
 .idea/
-Debug/
+/Debug/
 Release/
 
 psp2/*.o
@@ -25,5 +25,8 @@ sdl/build_sdl2
 /tests/test_audio_probe
 /tests/.build/
 /tests/artifacts/
+/tests/.build-*/
+/tests/artifacts-*/
 /bench/.build/
 /bench/artifacts/
+/ayther-artifacts/

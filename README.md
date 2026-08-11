@@ -40,6 +40,8 @@ Detalle técnico completo de cada id en
 [docs/genesis_plus_gx_libretro.md](docs/genesis_plus_gx_libretro.md).
 El contrato recomendado para integraciones nuevas está en
 [docs/ayther_abi_v1.md](docs/ayther_abi_v1.md).
+Los perfiles de compilación y el protocolo de suscripciones por frame están en
+[docs/ayther_subscriptions.md](docs/ayther_subscriptions.md).
 
 **Ids privados legacy**: `0x100`–`0x10E` no son estándar de libretro (la convención
 reserva ≥`0x100` para usos no estandarizados). El Lab de AYTHER los consume vía
@@ -106,6 +108,13 @@ La DLL no se versiona (BYOC). Con un toolchain **llvm-mingw de runtime MSVCRT**
 make -f Makefile.libretro platform=win64 -j8
 ```
 
+Ese comando produce el perfil estándar: ABI compilada pero sin trabajo AYTHER
+hasta que el frontend solicite suscripciones. Para una DLL sin ABI ni buffers
+AYTHER usar `AYTHER_EXTENSIONS=0 SOUND_PROBE=0`; para consumidores antiguos que
+todavía no suscriben usar `AYTHER_LEGACY_PROFILE=1`. Los cambios de máscara se
+activan juntos al inicio del siguiente frame y el replay de CI exige menos de
+1% de overhead para el perfil compilado-idle frente al build sin extensiones.
+
 Un build UCRT crashea en `retro_load_game` (STATUS_STACK_BUFFER_OVERRUN); el
 MSVCRT es bit-idéntico al DLL stock en emulación. La DLL resultante se despliega
 en AYTHER como `third_party/cores/genesis_plus_gx_libretro_vram.dll`.
@@ -130,13 +139,20 @@ secuencie y sustituya audio. Detrás del flag `SOUND_PROBE` (**costo cero**
 cuando está apagado, igual que `HOOK_CPU`):
 
 - **Eventos** FM (cores MAME y Nuked), PSG y DAC con línea de tiempo monótona,
-  vía callback o ring buffer.
+  vía callback o ring SPSC thread-safe con overflow y high-water observables.
 - **Estado de voz resuelto** + huella canónica **independiente de canal**.
 - **Gain por canal** para sustituir audio.
-- API exportada desde el `.so` (`audio_probe_*`) con `SOUND_PROBE=1`.
+- API versionada por `ayther_get_interface` y exports legacy `audio_probe_*`
+  sólo con `SOUND_PROBE=1`.
 
 Diseño e integración: [`docs/audio_probe.md`](docs/audio_probe.md) · pruebas:
 [`tests/`](tests/) (`cd tests && make check`).
+
+La CI AYTHER también ejecuta un ROM homebrew generado en memoria contra el core
+completo: tres pasadas separadas por restore verifican hashes de video, audio,
+savestate, inputs y telemetría, además de `false_clean=0`. El mismo fixture
+publica tiempos por frame p50/p95/p99 y diagnóstico JSONL reproducible; detalles
+en [`tests/ayther/`](tests/ayther/) y [`bench/`](bench/).
 
 ---
 

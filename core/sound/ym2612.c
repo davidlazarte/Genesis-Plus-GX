@@ -2057,6 +2057,20 @@ AYTHER_YM_INLINE void ym2612_update_impl(int *buffer, int length,
   refresh_fc_eg_chan(&ym2612.CH[4]);
   refresh_fc_eg_chan(&ym2612.CH[5]);
 
+#ifdef SOUND_PROBE
+  int fm_gain[6] = {100, 100, 100, 100, 100, 100};
+  if (ayther_audio_controls)
+  {
+    int ch;
+    for (ch = 0; ch < 6; ch++)
+    {
+      fm_gain[ch] = ((ch == 5) && ym2612.dacen)
+        ? audio_probe_get_channel_gain(AP_SRC_DAC, 5)
+        : audio_probe_get_channel_gain(AP_SRC_FM, ch);
+    }
+  }
+#endif
+
   /* buffering */
   for(i=0; i<length; i++)
   {
@@ -2149,14 +2163,12 @@ AYTHER_YM_INLINE void ym2612_update_impl(int *buffer, int length,
        reports as the DAC source while DAC mode is active */
     if (ayther_audio_controls)
     {
-      int ch, g;
-      for (ch = 0; ch < 6; ch++)
-      {
-        g = ((ch == 5) && ym2612.dacen)
-          ? audio_probe_get_channel_gain(AP_SRC_DAC, 5)
-          : audio_probe_get_channel_gain(AP_SRC_FM, ch);
-        if (g < 100) out_fm[ch] = (out_fm[ch] * g) / 100;
-      }
+      if (fm_gain[0] < 100) out_fm[0] = (out_fm[0] * fm_gain[0]) / 100;
+      if (fm_gain[1] < 100) out_fm[1] = (out_fm[1] * fm_gain[1]) / 100;
+      if (fm_gain[2] < 100) out_fm[2] = (out_fm[2] * fm_gain[2]) / 100;
+      if (fm_gain[3] < 100) out_fm[3] = (out_fm[3] * fm_gain[3]) / 100;
+      if (fm_gain[4] < 100) out_fm[4] = (out_fm[4] * fm_gain[4]) / 100;
+      if (fm_gain[5] < 100) out_fm[5] = (out_fm[5] * fm_gain[5]) / 100;
     }
 #endif
 

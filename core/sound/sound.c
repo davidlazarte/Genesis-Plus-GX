@@ -43,34 +43,8 @@
 int8 audio_hard_disable = 0;
 
 #ifdef AYTHER_EXTENSIONS
-/* AYTHER fork delta: log por-frame de escrituras crudas a los chips de sonido.
-   Ver sound.h. La capa libretro reinicia el contador antes de cada frame; los
-   frontends legacy todavía pueden escribir 0x10A=0 sin alterar el contrato. Si
-   se desborda el tope, las escrituras extra se descartan y la ABI v1 expone un
-   flag de overflow explícito. */
-AytherAudioWrite ayther_audio_writes[AYTHER_AUDIO_WRITE_CAP];
-uint32 ayther_audio_write_n = 0;
-uint32 ayther_audio_write_overflow = 0;
-
 /* AYTHER fork delta: máscara de mute por canal (ver sound.h). 0 = todo suena. */
 uint16 ayther_audio_mute = 0;
-
-void ayther_record_audio_write_observed(uint8 chip, uint16 addr, uint8 data,
-                                        uint32 cycle)
-{
-  if (ayther_audio_write_n < AYTHER_AUDIO_WRITE_CAP)
-  {
-    AytherAudioWrite *w = &ayther_audio_writes[ayther_audio_write_n++];
-    w->cycle = cycle;
-    w->addr  = addr;
-    w->data  = data;
-    w->chip  = chip;
-  }
-  else
-  {
-    ayther_audio_write_overflow = 1;
-  }
-}
 #endif
 
 /* YM2612 internal clock = input clock / 6 = (master clock / 7) / 6 */
@@ -170,7 +144,7 @@ static void YM2612_Write(unsigned int cycles, unsigned int a, unsigned int v)
   /* AYTHER fork delta: registrar la escritura cruda al bus FM (orden temporal).
      Loguea address-port (a=0/2) y data-port (a=1/3); el host replica el latch de
      dirección de YM2612Write para reconstruir el registro (p.ej. 0x28 key-on). */
-  ayther_record_audio_write(AYTHER_AUDIO_CHIP_FM, (uint16)(a & 3), (uint8)(v & 0xff), cycles);
+  // ayther_record_audio_write removed
 
   /* write FM register */
   YM2612Write(a, v);
@@ -266,7 +240,7 @@ static void YM3438_Write(unsigned int cycles, unsigned int a, unsigned int v)
   fm_update(cycles);
 
   /* AYTHER fork delta: registrar la escritura cruda al bus FM (core enhanced). */
-  ayther_record_audio_write(AYTHER_AUDIO_CHIP_FM, (uint16)(a & 3), (uint8)(v & 0xff), cycles);
+  // ayther_record_audio_write removed
 
   /* write FM register */
   OPN2_Write(&ym3438, a, v);

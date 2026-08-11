@@ -219,11 +219,17 @@ typedef struct ayther_audio_event_v1
   uint8_t channel;
   uint8_t schema;
   uint32_t group;
-  uint32_t reg;
-  uint32_t data;
-  ayther_audio_voice_v1 voice;
-  uint64_t voice_hash;
-  uint64_t timbre_hash;
+  union {
+    struct {
+      uint32_t reg;
+      uint32_t data;
+    };
+    struct {
+      ayther_audio_voice_v1 voice;
+      uint64_t voice_hash;
+      uint64_t timbre_hash;
+    };
+  };
 } ayther_audio_event_v1;
 
 #define AYTHER_AUDIO_TRANSPORT_CALLBACK_ACTIVE (UINT32_C(1) << 0)

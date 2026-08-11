@@ -80,12 +80,7 @@ typedef ayther_audio_write_v1 AytherAudioWrite;
 extern AytherAudioWrite ayther_audio_writes[AYTHER_AUDIO_WRITE_CAP];
 extern uint32 ayther_audio_write_n;
 extern uint32 ayther_audio_write_overflow;
-extern void ayther_record_audio_write_observed(uint8 chip, uint16 addr,
-                                               uint8 data, uint32 cycle);
-#define ayther_record_audio_write(chip, addr, data, cycle) do { \
-  if (AYTHER_SUBSCRIBED(AYTHER_SUB_AUDIO_WRITES)) \
-    ayther_record_audio_write_observed((chip), (addr), (data), (cycle)); \
-} while (0)
+
 
 /* ----------------------------------------------------------------------------
  * AYTHER fork delta: máscara de SILENCIADO POR CANAL (2 bytes, ESCRIBIBLE desde
@@ -107,7 +102,7 @@ extern uint16 ayther_audio_mute;
 
 #else
 
-#define ayther_record_audio_write(chip, addr, data, cycle) ((void)0)
+
 #define AYTHER_FM_MUTED(ch) 0
 #define AYTHER_PSG_MUTED(ch) 0
 

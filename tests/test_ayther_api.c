@@ -30,11 +30,11 @@ int main(void)
         "audio voice v1 is exactly 40 bytes");
   CHECK(offsetof(ayther_audio_voice_v1, block_fnum) == 36,
         "audio voice pitch offset is frozen");
-  CHECK(sizeof(ayther_audio_event_v1) == 88,
-        "audio event v1 is exactly 88 bytes");
+  CHECK(sizeof(ayther_audio_event_v1) == 80,
+        "audio event v1 is exactly 80 bytes");
   CHECK(offsetof(ayther_audio_event_v1, group) == 20,
         "audio event group offset is frozen");
-  CHECK(offsetof(ayther_audio_event_v1, voice) == 32,
+  CHECK(offsetof(ayther_audio_event_v1, voice) == 24,
         "audio event voice offset is frozen");
   CHECK(sizeof(ayther_audio_transport_stats_v1) == 32,
         "audio transport stats v1 is exactly 32 bytes");

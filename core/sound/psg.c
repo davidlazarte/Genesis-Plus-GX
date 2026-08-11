@@ -267,7 +267,7 @@ void psg_write(unsigned int clocks, unsigned int data)
   /* AYTHER fork delta: registrar la escritura cruda al PSG (byte ORIGINAL, antes
      de que el switch de abajo recalcule `data`). El protocolo de latch (bit 7 =
      latch de registro, si no dato al registro latcheado) lo replica el host. */
-  ayther_record_audio_write(AYTHER_AUDIO_CHIP_PSG, 0, (uint8)(data & 0xff), clocks);
+  // ayther_record_audio_write removed
 
   /* PSG chip synchronization */
   if (clocks > psg.clocks)

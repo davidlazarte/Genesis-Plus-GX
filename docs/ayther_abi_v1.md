@@ -42,7 +42,7 @@ library is unloaded. It reports:
   snapshots, recomposition and the optional audio event transport.
 
 The v1 layout is frozen at 10 bytes for `ayther_sprite_v1`, 8 bytes for
-`ayther_audio_write_v1`, 40 bytes for `ayther_audio_voice_v1`, 88 bytes for
+`ayther_audio_write_v1`, 40 bytes for `ayther_audio_voice_v1`, 80 bytes for
 `ayther_audio_event_v1`, and 32 bytes for
 `ayther_audio_transport_stats_v1` and `ayther_subscription_state_v1`.
 Compile-time assertions verify the public layouts and their internal aliases.

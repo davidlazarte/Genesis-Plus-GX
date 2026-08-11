@@ -45,6 +45,12 @@
 #include "audio_probe.h"
 #include "audio_probe_atomic.h"
 
+#ifdef AYTHER_EXTENSIONS
+AytherAudioWrite ayther_audio_writes[AYTHER_AUDIO_WRITE_CAP];
+uint32 ayther_audio_write_n = 0;
+uint32 ayther_audio_write_overflow = 0;
+#endif
+
 /* Registered inline consumer. The enabled fast-path flag avoids taking the
    configuration lock in the normal polling mode. The lock protects the
    callback/user pair and remains held during invocation so user data cannot be
@@ -255,6 +261,24 @@ static void ap_emit(ap_event_t *ev)
   ev->t_frame  = s_frame;
   ev->t_cycles = s_cycles;
   ev->group    = ap_is_group_anchor(ev->type) ? ap_group(ev->t_global) : 0;
+
+#ifdef AYTHER_EXTENSIONS
+  if (ev->type == AP_EV_RAW_WRITE && AYTHER_SUBSCRIBED(AYTHER_SUB_AUDIO_WRITES))
+  {
+    if (ayther_audio_write_n < AYTHER_AUDIO_WRITE_CAP)
+    {
+      AytherAudioWrite *w = &ayther_audio_writes[ayther_audio_write_n++];
+      w->cycle = ev->t_cycles;
+      w->addr  = ev->reg;
+      w->data  = ev->data;
+      w->chip  = (ev->source == AP_SRC_PSG) ? AYTHER_AUDIO_CHIP_PSG : AYTHER_AUDIO_CHIP_FM;
+    }
+    else
+    {
+      ayther_audio_write_overflow = 1;
+    }
+  }
+#endif
 
   if (ap_atomic_load_acquire(&s_callback_enabled))
   {

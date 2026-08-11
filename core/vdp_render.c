@@ -5829,6 +5829,11 @@ int ayther_core_recompose_multilayer(
   int    l, w, h, vs, ste, sh_rebuilt;
   void (*rbg)(int);
   void (*robj)(int);
+  
+  uint16 s_cram[64];
+  uint8 s_regs[0x20];
+  uint8 s_vsram[0x80];
+  uint8 s_hscroll_table[1024];
 
   w = bitmap.viewport.w;
   h = bitmap.viewport.h;
@@ -5892,8 +5897,50 @@ int ayther_core_recompose_multilayer(
 
   parse_satb_m5(-1);
 
+  memcpy(s_cram, cram, sizeof(cram));
+  memcpy(s_regs, reg, sizeof(reg));
+  memcpy(s_vsram, vsram, sizeof(vsram));
+  memcpy(s_hscroll_table, &vram[hscb], 1024);
+
   for (l = 0; l < h; l++)
   {
+    if (ayther_raster_journal_count > 0)
+    {
+      int ev_idx;
+      for (ev_idx = 0; ev_idx < ayther_raster_journal_count; ++ev_idx)
+      {
+        ayther_raster_event_t *ev = &ayther_raster_journal[ev_idx];
+        if (ev->v_counter == l)
+        {
+          if (ev->reason == AYTHER_RASTER_REASON_CRAM)
+          {
+            uint16 *p = (uint16 *)&cram[ev->address & 0x7E];
+            *p = ev->data;
+            int index = (ev->address >> 1) & 0x3F;
+            if (index & 0x0F) color_update_m5(index, ev->data);
+            if (index == border) color_update_m5(0x00, ev->data);
+          }
+          else if (ev->reason == AYTHER_RASTER_REASON_VSRAM)
+          {
+            uint16 *p = (uint16 *)&vsram[ev->address & 0x7E];
+            *p = ev->data;
+          }
+          else if (ev->reason == AYTHER_RASTER_REASON_REG)
+          {
+            reg[ev->address] = (uint8)ev->data;
+            if (ev->address == 13) hscb = (reg[13] & 0x3F) << 10;
+          }
+          else if (ev->reason == AYTHER_RASTER_REASON_HSCROLL)
+          {
+            vram[ev->address] = (uint8)ev->data;
+          }
+          else
+          {
+            ayther_raster_dirty |= ev->reason;
+          }
+        }
+      }
+    }
     if (reg[1] & 0x40)
     {
       if (out_bg_b)
@@ -5956,9 +6003,17 @@ int ayther_core_recompose_multilayer(
     }
   }
 
-  if (sh_rebuilt)
+  if (sh_rebuilt || ayther_raster_journal_count > 0)
   {
     int i;
+    if (ayther_raster_journal_count > 0)
+    {
+      memcpy(cram, s_cram, sizeof(cram));
+      memcpy(reg, s_regs, sizeof(reg));
+      memcpy(vsram, s_vsram, sizeof(vsram));
+      memcpy(&vram[hscb], s_hscroll_table, 1024);
+      hscb = (reg[13] & 0x3F) << 10;
+    }
     reg[12] = s_reg12;
     color_update_m5(0x00, *(uint16 *)&cram[(reg[7] & 0x3F) << 1]);
     for (i = 1; i < 0x40; i++)

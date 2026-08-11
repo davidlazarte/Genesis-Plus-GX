@@ -39,4 +39,18 @@
        ((from_dma) ? AYTHER_RASTER_REASON_DMA : 0u)) \
     : 0u))
 
+#ifndef __ASSEMBLER__
+#include <stdint.h>
+typedef struct {
+  uint16_t v_counter;
+  uint16_t reason; /* e.g. AYTHER_RASTER_REASON_CRAM */
+  uint16_t address;
+  uint16_t data;
+} ayther_raster_event_t;
+
+#define AYTHER_RASTER_JOURNAL_MAX 256
+extern ayther_raster_event_t ayther_raster_journal[AYTHER_RASTER_JOURNAL_MAX];
+extern int ayther_raster_journal_count;
+#endif
+
 #endif /* _AYTHER_RASTER_H_ */

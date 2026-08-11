@@ -54,6 +54,7 @@ typedef struct
   char product[14];             /* Product serial number */
   unsigned short checksum;      /* ROM Checksum (header) */
   unsigned short realchecksum;  /* ROM Checksum (calculated) */
+  unsigned int crc32;           /* ROM Checksum (crc32) */
   unsigned int romstart;        /* ROM start address */
   unsigned int romend;          /* ROM end address */
   char country[18];             /* Country flag */

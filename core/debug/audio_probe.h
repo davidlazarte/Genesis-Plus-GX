@@ -107,6 +107,7 @@ typedef ayther_audio_transport_stats_v1 ap_transport_stats_t;
 
 typedef struct {
   unsigned int  rom_crc;          /* ROM checksum (identity)              */
+  unsigned int  rom_crc32;        /* ROM crc32 */
   unsigned char region;           /* 0 = NTSC, 1 = PAL                    */
   unsigned int  system_hw;        /* SYSTEM_* hardware id                 */
   unsigned int  master_clock;     /* master clock in Hz                   */
@@ -154,6 +155,9 @@ void audio_probe_fm_raw(unsigned int reg, unsigned int data);
 void audio_probe_fm_key(int ch, unsigned int slot_mask);
 void audio_probe_fm_dac(int enabled);
 void audio_probe_psg_raw(unsigned int clocks, unsigned int data);
+void audio_probe_pcm_key(int ch, int on, unsigned int env, unsigned int pan, unsigned int fd);
+void audio_probe_pcm_volume(int ch, unsigned int env, unsigned int pan);
+void audio_probe_pcm_pitch(int ch, unsigned int fd);
 
 #ifdef __cplusplus
 }

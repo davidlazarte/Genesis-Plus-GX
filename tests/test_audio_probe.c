@@ -188,8 +188,10 @@ int main(void)
   audio_probe_reset();
   audio_probe_psg_raw(555, 0x9f);
   n = drain(scratch, 8);
-  CHECK(n == 1 && scratch[0].source == AP_SRC_PSG, "PSG raw source");
+  CHECK(n == 2 && scratch[0].source == AP_SRC_PSG, "PSG raw source");
+  CHECK(scratch[0].type == AP_EV_RAW_WRITE, "PSG raw write");
   CHECK(scratch[0].data == 0x9f && scratch[0].t_cycles == 555, "PSG raw data/time");
+  CHECK(scratch[1].type == AP_EV_VOLUME && scratch[1].data == 15, "PSG volume emitted");
 
   /* 9. per-channel gain set/get + clamping + range guard */
   audio_probe_reset();

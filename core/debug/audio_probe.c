@@ -88,6 +88,12 @@ static ap_atomic_u32 s_high_water_mark = 0;
    be decoded regardless of when the driver programmed the patch. */
 static unsigned char s_fm_regs[2][256];
 
+static unsigned char s_psg_latch_ch = 0;
+static unsigned char s_psg_latch_type = 0;
+static unsigned short s_psg_tone[4] = {0,0,0,0};
+static unsigned char s_psg_vol[4] = {15,15,15,15};
+static unsigned char s_psg_active[4] = {0,0,0,0};
+
 static void ap_lock(ap_atomic_u32 *lock)
 {
   unsigned int expected;
@@ -368,6 +374,7 @@ void audio_probe_get_context(ap_context_t *out)
 {
   if (!out) return;
   out->rom_crc          = (unsigned int)rominfo.realchecksum;
+  out->rom_crc32        = (unsigned int)rominfo.crc32;
   out->region           = vdp_pal ? 1 : 0;
   out->system_hw        = (unsigned int)system_hw;
   out->master_clock     = (unsigned int)system_clock;
@@ -419,6 +426,15 @@ void audio_probe_reset(void)
   s_have_anchor   = 0;
   s_group_seq     = 0;
   memset(s_fm_regs, 0, sizeof(s_fm_regs));
+  
+  memset(s_psg_tone, 0, sizeof(s_psg_tone));
+  for (int i=0; i<4; i++) {
+    s_psg_vol[i] = 15;
+    s_psg_active[i] = 0;
+  }
+  s_psg_latch_ch = 0;
+  s_psg_latch_type = 0;
+
   ap_init_gain();
 }
 
@@ -512,6 +528,9 @@ void audio_probe_fm_dac(int enabled)
 void audio_probe_psg_raw(unsigned int clocks, unsigned int data)
 {
   ap_event_t ev;
+  unsigned char ch, type, val;
+  int is_update = 0;
+
   if (!audio_probe_is_enabled()) return;
   s_cycles = clocks;
   memset(&ev, 0, sizeof(ev));
@@ -519,6 +538,105 @@ void audio_probe_psg_raw(unsigned int clocks, unsigned int data)
   ev.type    = AP_EV_RAW_WRITE;
   ev.channel = 0xff;
   ev.data    = data;
+  ap_emit(&ev);
+
+  if (data & 0x80) {
+    ch = (data >> 5) & 3;
+    type = (data >> 4) & 1;
+    s_psg_latch_ch = ch;
+    s_psg_latch_type = type;
+    val = data & 0x0F;
+    if (type == 0) {
+      s_psg_tone[ch] = (s_psg_tone[ch] & 0x3F0) | val;
+      is_update = 1;
+    } else {
+      s_psg_vol[ch] = val;
+      is_update = 1;
+    }
+  } else {
+    ch = s_psg_latch_ch;
+    type = s_psg_latch_type;
+    val = data & 0x3F;
+    if (type == 0) {
+      s_psg_tone[ch] = (s_psg_tone[ch] & 0x00F) | (val << 4);
+      is_update = 1;
+    } else {
+      s_psg_vol[ch] = val & 0x0F;
+      is_update = 1;
+    }
+  }
+
+  if (is_update) {
+    memset(&ev, 0, sizeof(ev));
+    ev.source  = AP_SRC_PSG;
+    ev.channel = ch;
+    if (type == 0) {
+      ev.type = AP_EV_PITCH;
+      ev.data = s_psg_tone[ch];
+      ap_emit(&ev);
+    } else {
+      ev.type = AP_EV_VOLUME;
+      ev.data = s_psg_vol[ch];
+      ap_emit(&ev);
+      
+      if (s_psg_vol[ch] == 15) {
+        if (s_psg_active[ch]) {
+          ev.type = AP_EV_NOTE_OFF;
+          ap_emit(&ev);
+          s_psg_active[ch] = 0;
+        }
+      } else {
+        if (!s_psg_active[ch]) {
+          ev.type = AP_EV_NOTE_ON;
+          ap_emit(&ev);
+          s_psg_active[ch] = 1;
+        }
+      }
+    }
+  }
+}
+
+void audio_probe_pcm_key(int ch, int on, unsigned int env, unsigned int pan, unsigned int fd)
+{
+  ap_event_t ev;
+  if (!audio_probe_is_enabled()) return;
+  memset(&ev, 0, sizeof(ev));
+  ev.source  = AP_SRC_PCM;
+  ev.channel = (unsigned char)ch;
+  if (on) {
+    ev.type = AP_EV_NOTE_ON;
+    ev.data = env;
+    ev.voice.op_mul[0] = fd & 0xFF;
+    ev.voice.op_mul[1] = (fd >> 8) & 0xFF;
+    ev.voice.pan = pan;
+  } else {
+    ev.type = AP_EV_NOTE_OFF;
+  }
+  ap_emit(&ev);
+}
+
+void audio_probe_pcm_volume(int ch, unsigned int env, unsigned int pan)
+{
+  ap_event_t ev;
+  if (!audio_probe_is_enabled()) return;
+  memset(&ev, 0, sizeof(ev));
+  ev.source  = AP_SRC_PCM;
+  ev.channel = (unsigned char)ch;
+  ev.type    = AP_EV_VOLUME;
+  ev.data    = env;
+  ev.voice.pan = pan;
+  ap_emit(&ev);
+}
+
+void audio_probe_pcm_pitch(int ch, unsigned int fd)
+{
+  ap_event_t ev;
+  if (!audio_probe_is_enabled()) return;
+  memset(&ev, 0, sizeof(ev));
+  ev.source  = AP_SRC_PCM;
+  ev.channel = (unsigned char)ch;
+  ev.type    = AP_EV_PITCH;
+  ev.data    = fd;
   ap_emit(&ev);
 }
 

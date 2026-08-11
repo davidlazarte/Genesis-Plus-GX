@@ -286,6 +286,7 @@ void getrominfo(char *romheader)
     rominfo.checksum =  (rominfo.checksum >> 8) | ((rominfo.checksum & 0xff) << 8);
 #endif
     rominfo.realchecksum = getchecksum(((uint8 *) cart.rom) + 0x200, cart.romsize - 0x200);
+    rominfo.crc32 = crc32(0, cart.rom, cart.romsize);
 
     /* Supported peripherals */
     rominfo.peripherals = 0;

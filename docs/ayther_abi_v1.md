@@ -113,6 +113,11 @@ size, access flags and the transition-era legacy ID.
 The public ABI treats emulated memory and frame counters as read-only. The
 legacy pointers preserve their historical mutability for the transition.
 
+## Recomposition and Delta Stream
+
+Recomposition capabilities (`ayther_recompose_frame` and `ayther_core_recompose_multilayer`) are exposed via function pointers in the interface. They allow rendering specific layers or frames with custom parameters (like ignoring sprite limits or layer masks) without mutating the core's deterministic state. This effectively acts as an oracle for the Delta Stream implementation, which uses these capabilities to isolate and stream partial frame updates (such as only sprites or a single plane) to the frontend, significantly accelerating network replication and state sync.
+
+
 ## Consistent frame snapshots
 
 The core owns per-frame reset of parsed-sprite/audio-write counters and their

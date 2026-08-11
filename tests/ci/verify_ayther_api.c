@@ -76,19 +76,33 @@ int main(int argc, char **argv)
   uint8_t invalid_layer_mask;
   uint8_t plane_bit;
   uint16_t invalid_audio_mute;
+  ayther_audio_transport_stats_v1 audio_stats;
+  ayther_subscription_state_v1 subscriptions;
+  uint32_t audio_event_count;
+  int has_legacy_audio_probe;
   int require_abi;
+  int legacy_profile;
   uint32_t region_id;
+  int argument;
 
-  if (argc < 2 || argc > 3)
+  if (argc < 2 || argc > 4)
   {
-    fprintf(stderr, "usage: %s LIBRARY [--require]\n", argv[0]);
+    fprintf(stderr, "usage: %s LIBRARY [--require] [--legacy]\n", argv[0]);
     return 2;
   }
-  require_abi = (argc == 3 && strcmp(argv[2], "--require") == 0);
-  if (argc == 3 && !require_abi)
+  require_abi = 0;
+  legacy_profile = 0;
+  for (argument = 2; argument < argc; ++argument)
   {
-    fprintf(stderr, "unknown option: %s\n", argv[2]);
-    return 2;
+    if (strcmp(argv[argument], "--require") == 0)
+      require_abi = 1;
+    else if (strcmp(argv[argument], "--legacy") == 0)
+      legacy_profile = 1;
+    else
+    {
+      fprintf(stderr, "unknown option: %s\n", argv[argument]);
+      return 2;
+    }
   }
 
   library = open_library(argv[1]);
@@ -111,6 +125,8 @@ int main(int argc, char **argv)
       load_symbol(library, "retro_get_memory_data");
   get_memory_size = (retro_get_memory_size_fn)(uintptr_t)
       load_symbol(library, "retro_get_memory_size");
+  has_legacy_audio_probe =
+      load_symbol(library, "audio_probe_poll") != NULL;
   CHECK(get_memory_data != NULL, "legacy data entry point is exported");
   CHECK(get_memory_size != NULL, "legacy size entry point is exported");
   if (!get_memory_data || !get_memory_size)
@@ -135,11 +151,12 @@ int main(int argc, char **argv)
       AYTHER_CAP_REGION_READ | AYTHER_CAP_CONTROL_WRITE |
       AYTHER_CAP_FRAME_SNAPSHOT | AYTHER_CAP_PARSED_SPRITES_V1 |
       AYTHER_CAP_AUDIO_WRITES_V1 | AYTHER_CAP_RASTER_FALLBACK_V1 |
-      AYTHER_CAP_RECOMPOSE_V1;
+      AYTHER_CAP_RECOMPOSE_V1 | AYTHER_CAP_SUBSCRIPTIONS_V1;
   CHECK(api->abi_version == AYTHER_ABI_VERSION_1_0,
         "descriptor reports ABI v1.0");
-  CHECK(api->struct_size >= offsetof(ayther_interface_v1, recompose_frame) +
-        sizeof(api->recompose_frame), "descriptor exposes every v1 function");
+  CHECK(api->struct_size >= offsetof(ayther_interface_v1,
+        set_subscriptions) + sizeof(api->set_subscriptions),
+        "descriptor exposes every v1 function");
   CHECK((api->capabilities & required_caps) == required_caps,
         "descriptor advertises every required v1 capability");
   CHECK(api->host_endianness == (uint32_t)host_endianness(),
@@ -152,11 +169,69 @@ int main(int argc, char **argv)
   CHECK(api->sprite_size == 10, "sprite layout is negotiated as 10 bytes");
   CHECK(api->audio_write_size == 8,
         "audio write layout is negotiated as 8 bytes");
+  CHECK(api->audio_event_size == sizeof(ayther_audio_event_v1),
+        "audio event layout size is negotiated");
+  CHECK(api->audio_transport_stats_size ==
+        sizeof(ayther_audio_transport_stats_v1),
+        "audio transport stats size is negotiated");
+  CHECK(api->subscription_state_size == sizeof(ayther_subscription_state_v1),
+        "subscription state size is negotiated");
   CHECK(api->build_id && api->build_id_size == strlen(api->build_id) &&
         api->build_id_size > 0, "build identifier has explicit length");
   CHECK(api->query_region && api->read_region && api->write_control &&
-        api->capture_snapshot && api->recompose_frame,
+        api->capture_snapshot && api->recompose_frame &&
+        api->poll_audio_events && api->get_audio_transport_stats &&
+        api->get_subscriptions && api->set_subscriptions,
         "all v1 function pointers are present");
+  CHECK(((api->capabilities & AYTHER_CAP_AUDIO_PROBE_V1) != 0) ==
+        has_legacy_audio_probe,
+        "audio probe capability follows the build-time feature gate");
+
+  memset(&subscriptions, 0, sizeof(subscriptions));
+  subscriptions.struct_size = sizeof(subscriptions);
+  CHECK(api->get_subscriptions(&subscriptions, sizeof(subscriptions)) ==
+        AYTHER_STATUS_OK, "subscription state can be queried");
+  CHECK(subscriptions.struct_size == sizeof(subscriptions) &&
+        subscriptions.state_version == 1,
+        "subscription state is self-describing");
+  CHECK(subscriptions.active_mask ==
+        (legacy_profile ? subscriptions.supported_mask : 0) &&
+        subscriptions.requested_mask == subscriptions.active_mask,
+        "build profile exposes its documented initial subscription state");
+  CHECK((subscriptions.supported_mask & AYTHER_SUB_ALL) ==
+        (has_legacy_audio_probe ? AYTHER_SUB_ALL :
+         (AYTHER_SUB_ALL & ~AYTHER_SUB_AUDIO_EVENTS)),
+        "supported subscriptions follow compile-time features");
+  CHECK(api->set_subscriptions(UINT32_C(0x80000000)) ==
+        AYTHER_STATUS_INVALID_ARGUMENT,
+        "unknown subscription bits are rejected");
+  {
+    uint32_t initial_active = subscriptions.active_mask;
+    uint32_t pending_mask = legacy_profile ? 0 : subscriptions.supported_mask;
+  CHECK(api->set_subscriptions(pending_mask) ==
+        AYTHER_STATUS_OK, "supported subscriptions can be requested");
+  CHECK(api->get_subscriptions(&subscriptions, sizeof(subscriptions)) ==
+        AYTHER_STATUS_OK && subscriptions.active_mask == initial_active &&
+        subscriptions.requested_mask == pending_mask,
+        "requested subscriptions remain pending until a frame boundary");
+  }
+
+  audio_event_count = UINT32_C(0xFFFFFFFF);
+  CHECK(api->poll_audio_events(NULL, 0, &audio_event_count) ==
+        (has_legacy_audio_probe ?
+         (legacy_profile ? AYTHER_STATUS_OK : AYTHER_STATUS_NOT_SUBSCRIBED) :
+         AYTHER_STATUS_UNSUPPORTED),
+        "audio event polling distinguishes availability from subscription");
+  CHECK(audio_event_count == 0,
+        "zero-capacity audio polling returns no events");
+  memset(&audio_stats, 0xA5, sizeof(audio_stats));
+  CHECK(api->get_audio_transport_stats(&audio_stats, sizeof(audio_stats)) ==
+        (has_legacy_audio_probe ? AYTHER_STATUS_OK : AYTHER_STATUS_UNSUPPORTED),
+        "audio transport stats report feature availability");
+  CHECK(audio_stats.struct_size == sizeof(audio_stats) &&
+        audio_stats.transport_version == 1 &&
+        audio_stats.event_size == sizeof(ayther_audio_event_v1),
+        "audio transport stats are self-describing");
 
   for (region_id = 1; region_id < AYTHER_REGION_COUNT; ++region_id)
   {

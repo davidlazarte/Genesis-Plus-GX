@@ -22,6 +22,16 @@ ifeq ($(HOOK_CPU), 1)
    NEED_DEBUG_DIR := 1
 endif
 
+ifeq ($(AYTHER_EXTENSIONS), 1)
+   FLAGS += -DAYTHER_EXTENSIONS
+   GENPLUS_SRC_DIR += $(CORE_DIR)/core/ayther
+   ifeq ($(AYTHER_LEGACY_PROFILE), 1)
+      FLAGS += -DAYTHER_LEGACY_PROFILE
+   endif
+else ifeq ($(SOUND_PROBE), 1)
+   $(error SOUND_PROBE=1 requires AYTHER_EXTENSIONS=1)
+endif
+
 ifeq ($(SOUND_PROBE), 1)
    FLAGS += -DSOUND_PROBE
    NEED_DEBUG_DIR := 1

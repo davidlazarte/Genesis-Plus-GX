@@ -82,6 +82,9 @@
 #define AYTHER_CORE_EXPORTS 1
 #include "shared.h"
 #include "ayther/ayther_api.h"
+#ifdef AYTHER_EXTENSIONS
+#include "ayther/ayther_runtime.h"
+#endif
 #include "md_ntsc.h"
 #include "sms_ntsc.h"
 #include "osd.h"
@@ -111,6 +114,7 @@ STATIC_ASSERT(z80_overflow,
               Z80_MAX_CYCLES <= UINT_MAX >> (Z80_OVERCLOCK_SHIFT + 1));
 #endif
 
+#ifdef AYTHER_EXTENSIONS
 STATIC_ASSERT(ayther_sprite_v1_size, sizeof(ayther_sprite_v1) == 10);
 STATIC_ASSERT(ayther_sprite_internal_size, sizeof(AytherSpr) == sizeof(ayther_sprite_v1));
 STATIC_ASSERT(ayther_sprite_sat_idx_offset, offsetof(AytherSpr, sat_idx) == 8);
@@ -121,6 +125,7 @@ STATIC_ASSERT(ayther_audio_write_data_offset,
               offsetof(AytherAudioWrite, data) == 6);
 STATIC_ASSERT(ayther_region_info_v1_size, sizeof(ayther_region_info_v1) == 32);
 STATIC_ASSERT(ayther_frame_snapshot_v1_size, sizeof(ayther_frame_snapshot_v1) == 48);
+#endif
 
 t_config config;
 
@@ -164,10 +169,12 @@ static uint8_t brm_format[0x40] =
 uint8_t cart_size;
 
 static bool is_running = 0;
+#ifdef AYTHER_EXTENSIONS
 static bool ayther_content_loaded = false;
 static bool ayther_frame_active = false;
 static uint64_t ayther_frame_generation = 0;
 static uint64_t ayther_snapshot_generation = 1;
+#endif
 static bool restart_eq = false;
 static uint8_t temp[0x10000];
 static int16 soundbuffer[3068];
@@ -180,10 +187,10 @@ static const void *g_rom_data = NULL;
 static size_t g_rom_size      = 0;
 static char *save_dir         = NULL;
 
+#ifdef AYTHER_EXTENSIONS
 static void ayther_clear_frame_capture(void)
 {
-   ayther_sprite_n = 0;
-   ayther_sprite_overflow = 0;
+   ayther_sprite_capture_begin_frame();
    ayther_audio_write_n = 0;
    ayther_audio_write_overflow = 0;
 }
@@ -200,8 +207,30 @@ static void ayther_reset_session(bool content_loaded)
 {
    ayther_content_loaded = content_loaded;
    ayther_frame_generation = 0;
+   ayther_subscription_reset();
    ayther_invalidate_snapshot();
 }
+
+static void ayther_begin_frame(void)
+{
+   if (ayther_subscription_begin_frame())
+      ayther_snapshot_generation++;
+   ayther_clear_frame_capture();
+   ayther_frame_active = true;
+}
+
+static void ayther_end_frame(void)
+{
+   ayther_frame_active = false;
+   ayther_frame_generation++;
+   ayther_snapshot_generation++;
+}
+#else
+#define ayther_reset_session(content_loaded) ((void)(content_loaded))
+#define ayther_invalidate_snapshot() ((void)0)
+#define ayther_begin_frame() ((void)0)
+#define ayther_end_frame() ((void)0)
+#endif
 
 retro_log_printf_t log_cb;
 static retro_video_refresh_t video_cb;
@@ -3793,6 +3822,7 @@ void retro_unload_game(void)
 
 unsigned retro_get_region(void) { return vdp_pal ? RETRO_REGION_PAL : RETRO_REGION_NTSC; }
 
+#ifdef AYTHER_EXTENSIONS
 typedef struct ayther_region_mapping
 {
    void *data;
@@ -3950,6 +3980,28 @@ static int32_t ayther_map_region(uint32_t region_id,
    return AYTHER_STATUS_OK;
 }
 
+static uint32_t ayther_region_subscription(uint32_t region_id)
+{
+   switch (region_id)
+   {
+      case AYTHER_REGION_VRAM:
+      case AYTHER_REGION_CRAM:
+      case AYTHER_REGION_VDP_REGS:
+      case AYTHER_REGION_VSRAM:
+         return AYTHER_SUB_VDP_MEMORY;
+      case AYTHER_REGION_AUDIO_WRITES:
+      case AYTHER_REGION_AUDIO_WRITE_COUNT:
+         return AYTHER_SUB_AUDIO_WRITES;
+      case AYTHER_REGION_PARSED_SPRITES:
+      case AYTHER_REGION_PARSED_SPRITE_COUNT:
+         return AYTHER_SUB_SPRITE_CAPTURE;
+      case AYTHER_REGION_RASTER_FALLBACK_REASONS:
+         return AYTHER_SUB_RASTER_TRACKING;
+      default:
+         return 0;
+   }
+}
+
 static int32_t AYTHER_CALL ayther_query_region_v1(uint32_t region_id,
       ayther_region_info_v1 *out, uint32_t out_size)
 {
@@ -4001,6 +4053,9 @@ static int32_t AYTHER_CALL ayther_read_region_v1(uint32_t region_id,
    if ((offset > mapping.byte_size) ||
        (byte_count > (mapping.byte_size - offset)))
       return AYTHER_STATUS_OUT_OF_BOUNDS;
+   if (ayther_region_subscription(region_id) &&
+       !AYTHER_SUBSCRIBED(ayther_region_subscription(region_id)))
+      return AYTHER_STATUS_NOT_SUBSCRIBED;
    if (!byte_count)
       return AYTHER_STATUS_OK;
 
@@ -4136,6 +4191,8 @@ static int32_t AYTHER_CALL ayther_recompose_frame_v1(uint16_t *out_pixels,
       return AYTHER_STATUS_OUT_OF_BOUNDS;
    if (ayther_frame_active)
       return AYTHER_STATUS_BUSY;
+   if (!AYTHER_SUBSCRIBED(AYTHER_SUB_RECOMPOSITION))
+      return AYTHER_STATUS_NOT_SUBSCRIBED;
 
    memcpy(saved_sprites, ayther_sprites, sizeof(saved_sprites));
    saved_sprite_n = ayther_sprite_n;
@@ -4154,6 +4211,79 @@ static int32_t AYTHER_CALL ayther_recompose_frame_v1(uint16_t *out_pixels,
    return AYTHER_STATUS_OK;
 }
 
+static int32_t AYTHER_CALL ayther_poll_audio_events_v1(
+      ayther_audio_event_v1 *out, uint32_t event_capacity,
+      uint32_t *out_event_count)
+{
+   if (!out_event_count)
+      return AYTHER_STATUS_INVALID_ARGUMENT;
+   *out_event_count = 0;
+   if (event_capacity && !out)
+      return AYTHER_STATUS_INVALID_ARGUMENT;
+   if (event_capacity > INT_MAX)
+      return AYTHER_STATUS_OUT_OF_BOUNDS;
+#ifndef SOUND_PROBE
+   (void)out;
+   return AYTHER_STATUS_UNSUPPORTED;
+#else
+   if (!AYTHER_SUBSCRIBED(AYTHER_SUB_AUDIO_EVENTS))
+      return AYTHER_STATUS_NOT_SUBSCRIBED;
+   *out_event_count = (uint32_t)audio_probe_poll(
+         (ap_event_t *)out, (int)event_capacity);
+   return AYTHER_STATUS_OK;
+#endif
+}
+
+static int32_t AYTHER_CALL ayther_get_audio_transport_stats_v1(
+      ayther_audio_transport_stats_v1 *out, uint32_t out_size)
+{
+   if (!out)
+      return AYTHER_STATUS_INVALID_ARGUMENT;
+   if (out_size < sizeof(*out))
+      return AYTHER_STATUS_BUFFER_TOO_SMALL;
+
+#ifdef SOUND_PROBE
+   audio_probe_get_transport_stats((ap_transport_stats_t *)out);
+   return AYTHER_STATUS_OK;
+#else
+   memset(out, 0, sizeof(*out));
+   out->struct_size = sizeof(*out);
+   out->transport_version = 1;
+   out->event_size = sizeof(ayther_audio_event_v1);
+   return AYTHER_STATUS_UNSUPPORTED;
+#endif
+}
+
+static int32_t AYTHER_CALL ayther_get_subscriptions_v1(
+      ayther_subscription_state_v1 *out, uint32_t out_size)
+{
+   if (!out)
+      return AYTHER_STATUS_INVALID_ARGUMENT;
+   if (out_size < sizeof(*out))
+      return AYTHER_STATUS_BUFFER_TOO_SMALL;
+
+   memset(out, 0, sizeof(*out));
+   out->struct_size = sizeof(*out);
+   out->state_version = 1;
+   out->supported_mask = ayther_subscription_supported_mask();
+   out->active_mask = ayther_subscription_active_mask;
+   out->requested_mask = ayther_subscription_requested_mask;
+   out->activation_frame = ayther_frame_generation +
+      (out->active_mask != out->requested_mask);
+   return AYTHER_STATUS_OK;
+}
+
+static int32_t AYTHER_CALL ayther_set_subscriptions_v1(
+      uint32_t requested_mask)
+{
+   if (ayther_frame_active)
+      return AYTHER_STATUS_BUSY;
+   if (!ayther_subscription_request(requested_mask))
+      return AYTHER_STATUS_INVALID_ARGUMENT;
+   ayther_snapshot_generation++;
+   return AYTHER_STATUS_OK;
+}
+
 static const char ayther_build_id[] =
    "Genesis Plus GX AYTHER ABI 1.0; core v1.7.4" GIT_VERSION;
 
@@ -4161,6 +4291,12 @@ static const char ayther_build_id[] =
 #define AYTHER_HOST_ENDIANNESS AYTHER_ENDIAN_LITTLE
 #else
 #define AYTHER_HOST_ENDIANNESS AYTHER_ENDIAN_BIG
+#endif
+
+#ifdef SOUND_PROBE
+#define AYTHER_AUDIO_PROBE_CAPABILITY AYTHER_CAP_AUDIO_PROBE_V1
+#else
+#define AYTHER_AUDIO_PROBE_CAPABILITY UINT64_C(0)
 #endif
 
 static const ayther_interface_v1 ayther_interface_1 =
@@ -4171,7 +4307,8 @@ static const ayther_interface_v1 ayther_interface_1 =
       AYTHER_CAP_REGION_READ | AYTHER_CAP_CONTROL_WRITE |
       AYTHER_CAP_FRAME_SNAPSHOT | AYTHER_CAP_PARSED_SPRITES_V1 |
       AYTHER_CAP_AUDIO_WRITES_V1 | AYTHER_CAP_RASTER_FALLBACK_V1 |
-      AYTHER_CAP_RECOMPOSE_V1,
+      AYTHER_CAP_RECOMPOSE_V1 | AYTHER_CAP_SUBSCRIPTIONS_V1 |
+      AYTHER_AUDIO_PROBE_CAPABILITY,
    AYTHER_HOST_ENDIANNESS,
    sizeof(void *),
    sizeof(ayther_region_info_v1),
@@ -4185,7 +4322,15 @@ static const ayther_interface_v1 ayther_interface_1 =
    ayther_read_region_v1,
    ayther_write_control_v1,
    ayther_capture_snapshot_v1,
-   ayther_recompose_frame_v1
+   ayther_recompose_frame_v1,
+   sizeof(ayther_audio_event_v1),
+   sizeof(ayther_audio_transport_stats_v1),
+   ayther_poll_audio_events_v1,
+   ayther_get_audio_transport_stats_v1,
+   sizeof(ayther_subscription_state_v1),
+   0,
+   ayther_get_subscriptions_v1,
+   ayther_set_subscriptions_v1
 };
 
 AYTHER_API const ayther_interface_v1 *AYTHER_CALL ayther_get_interface(
@@ -4196,6 +4341,7 @@ AYTHER_API const ayther_interface_v1 *AYTHER_CALL ayther_get_interface(
       return &ayther_interface_1;
    return NULL;
 }
+#endif /* AYTHER_EXTENSIONS */
 
 void *retro_get_memory_data(unsigned id)
 {
@@ -4210,6 +4356,7 @@ void *retro_get_memory_data(unsigned id)
          vram[] is the VDP's 64KB VRAM, declared in core/vdp_ctrl.c. */
       case RETRO_MEMORY_VIDEO_RAM:
          return vram;
+#ifdef AYTHER_EXTENSIONS
       /* AYTHER fork delta: expose VDP CRAM (128 bytes = 64 x 9-bit colour
          entries, stored as host-endian uint16 words in GPX's internal
          0000BBB0GGG0RRR0 layout — core/vdp_ctrl.c). There is no standard
@@ -4290,6 +4437,7 @@ void *retro_get_memory_data(unsigned id)
          la sustitución por evento (C-A3). core/sound/sound.c. */
       case 0x10D /* AYTHER_MEMORY_AUDIO_MUTE */:
          return &ayther_audio_mute;
+#endif
       default:
          return NULL;
    }
@@ -4345,6 +4493,7 @@ size_t retro_get_memory_size(unsigned id)
       case RETRO_MEMORY_VIDEO_RAM:
          return 0x10000;
 
+#ifdef AYTHER_EXTENSIONS
       /* AYTHER fork delta: VDP CRAM is a fixed 128-byte array. */
       case 0x100 /* AYTHER_MEMORY_CRAM */:
          return 0x80;
@@ -4401,6 +4550,7 @@ size_t retro_get_memory_size(unsigned id)
       /* AYTHER fork delta: máscara de mute por canal de audio (u16). */
       case 0x10D /* AYTHER_MEMORY_AUDIO_MUTE */:
          return sizeof(ayther_audio_mute);
+#endif
 
       default:
         return 0;
@@ -4479,8 +4629,7 @@ void retro_run(void)
    int soundbuffer_size = 0;
 
    is_running = true;
-   ayther_clear_frame_capture();
-   ayther_frame_active = true;
+   ayther_begin_frame();
 
 #ifdef HAVE_OVERCLOCK
   /* update overclock delay */
@@ -4569,9 +4718,7 @@ void retro_run(void)
    }
 
    soundbuffer_size = audio_update(soundbuffer);
-   ayther_frame_active = false;
-   ayther_frame_generation++;
-   ayther_snapshot_generation++;
+   ayther_end_frame();
 
    /* Force viewport update when SMS border changes after startup undetected */
    if (     ((system_hw == SYSTEM_MARKIII) || (system_hw & SYSTEM_SMS) || (system_hw == SYSTEM_PBC))

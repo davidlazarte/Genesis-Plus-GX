@@ -35,14 +35,17 @@ library is unloaded. It reports:
 - build identifier and explicit string length;
 - host endianness and pointer size;
 - sizes of `ayther_region_info_v1`, `ayther_frame_snapshot_v1`,
-  `ayther_sprite_v1` and `ayther_audio_write_v1`;
+  `ayther_sprite_v1`, `ayther_audio_write_v1`, `ayther_audio_event_v1` and
+  `ayther_audio_transport_stats_v1`, plus the subscription state layout;
 - additive capability bits;
 - functions for region discovery, copy-based reads, controlled writes,
-  snapshots and recomposition.
+  snapshots, recomposition and the optional audio event transport.
 
-The v1 layout is frozen at 10 bytes for `ayther_sprite_v1` and 8 bytes for
-`ayther_audio_write_v1`. Compile-time assertions verify the public layouts and
-their internal aliases.
+The v1 layout is frozen at 10 bytes for `ayther_sprite_v1`, 8 bytes for
+`ayther_audio_write_v1`, 40 bytes for `ayther_audio_voice_v1`, 88 bytes for
+`ayther_audio_event_v1`, and 32 bytes for
+`ayther_audio_transport_stats_v1` and `ayther_subscription_state_v1`.
+Compile-time assertions verify the public layouts and their internal aliases.
 
 ## Endianness, ownership and lifetime
 
@@ -59,10 +62,29 @@ valid until unload. The private libretro IDs still return direct core-owned
 pointers for compatibility; those pointers bypass generation checks and
 controlled validation, and are deprecated.
 
-The v1 calls must be made on the emulation thread at a frame boundary (for
-example from or after the video callback). Calls made while the core is
-executing a frame return `AYTHER_STATUS_BUSY`. Cross-thread transport is the
-scope of the thread-safe work in issue #7.
+Region, control, snapshot and recomposition calls must be made on the emulation
+thread at a frame boundary (for example from or after the video callback).
+Calls made while the core is executing a frame return `AYTHER_STATUS_BUSY`.
+The two `AYTHER_CAP_AUDIO_PROBE_V1` functions are the exception: one tool thread
+may poll events and read transport statistics concurrently with the sole
+emulator/audio producer.
+
+## Runtime subscriptions
+
+`AYTHER_CAP_SUBSCRIPTIONS_V1` separates compile-time availability from runtime
+work. Standard builds begin with `active_mask = requested_mask = 0`; legacy
+profile builds begin with every compiled subsystem active. A mask requested by
+`set_subscriptions` between frames becomes active at the beginning of the next
+`retro_run`. Unknown or unavailable bits are rejected rather than ignored.
+
+Observed region reads and operations return
+`AYTHER_STATUS_NOT_SUBSCRIBED` when their subsystem is compiled but idle.
+`AYTHER_STATUS_UNSUPPORTED` means the relevant feature is not present in the
+binary. Control state may be prepared while idle, but render/audio effects are
+gated by `AYTHER_SUB_RENDER_CONTROLS`.
+
+The masks, bit-to-subsystem mapping, build profiles and activation protocol are
+specified in [`ayther_subscriptions.md`](ayther_subscriptions.md).
 
 ## Regions
 
@@ -121,6 +143,28 @@ invalidates reads after a state load/reset or a successful controlled write.
 Snapshots include valid sprite/audio counts, raster fallback reasons and
 explicit overflow bits. Neither generation is serialized into savestates.
 
+## Thread-safe audio event transport
+
+`AYTHER_CAP_AUDIO_PROBE_V1` is present only when the core was built with
+`SOUND_PROBE=1`. The descriptor fields are still appended in feature-off builds
+so their offsets remain stable, but calls return `AYTHER_STATUS_UNSUPPORTED`.
+
+`poll_audio_events` drains a bounded acquire/release SPSC queue into
+frontend-owned `ayther_audio_event_v1` records. Exactly one emulator/audio
+producer and one tool consumer are supported. Release publication of `head`
+occurs only after a complete event copy, so the consumer cannot observe a
+partially written record. Core resets do not discard published records or
+write the consumer-owned `tail`.
+
+`get_audio_transport_stats` reports effective capacity, an approximate pending
+count, high-water mark, a saturating dropped-event counter, and whether legacy
+inline callback mode is active.
+
+Only `NOTE_ON` and `DAC_START` are logical grouping anchors. Anchors inside a
+fixed coincidence window measured from the first anchor share a non-zero group.
+RAW_WRITE, FRAME, NOTE_OFF, DAC_STOP and synchronization events use `group=0`
+and never slide or extend that window.
+
 ## Controlled writes
 
 `write_control` accepts only regions with
@@ -141,14 +185,17 @@ reasons return `AYTHER_STATUS_READ_ONLY`.
 Linux's version script exports `ayther_get_interface` explicitly. Windows uses
 an explicit DLL export annotation, preserving the undecorated x64 name. The
 recomposition implementation is reachable only through the negotiated function
-pointer, so there is one AYTHER entry point to version. CI
-loads both feature profiles (`SOUND_PROBE=0/1`) and runs
+pointer, so there is one AYTHER entry point to version. CI loads extensions-off,
+standard-idle and legacy profiles with both relevant `SOUND_PROBE=0/1`
+combinations and runs
 `tests/ci/verify_ayther_api.c`, which verifies:
 
 - missing-symbol-safe discovery logic and version errors;
 - descriptor/capability/layout negotiation;
+- optional audio transport discovery, layout sizes and feature-off behavior;
 - all region sizes and legacy mappings;
 - generation-safe reads and validated controls;
+- supported, requested and frame-boundary-active subscription states;
 - the legacy `0x100`–`0x10E` adapter;
 - exact dynamic symbol resolution on DLL and so builds.
 

@@ -333,8 +333,10 @@ void vdp_init(void)
 }
 
 #ifdef AYTHER_EXTENSIONS
+uint64_t ayther_core_frame_generation = 0;
 void vdp_ayther_begin_frame(void)
 {
+  ayther_core_frame_generation++;
   ayther_raster_dirty = 0;
   if (AYTHER_SUBSCRIBED(AYTHER_SUB_RASTER_TRACKING))
     ayther_raster_dirty = ayther_recompose_mode_supported()

@@ -4211,6 +4211,46 @@ static int32_t AYTHER_CALL ayther_recompose_frame_v1(uint16_t *out_pixels,
    return AYTHER_STATUS_OK;
 }
 
+AYTHER_API int32_t AYTHER_CALL ayther_recompose_multilayer(
+    uint16_t *out_bg_a, uint16_t *out_bg_b, uint16_t *out_window,
+    uint16_t *out_sprites, uint16_t *out_composite,
+    uint32_t pixel_capacity, uint32_t flags,
+    uint32_t *out_width, uint32_t *out_height)
+{
+   AytherSpr saved_sprites[128];
+   uint8 saved_sprite_n;
+   uint32 saved_sprite_overflow;
+   int width;
+   int height;
+   int supported;
+
+   if (!out_width || !out_height)
+      return AYTHER_STATUS_INVALID_ARGUMENT;
+   if (pixel_capacity > INT_MAX)
+      return AYTHER_STATUS_OUT_OF_BOUNDS;
+   if (ayther_frame_active)
+      return AYTHER_STATUS_BUSY;
+   if (!AYTHER_SUBSCRIBED(AYTHER_SUB_RECOMPOSITION))
+      return AYTHER_STATUS_NOT_SUBSCRIBED;
+
+   memcpy(saved_sprites, ayther_sprites, sizeof(saved_sprites));
+   saved_sprite_n = ayther_sprite_n;
+   saved_sprite_overflow = ayther_sprite_overflow;
+   supported = ayther_core_recompose_multilayer(
+         out_bg_a, out_bg_b, out_window, out_sprites, out_composite,
+         (int)pixel_capacity, flags, &width, &height);
+   memcpy(ayther_sprites, saved_sprites, sizeof(saved_sprites));
+   ayther_sprite_n = saved_sprite_n;
+   ayther_sprite_overflow = saved_sprite_overflow;
+
+   if (supported <= 0)
+      return AYTHER_STATUS_UNSUPPORTED;
+
+   *out_width = (uint32_t)width;
+   *out_height = (uint32_t)height;
+   return AYTHER_STATUS_OK;
+}
+
 static int32_t AYTHER_CALL ayther_poll_audio_events_v1(
       ayther_audio_event_v1 *out, uint32_t event_capacity,
       uint32_t *out_event_count)

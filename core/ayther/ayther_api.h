@@ -368,6 +368,12 @@ typedef const ayther_interface_v1 *(AYTHER_CALL *ayther_get_interface_fn)(
 AYTHER_API const ayther_interface_v1 *AYTHER_CALL ayther_get_interface(
     uint32_t requested_version);
 
+AYTHER_API int32_t AYTHER_CALL ayther_recompose_multilayer(
+    uint16_t *out_bg_a, uint16_t *out_bg_b, uint16_t *out_window,
+    uint16_t *out_sprites, uint16_t *out_composite,
+    uint32_t pixel_capacity, uint32_t flags,
+    uint32_t *out_width, uint32_t *out_height);
+
 #ifdef __cplusplus
 }
 #endif

@@ -154,6 +154,11 @@ extern uint8 ayther_plane_suppress_active;  /* id 0x106: 1 = hay algún tile de 
    recompose_frame; no se agrega un segundo símbolo AYTHER al DLL/so. */
 extern int ayther_recompose_frame(uint16 *out, int cap, unsigned int flags,
                                   int *out_w, int *out_h);
+extern int ayther_core_recompose_multilayer(
+    uint16 *out_bg_a, uint16 *out_bg_b, uint16 *out_window,
+    uint16 *out_sprites, uint16 *out_composite,
+    int cap, unsigned int flags,
+    int *out_w, int *out_h);
 #endif /* AYTHER_EXTENSIONS */
 
 /* Function prototypes */

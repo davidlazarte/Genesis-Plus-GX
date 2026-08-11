@@ -5602,18 +5602,27 @@ void remap_line(int line)
    Devuelve 1 y escribe w*h píxeles RGB565 contiguos en `out` (cap = capacidad
    en píxeles); 0 si no aplica. */
 
+/**
+ * @brief Re-renders the emulated frame synchronously with the VDP's final state.
+ *
+ * This function MUST be executed EXCLUSIVELY and synchronously on the emulator's
+ * main thread (core thread). It temporarily clobbers internal VDP globals
+ * (like linebuf, obj_info, etc.) and restores them before returning.
+ * It is safe to call immediately after a frame has finished emulating, and
+ * guarantees that the VDP state is left completely identical to how it was found.
+ */
 #ifdef AYTHER_EXTENSIONS
 int ayther_recompose_frame(uint16 *out, int cap, unsigned int flags,
                            int *out_w, int *out_h)
 {
 #ifndef USE_16BPP_RENDERING
   (void)out; (void)cap; (void)flags; (void)out_w; (void)out_h;
-  return 0;
+  return AYTHER_RC_ERR_INVALID_PARAMS;
 #else
   uint16 s_status, s_sprcol;
   uint8  s_sprovr, s_lmask;
   uint8  s_objcount[2];
-  static object_info_t s_objinfo[2][80];   /* static: fuera del stack */
+  object_info_t s_objinfo[2][80];
   struct clip_t s_clip[2];
   uint8  s_reg11, s_reg12, s_reg18, s_hsmask;
   uint8 *s_bdata;
@@ -5625,11 +5634,11 @@ int ayther_recompose_frame(uint16 *out, int cap, unsigned int flags,
   w = bitmap.viewport.w;
   h = bitmap.viewport.h;
 
-  if (!(reg[1] & 0x04)) return 0;              /* sólo modo 5 (Mega Drive)   */
-  if ((reg[12] & 0x06) == 0x06) return 0;      /* interlace mode 2: fuera    */
-  if (interlaced && config.render) return 0;   /* salida doblada: fuera      */
-  if (config.ntsc) return 0;                   /* filtro NTSC: otro blitter  */
-  if (!out || w <= 0 || h <= 0 || cap < w * h) return 0;
+  if (!(reg[1] & 0x04)) return AYTHER_RC_ERR_NOT_MODE5;
+  if ((reg[12] & 0x06) == 0x06) return AYTHER_RC_ERR_INTERLACE2;
+  if (interlaced && config.render) return AYTHER_RC_ERR_INTERLACE2;
+  if (config.ntsc) return AYTHER_RC_ERR_NTSC_FILTER;
+  if (!out || w <= 0 || h <= 0 || cap < w * h) return AYTHER_RC_ERR_INVALID_PARAMS;
 
   /* ---- salvar todo lo que el render muta ---- */
   s_status = status;

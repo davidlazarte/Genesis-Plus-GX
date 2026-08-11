@@ -4203,7 +4203,7 @@ static int32_t AYTHER_CALL ayther_recompose_frame_v1(uint16_t *out_pixels,
    ayther_sprite_n = saved_sprite_n;
    ayther_sprite_overflow = saved_sprite_overflow;
 
-   if (!supported)
+   if (supported <= 0)
       return AYTHER_STATUS_UNSUPPORTED;
 
    *out_width = (uint32_t)width;

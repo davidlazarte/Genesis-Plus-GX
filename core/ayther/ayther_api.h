@@ -60,6 +60,14 @@ enum ayther_status
   AYTHER_STATUS_NOT_SUBSCRIBED    = -9
 };
 
+enum ayther_recompose_error
+{
+  AYTHER_RC_ERR_NOT_MODE5 = -1,
+  AYTHER_RC_ERR_INTERLACE2 = -2,
+  AYTHER_RC_ERR_NTSC_FILTER = -3,
+  AYTHER_RC_ERR_INVALID_PARAMS = -4
+};
+
 enum ayther_endianness
 {
   AYTHER_ENDIAN_LITTLE = 1,

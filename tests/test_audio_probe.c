@@ -6,8 +6,8 @@
  * Covers: reset/empty, raw-write events, timeline/frame advance, FM voice
  * decoding from the register shadow, channel-independent fingerprints,
  * note on/off, DAC start/stop, PSG raw, per-channel gain (set/get/clamp),
- * coincidence-window grouping, ring-buffer overflow, the callback path,
- * and the context accessor.
+ * coincidence-window grouping, observable ring-buffer overflow, the callback
+ * path, and the context accessor.
  */
 
 #include <stdio.h>
@@ -87,11 +87,34 @@ int main(void)
   ap_event_t ev, evb;
   ap_event_t scratch[8];
   ap_context_t ctx;
+  ap_transport_stats_t stats;
   int n;
 
-  /* 1. reset clears the buffer */
+  /* 1. reset starts with an empty buffer */
   audio_probe_reset();
   CHECK(drain(scratch, 8) == 0, "buffer empty after reset");
+
+  /* A compiled probe with no active consumer must not publish events or
+     advance transport occupancy. */
+  audio_probe_set_enabled(0);
+  audio_probe_reset_transport_stats();
+  audio_probe_fm_raw(0x22, 0x08);
+  audio_probe_frame(3420);
+  audio_probe_get_transport_stats(&stats);
+  CHECK(drain(scratch, 8) == 0, "disabled observation publishes no events");
+  CHECK(stats.pending == 0 && stats.high_water_mark == 0 &&
+        stats.dropped_events == 0,
+        "disabled observation leaves transport counters idle");
+  CHECK((stats.flags & AYTHER_AUDIO_TRANSPORT_OBSERVATION_ACTIVE) == 0,
+        "disabled observation is visible in transport flags");
+  audio_probe_set_enabled(1);
+
+  /* Core resets preserve already-published transport data. Only the consumer
+     advances tail, which keeps the SPSC ownership model valid. */
+  audio_probe_fm_raw(0x22, 0x08);
+  audio_probe_reset();
+  CHECK(drain(scratch, 8) == 1,
+        "core reset preserves pending transport events");
 
   /* 2. raw FM write round-trips with the right fields */
   audio_probe_set_time(1234);
@@ -178,41 +201,70 @@ int main(void)
   audio_probe_set_channel_gain(AP_SRC_FM, 99, 30);   /* out of range: ignored */
   CHECK(audio_probe_get_channel_gain(AP_SRC_FM, 99) == 100, "out-of-range gain ignored");
 
-  /* 10. coincidence-window grouping */
+  /* 10. coincidence-window grouping uses semantic anchors only and measures
+     a fixed window from the first anchor (no indefinitely sliding window). */
   audio_probe_reset();
   audio_probe_set_time(1000);
-  audio_probe_fm_raw(0x40, 1);
-  audio_probe_set_time(1000 + 10);                   /* within window */
-  audio_probe_fm_raw(0x40, 2);
-  audio_probe_set_time(1000 + 10 + AUDIO_PROBE_COINCIDENCE_WINDOW + 1); /* beyond */
-  audio_probe_fm_raw(0x40, 3);
+  audio_probe_fm_key(0, 0xf0);                       /* first anchor */
+  audio_probe_set_time(1500);
+  audio_probe_fm_raw(0x40, 1);                       /* never an anchor */
+  audio_probe_set_time(1900);
+  audio_probe_fm_dac(1);                             /* near first anchor */
+  audio_probe_set_time(2500);
+  audio_probe_fm_key(1, 0xf0);                       /* near last, far from first */
   n = drain(scratch, 8);
-  CHECK(n == 3, "three grouped events");
-  CHECK(scratch[0].group == scratch[1].group, "near events share a group");
-  CHECK(scratch[2].group != scratch[1].group, "far event starts a new group");
+  CHECK(n == 4, "anchors and interleaved raw event emitted");
+  CHECK(scratch[0].group != 0, "NOTE_ON receives a logical group");
+  CHECK(scratch[1].group == 0, "RAW_WRITE never receives a group");
+  CHECK(scratch[0].group == scratch[2].group,
+        "near NOTE_ON and DAC_START share a group");
+  CHECK(scratch[3].group != scratch[2].group,
+        "fixed first-anchor window cannot slide indefinitely");
 
-  /* 11. ring-buffer overflow drops cleanly (keeps capacity-1) */
+  /* 11. ring-buffer overflow is observable and keeps capacity-1. */
   audio_probe_reset();
+  audio_probe_reset_transport_stats();
   {
     int i;
     for (i = 0; i < AUDIO_PROBE_RING_SIZE + 5000; i++)
       audio_probe_fm_raw(0x40, i & 0xff);
+    audio_probe_get_transport_stats(&stats);
+    CHECK(stats.struct_size == sizeof(stats) && stats.transport_version == 1,
+          "transport stats are self-describing");
+    CHECK(stats.event_size == sizeof(ap_event_t),
+          "transport publishes the event layout size");
+    CHECK(stats.capacity == AUDIO_PROBE_RING_SIZE - 1,
+          "effective ring capacity is explicit");
+    CHECK(stats.pending == stats.capacity,
+          "full ring reports every pending event");
+    CHECK(stats.high_water_mark == stats.capacity,
+          "high-water mark reaches effective capacity");
+    CHECK(stats.dropped_events == 5001,
+          "overflow reports the exact dropped event count");
     {
       static ap_event_t big[AUDIO_PROBE_RING_SIZE];
       int got = audio_probe_poll(big, AUDIO_PROBE_RING_SIZE);
       CHECK(got == AUDIO_PROBE_RING_SIZE - 1, "ring holds capacity-1 on overflow");
     }
+    audio_probe_get_transport_stats(&stats);
+    CHECK(stats.pending == 0, "pending count clears after consumer drain");
   }
 
   /* 12. callback path bypasses the ring buffer */
   audio_probe_reset();
   g_cb_count = 0;
   audio_probe_set_callback(cb_capture, NULL);
+  audio_probe_get_transport_stats(&stats);
+  CHECK((stats.flags & AYTHER_AUDIO_TRANSPORT_CALLBACK_ACTIVE) != 0,
+        "transport reports active inline callback mode");
   audio_probe_fm_raw(0x28, 0xaa);
   CHECK(g_cb_count == 1, "callback invoked");
   CHECK(g_cb_last.data == 0xaa, "callback event payload");
   CHECK(drain(scratch, 8) == 0, "nothing buffered while callback set");
   audio_probe_set_callback(NULL, NULL);
+  audio_probe_get_transport_stats(&stats);
+  CHECK((stats.flags & AYTHER_AUDIO_TRANSPORT_CALLBACK_ACTIVE) == 0,
+        "transport reports return to polling mode");
 
   /* 13. context accessor reflects emulator globals */
   rominfo.realchecksum = 0xBEEF;

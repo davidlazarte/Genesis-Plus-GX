@@ -40,7 +40,10 @@
 #ifndef _SOUND_H_
 #define _SOUND_H_
 
+#ifdef AYTHER_EXTENSIONS
 #include "../ayther/ayther_api.h"
+#include "../ayther/ayther_runtime.h"
+#endif
 
 /* Function prototypes */
 extern void sound_init(void);
@@ -66,6 +69,8 @@ extern void restore_sound_buffer();
  * v1 hace que el core reinicie contadores/overflow por frame; la escritura de
  * reset por IDs legacy sigue aceptada durante la transición. sound.c.
  * -------------------------------------------------------------------------- */
+#ifdef AYTHER_EXTENSIONS
+
 #define AYTHER_AUDIO_CHIP_FM   0   /* YM2612 (FM)    */
 #define AYTHER_AUDIO_CHIP_PSG  1   /* SN76489 (PSG)  */
 #define AYTHER_AUDIO_WRITE_CAP 8192
@@ -75,7 +80,12 @@ typedef ayther_audio_write_v1 AytherAudioWrite;
 extern AytherAudioWrite ayther_audio_writes[AYTHER_AUDIO_WRITE_CAP];
 extern uint32 ayther_audio_write_n;
 extern uint32 ayther_audio_write_overflow;
-extern void ayther_record_audio_write(uint8 chip, uint16 addr, uint8 data, uint32 cycle);
+extern void ayther_record_audio_write_observed(uint8 chip, uint16 addr,
+                                               uint8 data, uint32 cycle);
+#define ayther_record_audio_write(chip, addr, data, cycle) do { \
+  if (AYTHER_SUBSCRIBED(AYTHER_SUB_AUDIO_WRITES)) \
+    ayther_record_audio_write_observed((chip), (addr), (data), (cycle)); \
+} while (0)
 
 /* ----------------------------------------------------------------------------
  * AYTHER fork delta: máscara de SILENCIADO POR CANAL (2 bytes, ESCRIBIBLE desde
@@ -88,7 +98,19 @@ extern void ayther_record_audio_write(uint8 chip, uint16 addr, uint8 data, uint3
  * evento mientras suena su asset HD.
  * -------------------------------------------------------------------------- */
 extern uint16 ayther_audio_mute;
-#define AYTHER_FM_MUTED(ch)  (ayther_audio_mute & (1u << (ch)))        /* ch 0-5 */
-#define AYTHER_PSG_MUTED(ch) (ayther_audio_mute & (1u << (6 + (ch))))  /* ch 0-3 */
+#define AYTHER_FM_MUTED(ch) \
+  (AYTHER_SUBSCRIBED(AYTHER_SUB_RENDER_CONTROLS) && \
+   (ayther_audio_mute & (1u << (ch))))
+#define AYTHER_PSG_MUTED(ch) \
+  (AYTHER_SUBSCRIBED(AYTHER_SUB_RENDER_CONTROLS) && \
+   (ayther_audio_mute & (1u << (6 + (ch)))))
+
+#else
+
+#define ayther_record_audio_write(chip, addr, data, cycle) ((void)0)
+#define AYTHER_FM_MUTED(ch) 0
+#define AYTHER_PSG_MUTED(ch) 0
+
+#endif /* AYTHER_EXTENSIONS */
 
 #endif /* _SOUND_H_ */

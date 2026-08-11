@@ -271,8 +271,18 @@ int state_save(unsigned char *state)
     save_param(&m68k.stopped, sizeof(m68k.stopped));
   }
 
-  /* Z80 */ 
-  save_param(&Z80, sizeof(Z80_Regs));
+  /* Z80 */
+  {
+    /* Function/data pointers are process-local implementation details. The
+       loader already reinstalls irq_callback, and this core does not use a
+       daisy chain. Serializing ASLR addresses made byte-identical savestates
+       differ across otherwise deterministic runs. Keep the v1.7.x layout and
+       size, but write canonical null pointer values. */
+    Z80_Regs z80_state = Z80;
+    z80_state.daisy = NULL;
+    z80_state.irq_callback = NULL;
+    save_param(&z80_state, sizeof(z80_state));
+  }
 
   /* External HW */
   if (system_hw == SYSTEM_MCD)

@@ -2016,10 +2016,22 @@ unsigned int YM2612Read(void)
 }
 
 /* Generate samples for ym2612 */
-void YM2612Update(int *buffer, int length)
+#if defined(AYTHER_EXTENSIONS) && (defined(__GNUC__) || defined(__clang__))
+#define AYTHER_YM_INLINE static inline __attribute__((always_inline))
+#define AYTHER_YM_NOINLINE __attribute__((noinline))
+#else
+#define AYTHER_YM_INLINE INLINE
+#define AYTHER_YM_NOINLINE
+#endif
+
+AYTHER_YM_INLINE void ym2612_update_impl(int *buffer, int length,
+                                        int ayther_audio_controls)
 {
   int i;
   int lt,rt;
+#ifndef AYTHER_EXTENSIONS
+  (void)ayther_audio_controls;
+#endif
 
   /* refresh PG increments and EG rates if required */
   refresh_fc_eg_chan(&ym2612.CH[0]);
@@ -2110,15 +2122,17 @@ void YM2612Update(int *buffer, int length)
        (no toca el estado del chip → replay-safe). Cubre el modo DAC: out_fm[5]
        ya tiene ym2612.dacout asignado, así que mutear el canal 5 también lo
        silencia. La envolvente/fase del chip sigue avanzando idéntica. */
-    if (ayther_audio_mute & 0x3F)
+#ifdef AYTHER_EXTENSIONS
+    if (ayther_audio_controls && (ayther_audio_mute & 0x3F))
     {
-      if (AYTHER_FM_MUTED(0)) out_fm[0] = 0;
-      if (AYTHER_FM_MUTED(1)) out_fm[1] = 0;
-      if (AYTHER_FM_MUTED(2)) out_fm[2] = 0;
-      if (AYTHER_FM_MUTED(3)) out_fm[3] = 0;
-      if (AYTHER_FM_MUTED(4)) out_fm[4] = 0;
-      if (AYTHER_FM_MUTED(5)) out_fm[5] = 0;
+      if (ayther_audio_mute & (1u << 0)) out_fm[0] = 0;
+      if (ayther_audio_mute & (1u << 1)) out_fm[1] = 0;
+      if (ayther_audio_mute & (1u << 2)) out_fm[2] = 0;
+      if (ayther_audio_mute & (1u << 3)) out_fm[3] = 0;
+      if (ayther_audio_mute & (1u << 4)) out_fm[4] = 0;
+      if (ayther_audio_mute & (1u << 5)) out_fm[5] = 0;
     }
+#endif
 
     #ifdef USE_PER_SOUND_CHANNELS_CONFIG
         /* apply user volume scaling */
@@ -2133,6 +2147,7 @@ void YM2612Update(int *buffer, int length)
 #ifdef SOUND_PROBE
     /* audio_probe per-channel gain (for HQ audio substitution); channel 6
        reports as the DAC source while DAC mode is active */
+    if (ayther_audio_controls)
     {
       int ch, g;
       for (ch = 0; ch < 6; ch++)
@@ -2169,7 +2184,10 @@ void YM2612Update(int *buffer, int length)
       {
         /* AYTHER fork delta: un canal muteado tampoco aporta el offset DC del
            ladder (si no, queda un residual ~0.7% aunque out_fm[i]=0). */
-        if (AYTHER_FM_MUTED(i)) continue;
+#ifdef AYTHER_EXTENSIONS
+        if (ayther_audio_controls &&
+            (ayther_audio_mute & (1u << i))) continue;
+#endif
         if (out_fm[i] < 0)
         {
           /* -4 offset (-3 when not muted) on negative channel output (9-bit) */
@@ -2210,6 +2228,31 @@ void YM2612Update(int *buffer, int length)
 
   /* timer B control */
   INTERNAL_TIMER_B(length);
+}
+
+#ifdef AYTHER_EXTENSIONS
+static AYTHER_YM_NOINLINE void ym2612_update_fast_path(int *buffer, int length)
+{
+  ym2612_update_impl(buffer, length, 0);
+}
+
+static AYTHER_YM_NOINLINE void ym2612_update_observed_path(int *buffer,
+                                                           int length)
+{
+  ym2612_update_impl(buffer, length, 1);
+}
+#endif
+
+void YM2612Update(int *buffer, int length)
+{
+#ifdef AYTHER_EXTENSIONS
+  if (AYTHER_SUBSCRIBED(AYTHER_SUB_RENDER_CONTROLS))
+    ym2612_update_observed_path(buffer, length);
+  else
+    ym2612_update_fast_path(buffer, length);
+#else
+  ym2612_update_impl(buffer, length, 0);
+#endif
 }
 
 void YM2612Config(int type)
@@ -2297,8 +2340,24 @@ int YM2612SaveContext(unsigned char *state)
   uint8 index;
   int bufferptr = 0;
 
-  /* save YM2612 context */
-  save_param(&ym2612, sizeof(ym2612));
+  /* Save a byte-stable YM2612 context. DT and output connections point to
+     process-local tables/accumulators; YM2612LoadContext reconstructs every
+     one below from the saved DT indices and channel algorithms. Keeping ASLR
+     addresses in the blob made deterministic savestates differ between runs. */
+  {
+    YM2612 saved = ym2612;
+    for (c=0; c<6; c++)
+    {
+      for (s=0; s<4; s++)
+        saved.CH[c].SLOT[s].DT = NULL;
+      saved.CH[c].connect1 = NULL;
+      saved.CH[c].connect2 = NULL;
+      saved.CH[c].connect3 = NULL;
+      saved.CH[c].connect4 = NULL;
+      saved.CH[c].mem_connect = NULL;
+    }
+    save_param(&saved, sizeof(saved));
+  }
 
   /* save DT table index for each channel slots */
   for (c=0; c<6; c++)

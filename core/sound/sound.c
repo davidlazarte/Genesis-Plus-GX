@@ -42,6 +42,7 @@
 
 int8 audio_hard_disable = 0;
 
+#ifdef AYTHER_EXTENSIONS
 /* AYTHER fork delta: log por-frame de escrituras crudas a los chips de sonido.
    Ver sound.h. La capa libretro reinicia el contador antes de cada frame; los
    frontends legacy todavía pueden escribir 0x10A=0 sin alterar el contrato. Si
@@ -54,7 +55,8 @@ uint32 ayther_audio_write_overflow = 0;
 /* AYTHER fork delta: máscara de mute por canal (ver sound.h). 0 = todo suena. */
 uint16 ayther_audio_mute = 0;
 
-void ayther_record_audio_write(uint8 chip, uint16 addr, uint8 data, uint32 cycle)
+void ayther_record_audio_write_observed(uint8 chip, uint16 addr, uint8 data,
+                                        uint32 cycle)
 {
   if (ayther_audio_write_n < AYTHER_AUDIO_WRITE_CAP)
   {
@@ -69,6 +71,7 @@ void ayther_record_audio_write(uint8 chip, uint16 addr, uint8 data, uint32 cycle
     ayther_audio_write_overflow = 1;
   }
 }
+#endif
 
 /* YM2612 internal clock = input clock / 6 = (master clock / 7) / 6 */
 #define YM2612_CLOCK_RATIO (7*6)

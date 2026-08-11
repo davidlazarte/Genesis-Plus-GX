@@ -86,6 +86,7 @@ enum ayther_endianness
 #define AYTHER_CAP_RECOMPOSE_V1        (UINT64_C(1) << 8)
 #define AYTHER_CAP_AUDIO_PROBE_V1      (UINT64_C(1) << 9)
 #define AYTHER_CAP_SUBSCRIPTIONS_V1    (UINT64_C(1) << 10)
+#define AYTHER_CAP_FRAME_DELTA_V1      (UINT64_C(1) << 11)
 
 /* Observation and control work is opt-in. A requested mask becomes active at
  * the beginning of the next frame; unknown bits are rejected. */
@@ -151,6 +152,7 @@ enum ayther_legacy_memory_id
 #define AYTHER_LAYOUT_SPRITE_V1      UINT32_C(1)
 #define AYTHER_LAYOUT_AUDIO_WRITE_V1 UINT32_C(1)
 #define AYTHER_LAYOUT_AUDIO_EVENT_V1 UINT32_C(1)
+#define AYTHER_LAYOUT_FRAME_DELTA_V1 UINT32_C(1)
 
 /* Native-endian in-process layout. Multi-byte fields use host endianness as
  * reported by ayther_interface_v1.host_endianness. Pointers are never stored
@@ -333,6 +335,21 @@ typedef int32_t (AYTHER_CALL *ayther_get_subscriptions_v1_fn)(
 typedef int32_t (AYTHER_CALL *ayther_set_subscriptions_v1_fn)(
     uint32_t requested_mask);
 
+typedef struct ayther_frame_delta_v1
+{
+  uint32_t struct_size;
+  uint32_t delta_version;
+  uint64_t frame_generation;
+  uint32_t raster_event_count;
+  uint32_t parsed_sprite_count;
+  uint32_t audio_write_count;
+  uint32_t reserved0;
+  uint8_t dirty_patterns[2048];
+} ayther_frame_delta_v1;
+
+typedef int32_t (AYTHER_CALL *ayther_poll_frame_delta_v1_fn)(
+    ayther_frame_delta_v1 *out, uint32_t out_size);
+
 typedef struct ayther_interface_v1
 {
   uint32_t abi_version;
@@ -360,6 +377,8 @@ typedef struct ayther_interface_v1
   uint32_t reserved1;
   ayther_get_subscriptions_v1_fn get_subscriptions;
   ayther_set_subscriptions_v1_fn set_subscriptions;
+  uint32_t frame_delta_size;
+  ayther_poll_frame_delta_v1_fn poll_frame_delta;
 } ayther_interface_v1;
 
 typedef const ayther_interface_v1 *(AYTHER_CALL *ayther_get_interface_fn)(

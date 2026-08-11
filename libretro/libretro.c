@@ -4339,6 +4339,28 @@ static const char ayther_build_id[] =
 #define AYTHER_AUDIO_PROBE_CAPABILITY UINT64_C(0)
 #endif
 
+static int32_t AYTHER_CALL ayther_poll_frame_delta_v1(
+      ayther_frame_delta_v1 *out, uint32_t out_size)
+{
+   if (!out)
+      return AYTHER_STATUS_INVALID_ARGUMENT;
+   if (out_size < sizeof(*out))
+      return AYTHER_STATUS_BUFFER_TOO_SMALL;
+   if (ayther_frame_active)
+      return AYTHER_STATUS_BUSY;
+
+   memset(out, 0, sizeof(*out));
+   out->struct_size = sizeof(*out);
+   out->delta_version = 1;
+   out->frame_generation = ayther_frame_generation;
+   out->raster_event_count = ayther_raster_journal_count;
+   out->parsed_sprite_count = ayther_sprite_n;
+   out->audio_write_count = ayther_audio_write_n;
+   memcpy(out->dirty_patterns, bg_name_dirty, sizeof(bg_name_dirty));
+
+   return AYTHER_STATUS_OK;
+}
+
 static const ayther_interface_v1 ayther_interface_1 =
 {
    AYTHER_ABI_VERSION_1_0,
@@ -4348,7 +4370,7 @@ static const ayther_interface_v1 ayther_interface_1 =
       AYTHER_CAP_FRAME_SNAPSHOT | AYTHER_CAP_PARSED_SPRITES_V1 |
       AYTHER_CAP_AUDIO_WRITES_V1 | AYTHER_CAP_RASTER_FALLBACK_V1 |
       AYTHER_CAP_RECOMPOSE_V1 | AYTHER_CAP_SUBSCRIPTIONS_V1 |
-      AYTHER_AUDIO_PROBE_CAPABILITY,
+      AYTHER_CAP_FRAME_DELTA_V1 | AYTHER_AUDIO_PROBE_CAPABILITY,
    AYTHER_HOST_ENDIANNESS,
    sizeof(void *),
    sizeof(ayther_region_info_v1),
@@ -4370,7 +4392,9 @@ static const ayther_interface_v1 ayther_interface_1 =
    sizeof(ayther_subscription_state_v1),
    0,
    ayther_get_subscriptions_v1,
-   ayther_set_subscriptions_v1
+   ayther_set_subscriptions_v1,
+   sizeof(ayther_frame_delta_v1),
+   ayther_poll_frame_delta_v1
 };
 
 AYTHER_API const ayther_interface_v1 *AYTHER_CALL ayther_get_interface(

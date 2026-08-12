@@ -21,6 +21,7 @@ typedef unsigned int   uint32;
 typedef struct {
   unsigned short checksum;
   unsigned short realchecksum;
+  unsigned int   crc32;
 } ROMINFO;
 
 extern ROMINFO rominfo;

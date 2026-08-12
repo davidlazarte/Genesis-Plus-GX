@@ -43,6 +43,14 @@
 #ifndef _RENDER_H_
 #define _RENDER_H_
 
+#ifdef AYTHER_EXTENSIONS
+#include "ayther/ayther_api.h"
+#include "ayther/ayther_runtime.h"
+#ifdef AYTHER_EXTENSIONS
+#include "ayther/ayther_sprite_capture.h"
+#endif
+#endif
+
 /* 3:3:2 RGB */
 #if defined(USE_8BPP_RENDERING)
 #define PIXEL(r,g,b) (((r) << 5) | ((g) << 2) | (b))
@@ -102,6 +110,7 @@
 /* Global variables */
 extern uint16 spr_col;
 
+#ifdef AYTHER_EXTENSIONS
 /* AYTHER fork delta: máscara de capas visibles (id de memoria privado 0x102,
    escribible desde el frontend). Bit set = capa visible; default 0xFF. La leen
    render_bg_m5/_vs (planos A/B/Window) y render_line (sprites) para aislar
@@ -113,18 +122,44 @@ extern uint16 spr_col;
 extern uint8 ayther_layer_mask;
 extern uint8 ayther_layer_dim;             /* atenuar capas no-sprite al 25% (id 0x108) */
 /* Sprites realmente parseados por parse_satb en el frame (id 0x10B lista / 0x10C
-   contador, escribible=reset). Captura los reescritos in-place a mitad de frame. */
+   contador, escribible=reset legacy). La ABI v1 reinicia contador/overflow antes
+   de cada frame. Captura los reescritos in-place a mitad de frame. */
 /* 10 bytes. sat_idx = índice de ENTRADA del SAT (link>>2) — el MISMO espacio de
    índices que la máscara de supresión 0x103 (¡distinto del orden de la lista!).
    chain_pos = posición en la CADENA de links al parsear = prioridad real de dibujo
    del VDP entre sprites (menor = más al frente). */
-typedef struct { uint16 yr, xr, attr; uint8 w, h, sat_idx, chain_pos; } AytherSpr;
-extern AytherSpr ayther_sprites[128];
-extern uint8 ayther_sprite_n;
 extern uint8 ayther_sprite_suppress[16];   /* slots SAT suprimidos (id 0x103) */
 extern uint8 ayther_tile_suppress[512];    /* celdas de tile suprimidas (id 0x104, 64x64) */
 extern uint8 ayther_plane_tile_suppress[3 * 1024]; /* tiles de plano suprimidos (id 0x105) */
 extern uint8 ayther_plane_suppress_active;  /* id 0x106: 1 = hay algún tile de plano oculto */
+
+/* AYTHER (#270): recomposición del frame desde el estado FINAL del VDP, con el
+   mismo renderer del core (spike de fidelidad del render propio). `flags` apaga
+   comportamientos uno a uno para atribuir el error de no modelarlos. Escribe
+   w*h píxeles RGB565 contiguos en `out` (cap en píxeles) y devuelve 1; 0 si no
+   aplica (no-modo-5, interlace 2, NTSC, buffer chico). No perturba la emulación
+   (todo estado mutado se salva y restaura). Export del DLL: el frontend lo
+   resuelve por nombre (win64 auto-exporta los globals; ver Makefile.libretro). */
+#define AYTHER_RC_NO_SH        0x01u  /* sin shadow/highlight (como reg12.3=0)   */
+#define AYTHER_RC_NO_SPR_LIMIT 0x02u  /* sin límite de sprites/línea ni de px    */
+#define AYTHER_RC_NO_SPR_MASK  0x04u  /* sin máscara de sprites (x=0)            */
+#define AYTHER_RC_NO_WINDOW    0x08u  /* sin plano Window (A ocupa toda la línea)*/
+#define AYTHER_RC_FLAT_HS      0x10u  /* hscroll de la línea 0 para todas        */
+#define AYTHER_RC_FLAT_VS      0x20u  /* vscroll de la columna 0 para todas      */
+/* R-2: byte alto = override de ayther_layer_mask durante la recomposición
+   (bits AYTHER_LAYER_*; 0 = mantener la máscara vigente). Recomponer una capa
+   sola = el oráculo CPU del pipeline indexado. */
+#define AYTHER_RC_LAYER_MASK(m) (((unsigned int)(m) & 0xFFu) << 24)
+/* Función interna. La ABI pública la expone mediante el function pointer
+   recompose_frame; no se agrega un segundo símbolo AYTHER al DLL/so. */
+extern int ayther_recompose_frame(uint16 *out, int cap, unsigned int flags,
+                                  int *out_w, int *out_h);
+extern int ayther_core_recompose_multilayer(
+    uint16 *out_bg_a, uint16 *out_bg_b, uint16 *out_window,
+    uint16 *out_sprites, uint16 *out_composite,
+    int cap, unsigned int flags,
+    int *out_w, int *out_h);
+#endif /* AYTHER_EXTENSIONS */
 
 /* Function prototypes */
 extern void render_init(void);

@@ -42,12 +42,18 @@
 #ifndef _VDP_H_
 #define _VDP_H_
 
+#ifdef AYTHER_EXTENSIONS
+#include "ayther_raster.h"
+#include "ayther/ayther_runtime.h"
+#endif
+
 /* VDP context */
 extern uint8 reg[0x20];
 extern uint8 sat[0x400];
 extern uint8 vram[0x10000];
 extern uint8 cram[0x80];
 extern uint8 vsram[0x80];
+extern uint8 border;   /* AYTHER (#12C): indice de color del borde */
 extern uint8 hint_pending;
 extern uint8 vint_pending;
 extern uint16 status;
@@ -65,6 +71,16 @@ extern uint8 bg_name_dirty[0x800];
 extern uint16 bg_name_list[0x800];
 extern uint16 bg_list_index;
 extern uint8 hscroll_mask;
+#ifdef AYTHER_EXTENSIONS
+/* AYTHER (#5/#274): bitmask transiente de motivos de fallback por frame.
+   Se expone por el id privado 0x10E; `> 0` conserva el contrato booleano. */
+extern uint32 ayther_raster_dirty;
+/* AYTHER (#405): espejo acumulativo de `bg_name_dirty` para el frontend. El
+   original lo limpia `update_bg_pattern_cache()` a mitad del frame, así que
+   nunca llegaba nada al otro lado; este sólo lo limpia el poll del frontend
+   (ayther_poll_frame_delta_v1). Ver el comentario largo en vdp_ctrl.c. */
+extern uint8 ayther_vram_dirty[0x800];
+#endif
 extern uint8 playfield_shift;
 extern uint8 playfield_col_mask;
 extern uint16 playfield_row_mask;
@@ -92,6 +108,11 @@ extern unsigned int (*vdp_z80_data_r)(void);
 /* Function prototypes */
 extern void vdp_init(void);
 extern void vdp_reset(void);
+#ifdef AYTHER_EXTENSIONS
+extern void vdp_ayther_begin_frame(void);
+#else
+#define vdp_ayther_begin_frame() ((void)0)
+#endif
 extern int vdp_context_save(uint8 *state);
 extern int vdp_context_load(uint8 *state);
 extern void vdp_dma_update(unsigned int cycles);

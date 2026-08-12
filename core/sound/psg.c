@@ -102,7 +102,9 @@ static struct
    savestate guarda siempre el audio SIN mutear (el mute es output-only), así que
    psg_context_load lo resetea a 0 — si no, tras un unserialize (replay/scrub) el
    shadow queda desincronizado y el mute no corrige el nivel (residual DC). */
+#ifdef AYTHER_EXTENSIONS
 static uint8 psg_ayther_muted[4] = {0};
+#endif
 
 static void psg_update(unsigned int clocks);
 
@@ -181,7 +183,11 @@ int psg_context_load(uint8 *state)
 
   /* initialize delta with current noise channel output (AYTHER: si el canal
      estaba muteado su contribución efectiva era 0 → no la quitamos) */
-  if ((psg.noiseShiftValue & 1) && !psg_ayther_muted[3])
+  if ((psg.noiseShiftValue & 1)
+#ifdef AYTHER_EXTENSIONS
+      && !psg_ayther_muted[3]
+#endif
+     )
   {
     delta[0] = -psg.chanOut[3][0];
     delta[1] = -psg.chanOut[3][1];
@@ -195,7 +201,11 @@ int psg_context_load(uint8 *state)
   /* add current tone channels output (AYTHER: idem, muted-aware) */
   for (i=0; i<3; i++)
   {
-    if ((psg.polarity[i] > 0) && !psg_ayther_muted[i])
+    if ((psg.polarity[i] > 0)
+#ifdef AYTHER_EXTENSIONS
+        && !psg_ayther_muted[i]
+#endif
+       )
     {
       delta[0] -= psg.chanOut[i][0];
       delta[1] -= psg.chanOut[i][1];
@@ -216,7 +226,9 @@ int psg_context_load(uint8 *state)
      "desmuteado". Reseteamos el shadow a 0 → la próxima máscara del frontend
      re-dispara la corrección de nivel. Sin esto, tras un replay/scrub el mute no
      baja la energía (residual DC). El new-output de abajo usa chanOut pleno (OK). */
+#ifdef AYTHER_EXTENSIONS
   for (i=0; i<4; i++) psg_ayther_muted[i] = 0;
+#endif
 
   /* add noise channel output variation */
   if (psg.noiseShiftValue & 1)
@@ -255,7 +267,7 @@ void psg_write(unsigned int clocks, unsigned int data)
   /* AYTHER fork delta: registrar la escritura cruda al PSG (byte ORIGINAL, antes
      de que el switch de abajo recalcule `data`). El protocolo de latch (bit 7 =
      latch de registro, si no dato al registro latcheado) lo replica el host. */
-  ayther_record_audio_write(AYTHER_AUDIO_CHIP_PSG, 0, (uint8)(data & 0xff), clocks);
+  // ayther_record_audio_write removed
 
   /* PSG chip synchronization */
   if (clocks > psg.clocks)
@@ -451,6 +463,7 @@ void psg_config(unsigned int clocks, unsigned int preamp, unsigned int panning)
 
 #ifdef SOUND_PROBE
     /* audio_probe per-channel gain (for HQ audio substitution) */
+    if (AYTHER_SUBSCRIBED(AYTHER_SUB_RENDER_CONTROLS))
     {
       int pg = audio_probe_get_channel_gain(AP_SRC_PSG, i);
       if (pg < 100)
@@ -524,17 +537,31 @@ void psg_end_frame(unsigned int clocks)
   }
 }
 
-static void psg_update(unsigned int clocks)
+#if defined(AYTHER_EXTENSIONS) && (defined(__GNUC__) || defined(__clang__))
+#define AYTHER_PSG_INLINE static inline __attribute__((always_inline))
+#define AYTHER_PSG_NOINLINE __attribute__((noinline))
+#else
+#define AYTHER_PSG_INLINE INLINE
+#define AYTHER_PSG_NOINLINE
+#endif
+
+AYTHER_PSG_INLINE void psg_update_impl(unsigned int clocks,
+                                      int ayther_audio_controls)
 {
   int i, timestamp, polarity;
+#ifndef AYTHER_EXTENSIONS
+  (void)ayther_audio_controls;
+#endif
   if (audio_hard_disable) return;
 
   for (i=0; i<4; i++)
   {
+#ifdef AYTHER_EXTENSIONS
     /* AYTHER: mute por canal a nivel de salida. eo0/eo1 = salida efectiva (0 si
        muteado). Al CAMBIAR el mute, corrige el nivel corriente vía chanDelta —
        como un cambio de volumen a/desde silencio — para no dejar DC ni click. */
-    int aeth_mute = AYTHER_PSG_MUTED(i) ? 1 : 0;
+    int aeth_mute = ayther_audio_controls &&
+      (ayther_audio_mute & (1u << (6 + i))) ? 1 : 0;
     if (aeth_mute != psg_ayther_muted[i])
     {
       int high = (i < 3) ? (psg.polarity[i] > 0) : (psg.noiseShiftValue & 1);
@@ -548,6 +575,10 @@ static void psg_update(unsigned int clocks)
     }
     int eo0 = aeth_mute ? 0 : psg.chanOut[i][0];
     int eo1 = aeth_mute ? 0 : psg.chanOut[i][1];
+#else
+    int eo0 = psg.chanOut[i][0];
+    int eo1 = psg.chanOut[i][1];
+#endif
 
     /* apply any pending channel volume variations */
     if (psg.chanDelta[i][0] | psg.chanDelta[i][1])
@@ -657,6 +688,30 @@ static void psg_update(unsigned int clocks)
     /* save channel generator polarity */
     psg.polarity[i] = polarity;
   }
+}
+
+#ifdef AYTHER_EXTENSIONS
+static AYTHER_PSG_NOINLINE void psg_update_fast_path(unsigned int clocks)
+{
+  psg_update_impl(clocks, 0);
+}
+
+static AYTHER_PSG_NOINLINE void psg_update_observed_path(unsigned int clocks)
+{
+  psg_update_impl(clocks, 1);
+}
+#endif
+
+static void psg_update(unsigned int clocks)
+{
+#ifdef AYTHER_EXTENSIONS
+  if (AYTHER_SUBSCRIBED(AYTHER_SUB_RENDER_CONTROLS))
+    psg_update_observed_path(clocks);
+  else
+    psg_update_fast_path(clocks);
+#else
+  psg_update_impl(clocks, 0);
+#endif
 }
 
 #ifdef SOUND_PROBE

@@ -22,6 +22,16 @@ ifeq ($(HOOK_CPU), 1)
    NEED_DEBUG_DIR := 1
 endif
 
+ifeq ($(AYTHER_EXTENSIONS), 1)
+   FLAGS += -DAYTHER_EXTENSIONS
+   GENPLUS_SRC_DIR += $(CORE_DIR)/core/ayther
+   ifeq ($(AYTHER_LEGACY_PROFILE), 1)
+      FLAGS += -DAYTHER_LEGACY_PROFILE
+   endif
+else ifeq ($(SOUND_PROBE), 1)
+   $(error SOUND_PROBE=1 requires AYTHER_EXTENSIONS=1)
+endif
+
 ifeq ($(SOUND_PROBE), 1)
    FLAGS += -DSOUND_PROBE
    NEED_DEBUG_DIR := 1
@@ -67,6 +77,11 @@ ifeq ($(HAVE_CHD), 1)
 endif
 
 SOURCES_C += $(foreach dir,$(GENPLUS_SRC_DIR),$(wildcard $(dir)/*.c))
+
+# AYTHER: ayther_core.c NO se compila suelto — se incluye desde vdp_render.c
+# porque necesita los estaticos del VDP (border, reg, v_counter...). El wildcard
+# de arriba lo tomaba igual y el build moria con "unknown type name 'uint8'".
+SOURCES_C := $(filter-out %/ayther/ayther_core.c,$(SOURCES_C))
 
 ifneq ($(STATIC_LINKING), 1)
 SOURCES_C += \

@@ -47,6 +47,28 @@ static int8 do_not_invalidate_tile_cache;
 
 static void vdp_set_all_vram(const uint8 *src);
 
+/* AYTHER (#405): el espejo ACUMULATIVO de bg_name_dirty.
+
+   `bg_name_dirty` no sirve para contarle al frontend qué cambió en el frame:
+   `update_bg_pattern_cache()` lo va limpiando pattern por pattern DENTRO de
+   `render_line_impl`, o sea a mitad del frame. Para cuando el frontend puede
+   preguntar —despues de retro_run— ya está casi siempre vacío. Medido desde el
+   Engine con el core `15872fc`: 0 patterns marcados en 240 frames contra 711
+   que habían cambiado de verdad, o sea el 100% de falsos negativos.
+
+   Este array es el mismo dato pero con la vida que el consumidor necesita: se
+   marca en los mismos lugares y NADIE lo limpia salvo el propio poll del
+   frontend (consume-on-poll, en ayther_poll_frame_delta_v1). Así el dato es
+   siempre un SUPERCONJUNTO de lo que cambió —que es lo único que lo hace usable
+   como invalidación— y sobrevive a un unserialize, donde la VRAM puede haber
+   cambiado entera sin que corriera un solo frame. */
+#ifdef AYTHER_EXTENSIONS
+uint8 ayther_vram_dirty[0x800];
+#define AYTHER_MARK_VRAM_DIRTY(n, bits) ayther_vram_dirty[(n)] |= (uint8)(bits)
+#else
+#define AYTHER_MARK_VRAM_DIRTY(n, bits) do {} while (0)
+#endif
+
 /* Mark a pattern as modified */
 #define MARK_BG_DIRTY(addr)                         \
 {                                                   \
@@ -56,6 +78,7 @@ static void vdp_set_all_vram(const uint8 *src);
     bg_name_list[bg_list_index++] = name;           \
   }                                                 \
   bg_name_dirty[name] |= (1 << ((addr >> 2) & 7));  \
+  AYTHER_MARK_VRAM_DIRTY(name, 1 << ((addr >> 2) & 7)); \
 }
 
 /* VINT timings */
@@ -105,6 +128,20 @@ uint16 vc_max;                    /* Vertical counter overflow value */
 uint16 lines_per_frame;           /* PAL: 313 lines, NTSC: 262 lines */
 uint16 max_sprite_pixels;         /* Max. sprites pixels per line (parsing & rendering) */
 uint32 fifo_cycles[4];            /* VDP FIFO read-out cycles */
+
+/* AYTHER (#5/#274): bitmask transiente de motivos por los que el frame no se
+   puede recomponer fielmente desde el estado final del VDP. El id privado
+   0x10E sigue siendo un u32 escribible; consumidores legacy que usan `> 0`
+   conservan su comportamiento. Se reinicia automáticamente por frame. */
+#ifdef AYTHER_EXTENSIONS
+uint32 ayther_raster_dirty = 0;
+/* AYTHER (#12C): journal de eventos raster del frame — (linea, motivo,
+   direccion, dato) de cada escritura que cambio algo VISIBLE a mitad de
+   pantalla. Insumo del raster replay: recomponer respetando los splits en
+   vez de tomar solo el estado final del VDP. */
+ayther_raster_event_t ayther_raster_journal[AYTHER_RASTER_JOURNAL_MAX];
+int ayther_raster_journal_count = 0;
+#endif
 uint32 hvc_latch;                 /* latched HV counter */
 uint32 vint_cycle;                /* VINT occurence cycle */
 const uint8 *hctab;               /* pointer to H Counter table */
@@ -127,7 +164,7 @@ static unsigned int vdp_z80_data_r_m5(void);
 static void vdp_z80_data_w_ms(unsigned int data);
 static void vdp_z80_data_w_gg(unsigned int data);
 static void vdp_z80_data_w_sg(unsigned int data);
-static void vdp_bus_w(unsigned int data);
+static void vdp_bus_w(unsigned int data, int from_dma, unsigned int cycles);
 static void vdp_reg_w(unsigned int r, unsigned int d, unsigned int cycles);
 static void vdp_dma_68k_ext(unsigned int length);
 static void vdp_dma_68k_ram(unsigned int length);
@@ -141,7 +178,11 @@ static const uint8 shift_table[]        = { 6, 7, 0, 8 };
 static const uint8 col_mask_table[]     = { 0x0F, 0x1F, 0x0F, 0x3F };
 static const uint16 row_mask_table[]    = { 0x0FF, 0x1FF, 0x2FF, 0x3FF };
 
-static uint8 border;            /* Border color index */
+/* AYTHER (#12C): deja de ser static — el raster replay de ayther_core.c
+   necesita saber si el color que cambio a mitad de frame es el del BORDE
+   (se actualiza distinto). Mismo criterio que reg/sat/vram/cram/vsram, que
+   ya viven expuestos en vdp_ctrl.h por la misma razon. */
+uint8 border;                   /* Border color index */
 static uint8 pending;           /* Pending write flag */
 static uint8 code;              /* Code register */
 static uint16 addr;             /* Address register */
@@ -157,6 +198,85 @@ static int fifo_byte_access;    /* FIFO byte access flag */
 static int *fifo_timing;        /* FIFO slots timing table */
 static int hblank_start_cycle;  /* HBLANK flag set cycle */
 static int hblank_end_cycle;    /* HBLANK flag clear cycle */
+
+#ifdef AYTHER_EXTENSIONS
+static unsigned int ayther_raster_line_at(unsigned int cycles)
+{
+  unsigned int line = v_counter;
+  if (cycles >= mcycles_vdp)
+  {
+    line += (cycles - mcycles_vdp) / MCYCLES_PER_LINE;
+  }
+  return lines_per_frame ? (line % lines_per_frame) : line;
+}
+
+static int ayther_raster_visible_at(unsigned int cycles)
+{
+  return ayther_raster_line_at(cycles) < bitmap.viewport.h;
+}
+
+INLINE void ayther_raster_mark_visible(unsigned int reason, uint16_t address,
+                                       uint16_t data, int changed,
+                                       int from_dma, unsigned int cycles,
+                                       int visible_while_blanked)
+{
+  if (!AYTHER_SUBSCRIBED(AYTHER_SUB_RASTER_TRACKING)) return;
+  int active = ayther_raster_visible_at(cycles) &&
+               ((reg[1] & 0x40) || visible_while_blanked);
+  ayther_raster_dirty = AYTHER_RASTER_MERGE(ayther_raster_dirty, reason,
+                                            active, changed, from_dma);
+  /* Solo los cambios ACTIVOS entran al journal: uno fuera de la zona visible
+     no altera lo que se ve, y llenarlo con esos desplazaria a los que si
+     importan (el tope es AYTHER_RASTER_JOURNAL_MAX). */
+  if (active && changed && ayther_raster_journal_count < AYTHER_RASTER_JOURNAL_MAX)
+  {
+    ayther_raster_event_t *ev = &ayther_raster_journal[ayther_raster_journal_count++];
+    ev->v_counter = ayther_raster_line_at(cycles);
+    ev->reason = reason;
+    ev->address = address;
+    ev->data = data;
+  }
+}
+
+INLINE void ayther_raster_mark(unsigned int reason, uint16_t address,
+                               uint16_t data, int changed, int from_dma,
+                               unsigned int cycles)
+{
+  ayther_raster_mark_visible(reason, address, data, changed, from_dma, cycles, 0);
+}
+
+INLINE void ayther_raster_mark_vram(unsigned int address, uint16_t data,
+                                    int changed,
+                                    int from_dma, unsigned int cycles)
+{
+  unsigned int reason;
+  if (!AYTHER_SUBSCRIBED(AYTHER_SUB_RASTER_TRACKING)) return;
+  reason = AYTHER_RASTER_VRAM_REASON(address, hscb);
+  if (reason)
+  {
+    ayther_raster_mark(reason, address, data, changed, from_dma, cycles);
+  }
+}
+
+static int ayther_recompose_mode_supported(void)
+{
+#ifdef USE_16BPP_RENDERING
+  if ((system_hw & SYSTEM_PBC) != SYSTEM_MD) return 0;
+  if (!(reg[1] & 0x04)) return 0;
+  if ((reg[12] & 0x06) == 0x06) return 0;
+  if (interlaced && config.render) return 0;
+  if (config.ntsc) return 0;
+  return 1;
+#else
+  return 0;
+#endif
+}
+#else
+#define ayther_raster_mark_visible(reason, address, data, changed, from_dma, cycles, blanked) \
+  ((void)0)
+#define ayther_raster_mark(reason, address, data, changed, from_dma, cycles) ((void)0)
+#define ayther_raster_mark_vram(address, data, changed, from_dma, cycles) ((void)0)
+#endif
 
  /* set Z80 or 68k interrupt lines */
 static void (*set_irq_line)(unsigned int level);
@@ -258,6 +378,26 @@ void vdp_init(void)
   }
 }
 
+#ifdef AYTHER_EXTENSIONS
+uint64_t ayther_core_frame_generation = 0;
+void vdp_ayther_begin_frame(void)
+{
+  ayther_core_frame_generation++;
+  ayther_raster_dirty = 0;
+  /* AYTHER (#405): el journal es de ESTE frame, igual que `ayther_raster_dirty`
+     de la línea de arriba — y hasta acá no se reiniciaba en ningún lado. Se
+     llenaba hasta su tope de AYTHER_RASTER_JOURNAL_MAX en los primeros frames y
+     se quedaba ahí para siempre: medido desde el Engine, `raster_event_count`
+     daba 256 fijo desde el primer frame observado y no bajaba nunca. El replay
+     de #12C (ayther_core_recompose_multilayer) estaba, por lo tanto, aplicando
+     eventos fósiles del arranque a cada línea que recomponía. */
+  ayther_raster_journal_count = 0;
+  if (AYTHER_SUBSCRIBED(AYTHER_SUB_RASTER_TRACKING))
+    ayther_raster_dirty = ayther_recompose_mode_supported()
+      ? 0u : AYTHER_RASTER_REASON_UNSUPPORTED_MODE;
+}
+#endif
+
 void vdp_reset(void)
 {
   int i;
@@ -311,6 +451,11 @@ void vdp_reset(void)
     bg_list_index = 0;
     memset((char *)bg_name_dirty, 0, sizeof(bg_name_dirty));
     memset((char *)bg_name_list, 0, sizeof(bg_name_list));
+#ifdef AYTHER_EXTENSIONS
+    /* AYTHER (#405): la VRAM se acaba de poner en cero (arriba). Para el
+       frontend eso es un cambio de los 2048 patterns, no una limpieza. */
+    memset((char *)ayther_vram_dirty, 0xFF, sizeof(ayther_vram_dirty));
+#endif
   }
   /* default Window clipping */
   window_clip(0,0);
@@ -475,6 +620,9 @@ void vdp_reset(void)
     color_update_m4(i, 0x00);
   }
   color_update_m4(0x40, 0x00);
+
+  /* transient fidelity state is never restored from a savestate */
+  vdp_ayther_begin_frame();
 }
 
 int vdp_context_save(uint8 *state)
@@ -649,9 +797,17 @@ int vdp_context_load(uint8 *state)
       bg_name_list[i] = i;
       bg_name_dirty[i] = 0xFF;
     }
+#ifdef AYTHER_EXTENSIONS
+    /* AYTHER (#405): acá se copió la VRAM ENTERA, no los tiles del cache. El
+       frontend tiene que enterarse de todo, no de `bg_list_index` patterns. */
+    memset((char *)ayther_vram_dirty, 0xFF, sizeof(ayther_vram_dirty));
+#endif
   }
 
   do_not_invalidate_tile_cache = false;
+
+  /* Register restoration above must not look like in-frame raster activity. */
+  vdp_ayther_begin_frame();
 
   return bufferptr;
 }
@@ -1582,6 +1738,31 @@ static void vdp_reg_w(unsigned int r, unsigned int d, unsigned int cycles)
     return;
   }
 
+#ifdef AYTHER_EXTENSIONS
+  /* Visual register changes are temporal state when the display is active.
+     Register #1 is special: toggling display enable is visual even when its
+     previous value was disabled. Registers 10, 14, 15 and 19-23 do not affect
+     rendering directly. */
+  if (AYTHER_SUBSCRIBED(AYTHER_SUB_RASTER_TRACKING) &&
+      ((reg[r] ^ d) & 0xFF) &&
+      ((r <= 13 && r != 10) || (r >= 16 && r <= 18)) &&
+      ayther_raster_visible_at(cycles) &&
+      ((reg[1] & 0x40) || (r == 7) ||
+       ((r == 1) && ((reg[1] ^ d) & 0x40))))
+  {
+    ayther_raster_dirty |= AYTHER_RASTER_REASON_REG;
+  }
+
+  /* Unsupported final modes are a fallback reason even when selected during
+     blanking, where no raster REG reason should be produced. */
+  if (AYTHER_SUBSCRIBED(AYTHER_SUB_RASTER_TRACKING) &&
+      (((r == 1) && ((reg[1] ^ d) & 0x04) && !(d & 0x04)) ||
+      ((r == 12) && ((reg[12] ^ d) & 0x06) && ((d & 0x06) == 0x06))))
+  {
+    ayther_raster_dirty |= AYTHER_RASTER_REASON_UNSUPPORTED_MODE;
+  }
+#endif
+
   switch(r)
   {
     case 0: /* CTRL #1 */
@@ -2227,7 +2408,7 @@ static void vdp_reg_w(unsigned int r, unsigned int d, unsigned int cycles)
 /*--------------------------------------------------------------------------*/
 /* Internal 16-bit data bus access function (Mode 5 only)                   */
 /*--------------------------------------------------------------------------*/
-static void vdp_bus_w(unsigned int data)
+static void vdp_bus_w(unsigned int data, int from_dma, unsigned int cycles)
 {
   /* write data to next FIFO entry */
   fifo[fifo_idx] = data;
@@ -2264,6 +2445,8 @@ static void vdp_bus_w(unsigned int data)
       {
         int name;
 
+        ayther_raster_mark_vram(index, data, 1, from_dma, cycles);
+
         /* Write data to VRAM */
         *p = data;
 
@@ -2295,6 +2478,9 @@ static void vdp_bus_w(unsigned int data)
       {
         /* CRAM index (64 words) */
         int index = (addr >> 1) & 0x3F;
+
+        ayther_raster_mark_visible(AYTHER_RASTER_REASON_CRAM, index, data, 1,
+                                   from_dma, cycles, index == border);
 
         /* Write CRAM data */
         *p = data;
@@ -2333,7 +2519,11 @@ static void vdp_bus_w(unsigned int data)
 
     case 0x05:  /* VSRAM */
     {
-      *(uint16 *)&vsram[addr & 0x7E] = data;
+      uint16 *p = (uint16 *)&vsram[addr & 0x7E];
+
+      ayther_raster_mark(AYTHER_RASTER_REASON_VSRAM, addr & 0x7E, data,
+                         *p != (uint16)data, from_dma, cycles);
+      *p = data;
 
       /* 2-cell Vscroll mode */
       if (reg[11] & 0x04)
@@ -2505,7 +2695,7 @@ static void vdp_68k_data_w_m5(unsigned int data)
   }
 
   /* Write data */
-  vdp_bus_w(data);
+  vdp_bus_w(data, 0, m68k.cycles);
 
   /* Check if DMA Fill is pending */
   if (dmafill)
@@ -2741,6 +2931,8 @@ static void vdp_z80_data_w_m5(unsigned int data)
       {
         int name;
 
+        ayther_raster_mark_vram(index, data, 1, 0, Z80.cycles);
+
         /* Write data */
         WRITE_BYTE(vram, index, data);
 
@@ -2773,6 +2965,9 @@ static void vdp_z80_data_w_m5(unsigned int data)
         /* CRAM index (64 words) */
         int index = (addr >> 1) & 0x3F;
 
+        ayther_raster_mark_visible(AYTHER_RASTER_REASON_CRAM, index, data, 1,
+                                   0, Z80.cycles, index == border);
+
         /* Write CRAM data */
         *p = data;
 
@@ -2794,8 +2989,13 @@ static void vdp_z80_data_w_m5(unsigned int data)
 
     case 0x05: /* VSRAM */
     {
+      int index = (addr & 0x7F) ^ 1;
+
+      ayther_raster_mark(AYTHER_RASTER_REASON_VSRAM, index, data,
+                         READ_BYTE(vsram, index) != (uint8)data, 0, Z80.cycles);
+
       /* Write low byte to even address & high byte to odd address */
-      WRITE_BYTE(vsram, (addr & 0x7F) ^ 1, data);
+      WRITE_BYTE(vsram, index, data);
       break;
     }
   }
@@ -3108,7 +3308,7 @@ static void vdp_dma_68k_ext(unsigned int length)
     source = (reg[23] << 17) | (source & 0x1FFFF);
 
     /* Write data word to VRAM, CRAM or VSRAM */
-    vdp_bus_w(data);
+    vdp_bus_w(data, 1, mcycles_vdp);
   }
   while (--length);
 
@@ -3136,7 +3336,7 @@ static void vdp_dma_68k_ram(unsigned int length)
     source = (reg[23] << 17) | (source & 0x1FFFF);
 
     /* Write data word to VRAM, CRAM or VSRAM */
-    vdp_bus_w(data);
+    vdp_bus_w(data, 1, mcycles_vdp);
   }
   while (--length);
 
@@ -3184,7 +3384,7 @@ static void vdp_dma_68k_io(unsigned int length)
     source = (reg[23] << 17) | (source & 0x1FFFF);
 
     /* Write data to VRAM, CRAM or VSRAM */
-    vdp_bus_w(data);
+    vdp_bus_w(data, 1, mcycles_vdp);
   }
   while (--length);
 
@@ -3215,6 +3415,10 @@ static void vdp_dma_copy(unsigned int length)
         /* Update internal SAT */
         WRITE_BYTE(sat, (addr & sat_addr_mask) ^ 1, data);
       }
+
+      ayther_raster_mark_vram(addr, data,
+                              READ_BYTE(vram, addr ^ 1) != data, 1,
+                              mcycles_vdp);
 
       /* Write byte to adjacent VRAM destination address */
       WRITE_BYTE(vram, addr ^ 1, data);
@@ -3257,6 +3461,10 @@ static void vdp_dma_fill(unsigned int length)
           WRITE_BYTE(sat, (addr & sat_addr_mask) ^ 1, data);
         }
 
+        ayther_raster_mark_vram(addr, data,
+                                READ_BYTE(vram, addr ^ 1) != data, 1,
+                                mcycles_vdp);
+
         /* Write byte to adjacent VRAM address */
         WRITE_BYTE(vram, addr ^ 1, data);
 
@@ -3289,6 +3497,9 @@ static void vdp_dma_fill(unsigned int length)
           /* CRAM index (64 words) */
           int index = (addr >> 1) & 0x3F;
 
+          ayther_raster_mark_visible(AYTHER_RASTER_REASON_CRAM, index, data, 1,
+                                     1, mcycles_vdp, index == border);
+
           /* Write CRAM data */
           *p = data;
 
@@ -3320,8 +3531,13 @@ static void vdp_dma_fill(unsigned int length)
 
       do
       {
+        uint16 *p = (uint16 *)&vsram[addr & 0x7E];
+
+        ayther_raster_mark(AYTHER_RASTER_REASON_VSRAM, addr & 0x7E, data,
+                           *p != data, 1, mcycles_vdp);
+
         /* Write VSRAM data */
-        *(uint16 *)&vsram[addr & 0x7E] = data;
+        *p = data;
           
         /* Increment VSRAM address */
         addr += reg[15];
@@ -3356,6 +3572,7 @@ static void vdp_set_all_vram(const uint8 *src)
         bg_name_list[bg_list_index++] = name;
       }
       bg_name_dirty[name] |= 0xFF;
+      AYTHER_MARK_VRAM_DIRTY(name, 0xFF);
       memcpy(vram + addr, src + addr, 32);
     }
   }

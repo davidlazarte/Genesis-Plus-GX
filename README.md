@@ -34,16 +34,22 @@
 | **Slots suprimidos** | id **privado** `0x103` (16 bytes, **escribible**) → bitmask de slots SAT que `parse_satb` saltea (ocultar sprite por hash; el frontend lo setea sólo en el frame visible) | `vdp_render.c` | _(esta rama)_ |
 | **Celdas suprimidas** | id **privado** `0x104` (512 bytes, **escribible**) → máscara de celdas de tile (64×64, 8 px, coords del frame con bordes); `merge` decide por celda: con primer plano (A/Window) lo **pela** y revela el Plano B de atrás, y si es Plano B puro revela el **backdrop** | `vdp_render.c` | _(esta rama)_ |
 | **Deltas adicionales** | ids privados `0x105`–`0x10D`: supresión de tiles de plano, atenuado de capas, captura de sprites parseados (`AytherSpr`), log de escrituras a chips de sonido y mute selectivo por canal de audio | `vdp_render.c` · `sound/` | _(esta rama)_ |
+| **ABI AYTHER v1** | `ayther_get_interface(0x00010000)` negocia capabilities, layouts, snapshots, lecturas por copia y escritura controlada; mantiene el adapter legacy | `core/ayther/ayther_api.h` · `libretro.c` | _(esta rama)_ |
 
 Detalle técnico completo de cada id en
 [docs/genesis_plus_gx_libretro.md](docs/genesis_plus_gx_libretro.md).
+El contrato recomendado para integraciones nuevas está en
+[docs/ayther_abi_v1.md](docs/ayther_abi_v1.md).
+Los perfiles de compilación y el protocolo de suscripciones por frame están en
+[docs/ayther_subscriptions.md](docs/ayther_subscriptions.md).
 
-**Ids privados**: `0x100`–`0x10D` no son estándar de libretro (la convención
+**Ids privados legacy**: `0x100`–`0x10E` no son estándar de libretro (la convención
 reserva ≥`0x100` para usos no estandarizados). El Lab de AYTHER los consume vía
 `RetroRunner`/`AytherSession`; un core stock devuelve `null` y el Lab degrada
 con gracia (las vistas VRAM/CRAM/tilemap quedan deshabilitadas). **VRAM y CRAM
 se exponen word-swapped en hosts little-endian** (igual que la Work RAM): el
-byte lógico `off` vive en el array en `off^1`.
+byte lógico `off` vive en el array en `off^1`. La ABI v1 los conserva como
+adapter de transición, pero evita nuevos punteros mutables directos.
 
 ### Upstream vs. mío — de un vistazo
 
@@ -51,7 +57,8 @@ byte lógico `off` vive en el array en `off^1`.
 |---|---|---|
 | Núcleo de emulación (CPU/VDP/audio/CD) | ✅ intacto | — sin cambios |
 | `RETRO_MEMORY_VIDEO_RAM` | devuelve `NULL` | expone VRAM (64 KB) |
-| Ids de memoria `0x100`–`0x10D` | inexistentes | CRAM, regs VDP, máscaras escribibles, sprites, audio |
+| Ids de memoria `0x100`–`0x10E` | inexistentes | CRAM, regs VDP, máscaras escribibles, sprites, audio, motivos de fallback |
+| ABI versionada | inexistente | `ayther_get_interface`: capabilities, layouts y snapshots consistentes |
 | `core/vdp_render.c` | render estándar | + `ayther_peel_merge`, `ayther_layer_mask`, `ayther_*_suppress` |
 | Savestate | STATE_VERSION estándar | + latch del pad 6-botones (1.7.7) |
 | Branding | Genesis Plus GX | **AYTHER Genesis Core Fork** |
@@ -74,7 +81,7 @@ flowchart TB
 
     Runner -- "retro_run / retro_*" --> Libretro
     Libretro -- "RETRO_MEMORY_VIDEO_RAM · VRAM 64 KB" --> Mem
-    Libretro -- "ids privados 0x100-0x10D · CRAM/regs/máscaras" --> Mem
+    Libretro -- "ids privados 0x100-0x10E · CRAM/regs/máscaras/fallback" --> Mem
     VDP -. "ayther_peel_merge · máscaras de capa" .-> Libretro
     Mem --> Runner
     Runner --> Lab
@@ -101,12 +108,28 @@ La DLL no se versiona (BYOC). Con un toolchain **llvm-mingw de runtime MSVCRT**
 make -f Makefile.libretro platform=win64 -j8
 ```
 
+Ese comando produce el perfil estándar: ABI compilada pero sin trabajo AYTHER
+hasta que el frontend solicite suscripciones. Para una DLL sin ABI ni buffers
+AYTHER usar `AYTHER_EXTENSIONS=0 SOUND_PROBE=0`; para consumidores antiguos que
+todavía no suscriben usar `AYTHER_LEGACY_PROFILE=1`. Los cambios de máscara se
+activan juntos al inicio del siguiente frame y el replay de CI exige menos de
+1% de overhead para el perfil compilado-idle frente al build sin extensiones.
+
 Un build UCRT crashea en `retro_load_game` (STATUS_STACK_BUFFER_OVERRUN); el
 MSVCRT es bit-idéntico al DLL stock en emulación. La DLL resultante se despliega
 en AYTHER como `third_party/cores/genesis_plus_gx_libretro_vram.dll`.
 
 **Rebase con upstream:** revisar que `ekeeke/Genesis-Plus-GX` no haya
 implementado `RETRO_MEMORY_VIDEO_RAM` (entraría en conflicto con `7fcf9bc`).
+
+### Fallback raster seguro
+
+La memoria privada `0x10E` expone un bitmask por frame con los motivos que
+impiden recomponerlo fielmente desde el estado final del VDP: registros, VRAM,
+CRAM, VSRAM, tabla de hscroll, origen DMA y modos no soportados. El core lo
+reinicia automáticamente y mantiene compatibilidad con consumidores que sólo
+comprueban `valor > 0`. Contrato y tabla de bits:
+[`docs/ayther_raster_fallback.md`](docs/ayther_raster_fallback.md).
 
 ### `audio_probe` — exposición de gatillos de sonido (opt-in)
 
@@ -116,13 +139,20 @@ secuencie y sustituya audio. Detrás del flag `SOUND_PROBE` (**costo cero**
 cuando está apagado, igual que `HOOK_CPU`):
 
 - **Eventos** FM (cores MAME y Nuked), PSG y DAC con línea de tiempo monótona,
-  vía callback o ring buffer.
+  vía callback o ring SPSC thread-safe con overflow y high-water observables.
 - **Estado de voz resuelto** + huella canónica **independiente de canal**.
 - **Gain por canal** para sustituir audio.
-- API exportada desde el `.so` (`audio_probe_*`) con `SOUND_PROBE=1`.
+- API versionada por `ayther_get_interface` y exports legacy `audio_probe_*`
+  sólo con `SOUND_PROBE=1`.
 
 Diseño e integración: [`docs/audio_probe.md`](docs/audio_probe.md) · pruebas:
 [`tests/`](tests/) (`cd tests && make check`).
+
+La CI AYTHER también ejecuta un ROM homebrew generado en memoria contra el core
+completo: tres pasadas separadas por restore verifican hashes de video, audio,
+savestate, inputs y telemetría, además de `false_clean=0`. El mismo fixture
+publica tiempos por frame p50/p95/p99 y diagnóstico JSONL reproducible; detalles
+en [`tests/ayther/`](tests/ayther/) y [`bench/`](bench/).
 
 ---
 

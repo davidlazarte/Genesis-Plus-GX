@@ -48,11 +48,11 @@ This single decision (snapshot-on-anchor) is what makes the rest robust.
 | **Facade** (`audio_probe.{c,h}`) | One module centralizes hooks, schema, gating. Chips only *report*; the core never knows the tool. |
 | **Snapshot / Memento on anchor** | Resolved voice state captured at key-on, not reconstructed from deltas. Survives cached patches. |
 | **Canonical Value Object** (voice descriptor + hash) | Makes a trigger **channel- and time-invariant**. Searching for "a" becomes a hash lookup, not a register address match. |
-| **Coincidence-window grouping** | Simultaneous writes (same cycle ± window) get a shared `group` id → one logical trigger spanning multiple channels. Enables "a/b/c mark a start regardless of channel". |
+| **Coincidence-window grouping** | Logical anchors (`NOTE_ON`, `DAC_START`) inside a fixed window from the first anchor get a shared non-zero `group`. RAW/FRAME/release events use `group=0` and cannot extend the window. |
 | **Anchor taxonomy** (typed events) | The tool searches over typed anchors (NOTE_ON, DAC_START…), not a raw byte torrent. |
 | **Differential emission / dirty-flag** | Emit only on meaningful state change → less noise, fewer false triggers. |
 | **Monotonic timeline** (clock-domain normalization) | Global monotonic timestamp → seek, measure Δt, normalize PAL/NTSC and lag frames. |
-| **Producer/Consumer ring buffer** | Decouples emulator thread from tool thread; non-blocking emission, plus an optional direct callback. |
+| **Producer/Consumer ring buffer** | Acquire/release SPSC queue decouples emulator and tool threads; overflow, effective capacity and high-water mark are observable. |
 | **Schema versioning** | Every event carries `schema` → core and tool evolve without breaking. |
 
 The decisive pair is **Snapshot-on-anchor + Canonical hash**: together they turn
@@ -128,6 +128,10 @@ typedef void (*ap_callback_t)(const ap_event_t *ev, void *user);
 void audio_probe_set_callback(ap_callback_t cb, void *user);
 int  audio_probe_poll(ap_event_t *out, int max);   /* drains up to N, returns count */
 
+typedef ayther_audio_transport_stats_v1 ap_transport_stats_t;
+void audio_probe_get_transport_stats(ap_transport_stats_t *out);
+void audio_probe_reset_transport_stats(void);
+
 /* Context / identity / time base. */
 typedef struct {
   unsigned int  rom_crc;
@@ -141,6 +145,42 @@ void audio_probe_get_context(ap_context_t *out);
 /* Substitution lever: per-channel gain/mute (0..100, 0 = mute). */
 void audio_probe_set_channel_gain(ap_source_t src, int ch, int gain_percent);
 ```
+
+The canonical public layouts live in `core/ayther/ayther_api.h`. The ABI v1
+descriptor advertises `AYTHER_CAP_AUDIO_PROBE_V1` only in `SOUND_PROBE=1`
+builds and appends `poll_audio_events` plus `get_audio_transport_stats` function
+pointers. Consumers should prefer those negotiated pointers over resolving the
+legacy `audio_probe_*` symbols directly.
+
+## Threading and realtime contract
+
+The supported transport model is exactly one producer and one consumer:
+
+- the emulator/audio thread is the sole producer;
+- one tool/frontend thread may call `audio_probe_poll` concurrently;
+- the producer publishes a complete event before a release-store to `head`;
+- the consumer acquire-loads `head` before copying slots and is the only owner
+  that advances `tail`;
+- core resets preserve already-published events, because resetting `tail` from
+  the producer would violate SPSC ownership;
+- overflow never blocks the emulator. `dropped_events` saturates at
+  `UINT32_MAX`; `capacity`, `pending` and `high_water_mark` are available in
+  `ap_transport_stats_t`;
+- channel gains use the same portable atomic layer because a tool may update
+  them while the audio thread mixes samples.
+
+`audio_probe_set_callback` remains available for legacy push consumers.
+Registration changes are synchronized with in-flight callbacks, so the
+callback/user-data pair is coherent even when registration changes from
+another thread. The callback runs inline on the realtime-critical emulator
+thread: it must be bounded, non-blocking, and must not re-enter `audio_probe`
+or change its own registration. A slow callback delays emulation by contract;
+polling is the recommended mode for general consumers.
+
+`audio_probe_reset`, `audio_probe_set_time`, `audio_probe_frame`, signal and
+chip emit functions are producer-only. `audio_probe_poll` is consumer-only and
+must not be called by multiple tool threads. Transport statistics are safe to
+read concurrently and represent a point-in-time snapshot.
 
 ### Resolved-state accessors added to the chips
 
@@ -254,10 +294,12 @@ compiles to nothing.
 
 There are two ways to receive events. Pick one:
 
-- **Callback (push):** register a function called inline for every event.
+- **Callback (push):** register a bounded, non-blocking function called inline
+  on the emulator thread for every event.
 - **Poll (pull):** leave the callback unset and drain the ring buffer
   periodically (e.g. once per frame). This decouples the emulator thread from
-  the tool thread.
+  the tool thread and exposes overflow statistics. This is the recommended
+  integration.
 
 A frontend or harness that `dlopen`s the core resolves the consumer API by name:
 
@@ -267,11 +309,13 @@ A frontend or harness that `dlopen`s the core resolves the consumer API by name:
 /* resolved via dlsym() on the loaded core */
 void (*set_cb)(ap_callback_t, void *);
 int  (*poll)(ap_event_t *, int);
+void (*get_stats)(ap_transport_stats_t *);
 void (*get_ctx)(ap_context_t *);
 void (*set_gain)(ap_source_t, int, int);
 
 set_cb  = dlsym(core, "audio_probe_set_callback");
 poll    = dlsym(core, "audio_probe_poll");
+get_stats = dlsym(core, "audio_probe_get_transport_stats");
 get_ctx = dlsym(core, "audio_probe_get_context");
 set_gain= dlsym(core, "audio_probe_set_channel_gain");
 ```
@@ -300,6 +344,11 @@ for (;;) {
         break;
       default: break;
     }
+  }
+  ap_transport_stats_t stats;
+  get_stats(&stats);
+  if (stats.dropped_events != 0) {
+    request_resync();       /* the consumer fell behind */
   }
 }
 ```
@@ -331,6 +380,9 @@ make check
 ```
 
 They cover event round-trips, the monotonic timeline, FM voice decoding,
-**channel-independent fingerprints**, note/DAC/PSG events, per-channel gain,
-coincidence grouping, ring-buffer overflow, the callback path, and the context
-accessor. See [`tests/README.md`](../tests/README.md).
+**channel-independent fingerprints**, note/DAC/PSG events, atomic per-channel
+gain, first-anchor coincidence grouping, observable overflow, callback
+reconfiguration and the context accessor. A second executable stresses one
+producer and one consumer with three million events, a 64-slot wrap-around
+ring and concurrent callback changes. CI repeats that stress under
+ThreadSanitizer. See [`tests/README.md`](../tests/README.md).

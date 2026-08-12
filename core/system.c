@@ -442,6 +442,9 @@ void system_frame_gen(int do_skip)
     }
   }
 
+  /* AYTHER: reset after applying deferred mode/interlace changes. */
+  vdp_ayther_begin_frame();
+
   /* first line of overscan */
   if (bitmap.viewport.y)
   {
@@ -786,6 +789,9 @@ void system_frame_scd(int do_skip)
       bitmap.viewport.changed |= 1;
     }
   }
+
+  /* AYTHER: reset after applying deferred mode/interlace changes. */
+  vdp_ayther_begin_frame();
 
   /* first line of overscan */
   if (bitmap.viewport.y)
@@ -1154,6 +1160,9 @@ void system_frame_sms(int do_skip)
 
   /* initialize VCounter */
   v_counter = bitmap.viewport.h;
+
+  /* AYTHER: reset after applying deferred mode/interlace changes. */
+  vdp_ayther_begin_frame();
 
   /* first line of overscan */
   if (bitmap.viewport.y > 0)

@@ -42,6 +42,14 @@ extern int8 audio_hard_disable;
 
 extern int8 reset_do_not_clear_buffers;
 
+#ifdef SOUND_PROBE
+#include "audio_probe.h"
+#endif
+
+#ifdef AYTHER_EXTENSIONS
+#include "ayther_runtime.h"
+#endif
+
 #define PCM_SCYCLES_RATIO (384 * 4)
 
 #define pcm scd.pcm_hw
@@ -225,9 +233,24 @@ void pcm_run(unsigned int length)
               data = -(data & 0x7f);
             }
 
+            int l_delta = ((data * pcm.chan[j].env * (pcm.chan[j].pan & 0x0F)) >> 5);
+            int r_delta = ((data * pcm.chan[j].env * (pcm.chan[j].pan >> 4)) >> 5);
+
+#if defined(SOUND_PROBE) && defined(AYTHER_EXTENSIONS)
+            if (AYTHER_SUBSCRIBED(AYTHER_SUB_RENDER_CONTROLS))
+            {
+              int gain = audio_probe_get_channel_gain(AP_SRC_PCM, j);
+              if (gain < 100)
+              {
+                l_delta = (l_delta * gain) / 100;
+                r_delta = (r_delta * gain) / 100;
+              }
+            }
+#endif
+
             /* multiply PCM data with ENV & stereo PAN data then add to L/R outputs (14.5 fixed point) */
-            l += ((data * pcm.chan[j].env * (pcm.chan[j].pan & 0x0F)) >> 5);
-            r += ((data * pcm.chan[j].env * (pcm.chan[j].pan >> 4)) >> 5);
+            l += l_delta;
+            r += r_delta;
           }
         }
       }
@@ -315,6 +338,9 @@ void pcm_write(unsigned int address, unsigned char data, unsigned int cycles)
     {
       /* update channel ENV multiplier */
       pcm.chan[pcm.index].env = data;
+#ifdef SOUND_PROBE
+      audio_probe_pcm_volume(pcm.index, data, pcm.chan[pcm.index].pan);
+#endif
       return;
     }
 
@@ -322,6 +348,9 @@ void pcm_write(unsigned int address, unsigned char data, unsigned int cycles)
     {
       /* update channel stereo panning value */
       pcm.chan[pcm.index].pan = data;
+#ifdef SOUND_PROBE
+      audio_probe_pcm_volume(pcm.index, pcm.chan[pcm.index].env, data);
+#endif
       return;
     }
 
@@ -329,6 +358,9 @@ void pcm_write(unsigned int address, unsigned char data, unsigned int cycles)
     {
       /* update channel WAVE RAM address increment LSB */
       pcm.chan[pcm.index].fd.byte.l = data;
+#ifdef SOUND_PROBE
+      audio_probe_pcm_pitch(pcm.index, pcm.chan[pcm.index].fd.w);
+#endif
       return;
     }
 
@@ -336,6 +368,9 @@ void pcm_write(unsigned int address, unsigned char data, unsigned int cycles)
     {
       /* update channel WAVE RAM address increment MSB */
       pcm.chan[pcm.index].fd.byte.h = data;
+#ifdef SOUND_PROBE
+      audio_probe_pcm_pitch(pcm.index, pcm.chan[pcm.index].fd.w);
+#endif
       return;
     }
 
@@ -387,7 +422,27 @@ void pcm_write(unsigned int address, unsigned char data, unsigned int cycles)
     case 0x08: /* ON/OFF register */
     {
       /* update PCM channels status */
+      unsigned char old_status = pcm.status;
       pcm.status = ~data;
+
+#ifdef SOUND_PROBE
+      {
+        int i;
+        for (i = 0; i < 8; i++)
+        {
+          int was_on = (old_status & (1 << i));
+          int is_on = (pcm.status & (1 << i));
+          if (!was_on && is_on)
+          {
+            audio_probe_pcm_key(i, 1, pcm.chan[i].env, pcm.chan[i].pan, pcm.chan[i].fd.w);
+          }
+          else if (was_on && !is_on)
+          {
+            audio_probe_pcm_key(i, 0, 0, 0, 0);
+          }
+        }
+      }
+#endif
 
       /* reload WAVE RAM address pointers when channels are OFF */
       if (data & 0x01) pcm.chan[0].addr = pcm.chan[0].st;

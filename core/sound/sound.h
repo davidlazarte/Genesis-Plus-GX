@@ -40,6 +40,11 @@
 #ifndef _SOUND_H_
 #define _SOUND_H_
 
+#ifdef AYTHER_EXTENSIONS
+#include "../ayther/ayther_api.h"
+#include "../ayther/ayther_runtime.h"
+#endif
+
 /* Function prototypes */
 extern void sound_init(void);
 extern void sound_reset(void);
@@ -60,24 +65,22 @@ extern void restore_sound_buffer();
  * través del replay (la CPU/VDP son byte-deterministas) — en lugar de hashear el
  * PCM de salida, que NO es reproducible tras unserialize (la fase del FM diverge).
  * El core queda "tonto": sólo registra (cycle, addr, data, chip); toda la
- * interpretación (estado de canal, key-on/off, firma) vive en el host. Mismo
- * patrón frontend-reset que los sprites parseados (ids 0x10B/0x10C). sound.c.
+ * interpretación (estado de canal, key-on/off, firma) vive en el host. La ABI
+ * v1 hace que el core reinicie contadores/overflow por frame; la escritura de
+ * reset por IDs legacy sigue aceptada durante la transición. sound.c.
  * -------------------------------------------------------------------------- */
+#ifdef AYTHER_EXTENSIONS
+
 #define AYTHER_AUDIO_CHIP_FM   0   /* YM2612 (FM)    */
 #define AYTHER_AUDIO_CHIP_PSG  1   /* SN76489 (PSG)  */
 #define AYTHER_AUDIO_WRITE_CAP 8192
 
-typedef struct
-{
-  uint32 cycle;  /* timestamp en M-cycles del CPU dentro del frame */
-  uint16 addr;   /* FM: bus address 0..3 (port/data; banco vía bit 1). PSG: 0 */
-  uint8  data;   /* byte escrito al bus del chip */
-  uint8  chip;   /* AYTHER_AUDIO_CHIP_FM | AYTHER_AUDIO_CHIP_PSG */
-} AytherAudioWrite;
+typedef ayther_audio_write_v1 AytherAudioWrite;
 
 extern AytherAudioWrite ayther_audio_writes[AYTHER_AUDIO_WRITE_CAP];
 extern uint32 ayther_audio_write_n;
-extern void ayther_record_audio_write(uint8 chip, uint16 addr, uint8 data, uint32 cycle);
+extern uint32 ayther_audio_write_overflow;
+
 
 /* ----------------------------------------------------------------------------
  * AYTHER fork delta: máscara de SILENCIADO POR CANAL (2 bytes, ESCRIBIBLE desde
@@ -90,7 +93,19 @@ extern void ayther_record_audio_write(uint8 chip, uint16 addr, uint8 data, uint3
  * evento mientras suena su asset HD.
  * -------------------------------------------------------------------------- */
 extern uint16 ayther_audio_mute;
-#define AYTHER_FM_MUTED(ch)  (ayther_audio_mute & (1u << (ch)))        /* ch 0-5 */
-#define AYTHER_PSG_MUTED(ch) (ayther_audio_mute & (1u << (6 + (ch))))  /* ch 0-3 */
+#define AYTHER_FM_MUTED(ch) \
+  (AYTHER_SUBSCRIBED(AYTHER_SUB_RENDER_CONTROLS) && \
+   (ayther_audio_mute & (1u << (ch))))
+#define AYTHER_PSG_MUTED(ch) \
+  (AYTHER_SUBSCRIBED(AYTHER_SUB_RENDER_CONTROLS) && \
+   (ayther_audio_mute & (1u << (6 + (ch)))))
+
+#else
+
+
+#define AYTHER_FM_MUTED(ch) 0
+#define AYTHER_PSG_MUTED(ch) 0
+
+#endif /* AYTHER_EXTENSIONS */
 
 #endif /* _SOUND_H_ */

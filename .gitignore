@@ -1,6 +1,6 @@
 .vs/
 .idea/
-Debug/
+/Debug/
 Release/
 
 psp2/*.o
@@ -21,5 +21,12 @@ sdl/build_sdl2
 *.a
 *.so
 
-# audio_probe unit test binary
+# AYTHER test and benchmark outputs
 /tests/test_audio_probe
+/tests/.build/
+/tests/artifacts/
+/tests/.build-*/
+/tests/artifacts-*/
+/bench/.build/
+/bench/artifacts/
+/ayther-artifacts/

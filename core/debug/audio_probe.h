@@ -50,70 +50,64 @@
 
 #ifdef SOUND_PROBE
 
+#include "../ayther/ayther_api.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#define AUDIO_PROBE_SCHEMA 1
+/* The libretro build must expose the consumer API from Windows DLLs. Unix
+   exports are constrained by libretro/link.T; isolated tests intentionally do
+   not define __LIBRETRO__ and therefore need no import/export decoration. */
+#if defined(_WIN32) && defined(__LIBRETRO__)
+#define AUDIO_PROBE_API __declspec(dllexport)
+#else
+#define AUDIO_PROBE_API
+#endif
+
+#define AUDIO_PROBE_SCHEMA AYTHER_LAYOUT_AUDIO_EVENT_V1
 
 /* internal event ring buffer size (must be a power of two) */
 #ifndef AUDIO_PROBE_RING_SIZE
 #define AUDIO_PROBE_RING_SIZE 8192
 #endif
 
-/* events whose global timestamps differ by less than this many master cycles
-   are considered part of the same logical trigger (coincidence window) */
+typedef char audio_probe_ring_size_must_be_power_of_two[
+    (AUDIO_PROBE_RING_SIZE >= 2 &&
+     ((AUDIO_PROBE_RING_SIZE & (AUDIO_PROBE_RING_SIZE - 1)) == 0)) ? 1 : -1];
+
+/* NOTE_ON/DAC_START anchors no farther than this many master cycles from the
+   first anchor share one logical trigger. Non-anchors never move the window. */
 #ifndef AUDIO_PROBE_COINCIDENCE_WINDOW
 #define AUDIO_PROBE_COINCIDENCE_WINDOW 1024
 #endif
 
-typedef enum {
-  AP_SRC_FM  = 0,   /* YM2612 (MAME OPN2 path)        */
-  AP_SRC_PSG = 1,   /* SN76489                        */
-  AP_SRC_DAC = 2,   /* YM2612 channel 6 DAC           */
-  AP_SRC_PCM = 3    /* Sega CD RF5C164 PCM (phase 3)  */
-} ap_source_t;
+typedef enum ayther_audio_source_v1 ap_source_t;
+typedef enum ayther_audio_event_type_v1 ap_event_type_t;
+typedef ayther_audio_voice_v1 ap_voice_t;
+typedef ayther_audio_event_v1 ap_event_t;
+typedef ayther_audio_transport_stats_v1 ap_transport_stats_t;
 
-typedef enum {
-  AP_EV_RAW_WRITE = 0, /* raw register write (reg,data)        */
-  AP_EV_NOTE_ON,       /* key-on  (voice + hashes valid)       */
-  AP_EV_NOTE_OFF,      /* key-off                              */
-  AP_EV_DAC_START,     /* DAC enabled                          */
-  AP_EV_DAC_STOP,      /* DAC disabled                         */
-  AP_EV_PATCH,         /* instrument changed       (phase 3)   */
-  AP_EV_PITCH,         /* frequency changed        (phase 3)   */
-  AP_EV_VOLUME,        /* level/attenuation change (phase 3)   */
-  AP_EV_RESET,         /* chip reset       -> resync           */
-  AP_EV_STATE_LOAD,    /* savestate loaded -> resync           */
-  AP_EV_FRAME          /* end-of-frame marker (timeline)       */
-} ap_event_type_t;
+#define AP_SRC_FM  AYTHER_AUDIO_SOURCE_FM
+#define AP_SRC_PSG AYTHER_AUDIO_SOURCE_PSG
+#define AP_SRC_DAC AYTHER_AUDIO_SOURCE_DAC
+#define AP_SRC_PCM AYTHER_AUDIO_SOURCE_PCM
 
-/* Resolved voice state, channel-independent. FM uses all 4 operators (in
-   hardware register order); PSG uses index [0]. */
-typedef struct {
-  unsigned char op_tl[4], op_ar[4], op_dr[4], op_sr[4], op_rr[4], op_mul[4], op_dt[4];
-  unsigned char algorithm, feedback, ams, fms, pan;
-  unsigned int  block_fnum;   /* FM blk/fnum, or PSG tone period */
-} ap_voice_t;
-
-typedef struct {
-  unsigned long long t_global;    /* monotonic master-cycle timestamp     */
-  unsigned int  t_frame;          /* frame index                          */
-  unsigned int  t_cycles;         /* cycles within the frame              */
-  unsigned char source;           /* ap_source_t                          */
-  unsigned char type;             /* ap_event_type_t                      */
-  unsigned char channel;          /* physical channel (0xff = n/a)        */
-  unsigned char schema;           /* AUDIO_PROBE_SCHEMA                    */
-  unsigned int  group;            /* coincidence id (logical trigger)     */
-  unsigned int  reg;              /* raw register/addr (AP_EV_RAW_WRITE)  */
-  unsigned int  data;             /* raw data / key-on slot mask          */
-  ap_voice_t    voice;            /* valid for AP_EV_NOTE_ON               */
-  unsigned long long voice_hash;  /* canonical fingerprint (timbre+tone)  */
-  unsigned long long timbre_hash; /* canonical fingerprint (timbre only)  */
-} ap_event_t;
+#define AP_EV_RAW_WRITE AYTHER_AUDIO_EVENT_RAW_WRITE
+#define AP_EV_NOTE_ON   AYTHER_AUDIO_EVENT_NOTE_ON
+#define AP_EV_NOTE_OFF  AYTHER_AUDIO_EVENT_NOTE_OFF
+#define AP_EV_DAC_START AYTHER_AUDIO_EVENT_DAC_START
+#define AP_EV_DAC_STOP  AYTHER_AUDIO_EVENT_DAC_STOP
+#define AP_EV_PATCH     AYTHER_AUDIO_EVENT_PATCH
+#define AP_EV_PITCH     AYTHER_AUDIO_EVENT_PITCH
+#define AP_EV_VOLUME    AYTHER_AUDIO_EVENT_VOLUME
+#define AP_EV_RESET     AYTHER_AUDIO_EVENT_RESET
+#define AP_EV_STATE_LOAD AYTHER_AUDIO_EVENT_STATE_LOAD
+#define AP_EV_FRAME     AYTHER_AUDIO_EVENT_FRAME
 
 typedef struct {
   unsigned int  rom_crc;          /* ROM checksum (identity)              */
+  unsigned int  rom_crc32;        /* ROM crc32 */
   unsigned char region;           /* 0 = NTSC, 1 = PAL                    */
   unsigned int  system_hw;        /* SYSTEM_* hardware id                 */
   unsigned int  master_clock;     /* master clock in Hz                   */
@@ -122,25 +116,37 @@ typedef struct {
 
 /* ---------------- consumer-facing API (external tool) ---------------- */
 
-/* Register a callback invoked inline for every event. When no callback is set,
-   events are buffered and must be drained with audio_probe_poll(). */
+/* Register a callback invoked inline on the emulator/audio thread for every
+   event. Registration changes are synchronized with in-flight callbacks, but
+   the callback itself is realtime-critical: it must be bounded, non-blocking,
+   and must not re-enter audio_probe or change its own registration. Polling is
+   recommended for consumers that cannot honor that contract. */
 typedef void (*ap_callback_t)(const ap_event_t *ev, void *user);
-void audio_probe_set_callback(ap_callback_t cb, void *user);
+AUDIO_PROBE_API void audio_probe_set_callback(ap_callback_t cb, void *user);
 
-/* Drain up to 'max' buffered events into 'out'; returns the number copied. */
-int  audio_probe_poll(ap_event_t *out, int max);
+/* Exactly one consumer may drain the SPSC queue. The emulator/audio thread is
+   its sole producer. Drain up to 'max' events and return the number copied. */
+AUDIO_PROBE_API int audio_probe_poll(ap_event_t *out, int max);
+
+/* Concurrent transport metrics. Overflow is explicit and saturating; resetting
+   metrics is safe during activity but defines an approximate interval boundary. */
+AUDIO_PROBE_API void audio_probe_get_transport_stats(ap_transport_stats_t *out);
+AUDIO_PROBE_API void audio_probe_reset_transport_stats(void);
 
 /* Fill the current emulation context/identity. */
-void audio_probe_get_context(ap_context_t *out);
+AUDIO_PROBE_API void audio_probe_get_context(ap_context_t *out);
 
 /* Per-channel output gain in percent (0 = mute, 100 = unchanged), applied to
    the audio mixer. FM channels 0-5 use AP_SRC_FM; while DAC mode is active,
    channel 6 uses AP_SRC_DAC. PSG channels 0-3 use AP_SRC_PSG. */
-void audio_probe_set_channel_gain(ap_source_t src, int ch, int gain_percent);
-int  audio_probe_get_channel_gain(ap_source_t src, int ch);
+AUDIO_PROBE_API void audio_probe_set_channel_gain(ap_source_t src, int ch,
+                                                  int gain_percent);
+AUDIO_PROBE_API int audio_probe_get_channel_gain(ap_source_t src, int ch);
 
 /* ---------------- core-internal emit API (chips/system) ---------------- */
 
+void audio_probe_set_enabled(int enabled);
+int audio_probe_is_enabled(void);
 void audio_probe_reset(void);
 void audio_probe_set_time(unsigned int cycles);
 void audio_probe_frame(unsigned int frame_cycles);
@@ -149,6 +155,9 @@ void audio_probe_fm_raw(unsigned int reg, unsigned int data);
 void audio_probe_fm_key(int ch, unsigned int slot_mask);
 void audio_probe_fm_dac(int enabled);
 void audio_probe_psg_raw(unsigned int clocks, unsigned int data);
+void audio_probe_pcm_key(int ch, int on, unsigned int env, unsigned int pan, unsigned int fd);
+void audio_probe_pcm_volume(int ch, unsigned int env, unsigned int pan);
+void audio_probe_pcm_pitch(int ch, unsigned int fd);
 
 #ifdef __cplusplus
 }

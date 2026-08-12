@@ -53,6 +53,7 @@ extern uint8 sat[0x400];
 extern uint8 vram[0x10000];
 extern uint8 cram[0x80];
 extern uint8 vsram[0x80];
+extern uint8 border;   /* AYTHER (#12C): indice de color del borde */
 extern uint8 hint_pending;
 extern uint8 vint_pending;
 extern uint16 status;

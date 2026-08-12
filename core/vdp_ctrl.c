@@ -47,6 +47,28 @@ static int8 do_not_invalidate_tile_cache;
 
 static void vdp_set_all_vram(const uint8 *src);
 
+/* AYTHER (#405): el espejo ACUMULATIVO de bg_name_dirty.
+
+   `bg_name_dirty` no sirve para contarle al frontend qué cambió en el frame:
+   `update_bg_pattern_cache()` lo va limpiando pattern por pattern DENTRO de
+   `render_line_impl`, o sea a mitad del frame. Para cuando el frontend puede
+   preguntar —despues de retro_run— ya está casi siempre vacío. Medido desde el
+   Engine con el core `15872fc`: 0 patterns marcados en 240 frames contra 711
+   que habían cambiado de verdad, o sea el 100% de falsos negativos.
+
+   Este array es el mismo dato pero con la vida que el consumidor necesita: se
+   marca en los mismos lugares y NADIE lo limpia salvo el propio poll del
+   frontend (consume-on-poll, en ayther_poll_frame_delta_v1). Así el dato es
+   siempre un SUPERCONJUNTO de lo que cambió —que es lo único que lo hace usable
+   como invalidación— y sobrevive a un unserialize, donde la VRAM puede haber
+   cambiado entera sin que corriera un solo frame. */
+#ifdef AYTHER_EXTENSIONS
+uint8 ayther_vram_dirty[0x800];
+#define AYTHER_MARK_VRAM_DIRTY(n, bits) ayther_vram_dirty[(n)] |= (uint8)(bits)
+#else
+#define AYTHER_MARK_VRAM_DIRTY(n, bits) do {} while (0)
+#endif
+
 /* Mark a pattern as modified */
 #define MARK_BG_DIRTY(addr)                         \
 {                                                   \
@@ -56,6 +78,7 @@ static void vdp_set_all_vram(const uint8 *src);
     bg_name_list[bg_list_index++] = name;           \
   }                                                 \
   bg_name_dirty[name] |= (1 << ((addr >> 2) & 7));  \
+  AYTHER_MARK_VRAM_DIRTY(name, 1 << ((addr >> 2) & 7)); \
 }
 
 /* VINT timings */
@@ -361,6 +384,14 @@ void vdp_ayther_begin_frame(void)
 {
   ayther_core_frame_generation++;
   ayther_raster_dirty = 0;
+  /* AYTHER (#405): el journal es de ESTE frame, igual que `ayther_raster_dirty`
+     de la línea de arriba — y hasta acá no se reiniciaba en ningún lado. Se
+     llenaba hasta su tope de AYTHER_RASTER_JOURNAL_MAX en los primeros frames y
+     se quedaba ahí para siempre: medido desde el Engine, `raster_event_count`
+     daba 256 fijo desde el primer frame observado y no bajaba nunca. El replay
+     de #12C (ayther_core_recompose_multilayer) estaba, por lo tanto, aplicando
+     eventos fósiles del arranque a cada línea que recomponía. */
+  ayther_raster_journal_count = 0;
   if (AYTHER_SUBSCRIBED(AYTHER_SUB_RASTER_TRACKING))
     ayther_raster_dirty = ayther_recompose_mode_supported()
       ? 0u : AYTHER_RASTER_REASON_UNSUPPORTED_MODE;
@@ -420,6 +451,11 @@ void vdp_reset(void)
     bg_list_index = 0;
     memset((char *)bg_name_dirty, 0, sizeof(bg_name_dirty));
     memset((char *)bg_name_list, 0, sizeof(bg_name_list));
+#ifdef AYTHER_EXTENSIONS
+    /* AYTHER (#405): la VRAM se acaba de poner en cero (arriba). Para el
+       frontend eso es un cambio de los 2048 patterns, no una limpieza. */
+    memset((char *)ayther_vram_dirty, 0xFF, sizeof(ayther_vram_dirty));
+#endif
   }
   /* default Window clipping */
   window_clip(0,0);
@@ -761,6 +797,11 @@ int vdp_context_load(uint8 *state)
       bg_name_list[i] = i;
       bg_name_dirty[i] = 0xFF;
     }
+#ifdef AYTHER_EXTENSIONS
+    /* AYTHER (#405): acá se copió la VRAM ENTERA, no los tiles del cache. El
+       frontend tiene que enterarse de todo, no de `bg_list_index` patterns. */
+    memset((char *)ayther_vram_dirty, 0xFF, sizeof(ayther_vram_dirty));
+#endif
   }
 
   do_not_invalidate_tile_cache = false;
@@ -3531,6 +3572,7 @@ static void vdp_set_all_vram(const uint8 *src)
         bg_name_list[bg_list_index++] = name;
       }
       bg_name_dirty[name] |= 0xFF;
+      AYTHER_MARK_VRAM_DIRTY(name, 0xFF);
       memcpy(vram + addr, src + addr, 32);
     }
   }

@@ -75,6 +75,11 @@ extern uint8 hscroll_mask;
 /* AYTHER (#5/#274): bitmask transiente de motivos de fallback por frame.
    Se expone por el id privado 0x10E; `> 0` conserva el contrato booleano. */
 extern uint32 ayther_raster_dirty;
+/* AYTHER (#405): espejo acumulativo de `bg_name_dirty` para el frontend. El
+   original lo limpia `update_bg_pattern_cache()` a mitad del frame, así que
+   nunca llegaba nada al otro lado; este sólo lo limpia el poll del frontend
+   (ayther_poll_frame_delta_v1). Ver el comentario largo en vdp_ctrl.c. */
+extern uint8 ayther_vram_dirty[0x800];
 #endif
 extern uint8 playfield_shift;
 extern uint8 playfield_col_mask;

@@ -4356,7 +4356,18 @@ static int32_t AYTHER_CALL ayther_poll_frame_delta_v1(
    out->raster_event_count = ayther_raster_journal_count;
    out->parsed_sprite_count = ayther_sprite_n;
    out->audio_write_count = ayther_audio_write_n;
-   memcpy(out->dirty_patterns, bg_name_dirty, sizeof(bg_name_dirty));
+   /* AYTHER (#405): del espejo ACUMULATIVO, no de `bg_name_dirty`. Al original
+      lo limpia `update_bg_pattern_cache()` línea por línea DENTRO del frame, y
+      para cuando el frontend puede preguntar ya está vacío — medido desde el
+      Engine: 0 patterns marcados en 240 frames contra 711 que habían cambiado.
+
+      CONSUME-ON-POLL: leer el delta lo vacía, así el poll siguiente trae lo
+      ensuciado DESDE ESTE. Eso lo hace válido para UN consumidor por frame, que
+      es el contrato del resto de la ABI (un hilo de emulación, un frontend), y
+      a cambio el dato sobrevive a un unserialize — donde la VRAM puede cambiar
+      entera sin que haya corrido un solo frame. */
+   memcpy(out->dirty_patterns, ayther_vram_dirty, sizeof(out->dirty_patterns));
+   memset(ayther_vram_dirty, 0, sizeof(ayther_vram_dirty));
 
    return AYTHER_STATUS_OK;
 }

@@ -44,10 +44,14 @@
 
 /* VDP context */
 extern uint8 reg[0x20];
-extern uint8 sat[0x400];
-extern uint8 vram[0x10000];
-extern uint8 cram[0x80];
-extern uint8 vsram[0x80];
+/* These four are defined with ALIGNED_(4) in vdp_ctrl.c. Repeating the
+   attribute here keeps declaration and definition in agreement: a TU that
+   only sees the extern assumes the type's preferred alignment (16 for an
+   array this size) and may vectorize a copy with an aligned load. */
+extern uint8 ALIGNED_(4) sat[0x400];
+extern uint8 ALIGNED_(4) vram[0x10000];
+extern uint8 ALIGNED_(4) cram[0x80];
+extern uint8 ALIGNED_(4) vsram[0x80];
 extern uint8 hint_pending;
 extern uint8 vint_pending;
 extern uint16 status;

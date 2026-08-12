@@ -48,11 +48,19 @@
 #endif
 
 /* VDP context */
+/* Las cuatro definiciones de vdp_ctrl.c fuerzan ALIGNED_(4). Sin repetirlo
+   ACA, un TU que solo vea el `extern` asume la alineacion preferida del tipo
+   —16 para un array de este tamano— y el vectorizador emite `movaps`, que
+   exige 16 de verdad. Eso es exactamente lo que hacia crashear a
+   `ayther_core_recompose_multilayer` al copiar `cram` entero desde otro TU con
+   -O2: `cram` cae en ...0228, alineado a 8, y el load alineado dispara un
+   ACCESS_VIOLATION. En -O0 no se veia porque no habia vectorizacion.
+   Declaracion y definicion tienen que decir LO MISMO. */
 extern uint8 reg[0x20];
-extern uint8 sat[0x400];
-extern uint8 vram[0x10000];
-extern uint8 cram[0x80];
-extern uint8 vsram[0x80];
+extern uint8 ALIGNED_(4) sat[0x400];
+extern uint8 ALIGNED_(4) vram[0x10000];
+extern uint8 ALIGNED_(4) cram[0x80];
+extern uint8 ALIGNED_(4) vsram[0x80];
 extern uint8 border;   /* AYTHER (#12C): indice de color del borde */
 extern uint8 hint_pending;
 extern uint8 vint_pending;

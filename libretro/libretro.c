@@ -4174,6 +4174,27 @@ static int32_t AYTHER_CALL ayther_capture_snapshot_v1(
    return AYTHER_STATUS_OK;
 }
 
+/* El motivo del recompositor, traducido al rango propio de la ABI.
+ *
+ * Los `AYTHER_RC_ERR_*` internos van de -1 a -4 y ahi ya viven
+ * INVALID_ARGUMENT, NOT_FOUND, BUFFER_TOO_SMALL y OUT_OF_BOUNDS: devolverlos
+ * crudos haria que «no es modo 5» se leyera como «argumento invalido». De ahi
+ * que el mapeo exista, en vez de simplemente dejar pasar el numero.
+ *
+ * Un motivo que este core todavia no conozca cae en UNSUPPORTED, que es lo que
+ * se devolvia para todos hasta ahora. */
+static int32_t ayther_rc_status(int rc)
+{
+   switch (rc)
+   {
+      case AYTHER_RC_ERR_NOT_MODE5:      return AYTHER_STATUS_RC_NOT_MODE5;
+      case AYTHER_RC_ERR_INTERLACE2:     return AYTHER_STATUS_RC_INTERLACE2;
+      case AYTHER_RC_ERR_NTSC_FILTER:    return AYTHER_STATUS_RC_NTSC_FILTER;
+      case AYTHER_RC_ERR_INVALID_PARAMS: return AYTHER_STATUS_RC_INVALID_PARAMS;
+      default:                           return AYTHER_STATUS_UNSUPPORTED;
+   }
+}
+
 static int32_t AYTHER_CALL ayther_recompose_frame_v1(uint16_t *out_pixels,
       uint32_t pixel_capacity, uint32_t flags, uint32_t *out_width,
       uint32_t *out_height)
@@ -4204,7 +4225,7 @@ static int32_t AYTHER_CALL ayther_recompose_frame_v1(uint16_t *out_pixels,
    ayther_sprite_overflow = saved_sprite_overflow;
 
    if (supported <= 0)
-      return AYTHER_STATUS_UNSUPPORTED;
+      return ayther_rc_status(supported);
 
    *out_width = (uint32_t)width;
    *out_height = (uint32_t)height;
@@ -4244,7 +4265,7 @@ AYTHER_API int32_t AYTHER_CALL ayther_recompose_multilayer(
    ayther_sprite_overflow = saved_sprite_overflow;
 
    if (supported <= 0)
-      return AYTHER_STATUS_UNSUPPORTED;
+      return ayther_rc_status(supported);
 
    *out_width = (uint32_t)width;
    *out_height = (uint32_t)height;

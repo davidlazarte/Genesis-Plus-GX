@@ -60,12 +60,34 @@ enum ayther_status
   AYTHER_STATUS_NOT_SUBSCRIBED    = -9
 };
 
+/* Motivos INTERNOS del recompositor. Sus valores colisionan con los de
+ * `ayther_status` (-1..-4), asi que no se devuelven crudos por la ABI: el
+ * wrapper los traduce a los AYTHER_STATUS_RC_* de abajo. */
 enum ayther_recompose_error
 {
   AYTHER_RC_ERR_NOT_MODE5 = -1,
   AYTHER_RC_ERR_INTERLACE2 = -2,
   AYTHER_RC_ERR_NTSC_FILTER = -3,
   AYTHER_RC_ERR_INVALID_PARAMS = -4
+};
+
+/* Por que una recomposicion no se pudo hacer, con nombre propio.
+ *
+ * Hasta aca cualquier rechazo salia por la ABI como AYTHER_STATUS_UNSUPPORTED y
+ * el frontend no podia registrar mas que un «fallo». Son cuatro problemas
+ * distintos, y tres dependen de lo que el JUEGO esta haciendo en ese momento:
+ * un frontend que apaga la sustitucion HD necesita poder decir cual fue.
+ *
+ * Van en un rango propio, lejos de los status generales, precisamente porque
+ * los `AYTHER_RC_ERR_*` internos ocupan -1..-4. Un frontend que solo compara
+ * contra AYTHER_STATUS_OK no nota la diferencia; el que quiera el motivo, lo
+ * tiene. Los valores son ADITIVOS: nunca se devolvieron antes. */
+enum ayther_recompose_status
+{
+  AYTHER_STATUS_RC_NOT_MODE5      = -20,
+  AYTHER_STATUS_RC_INTERLACE2     = -21,
+  AYTHER_STATUS_RC_NTSC_FILTER    = -22,
+  AYTHER_STATUS_RC_INVALID_PARAMS = -23
 };
 
 enum ayther_endianness

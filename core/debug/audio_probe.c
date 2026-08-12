@@ -596,20 +596,31 @@ void audio_probe_psg_raw(unsigned int clocks, unsigned int data)
   }
 }
 
-void audio_probe_pcm_key(int ch, int on, unsigned int env, unsigned int pan, unsigned int fd)
+/* WHICH SAMPLE, not just how loud and how fast. `st`/`ls` locate the waveform
+   in Wave RAM and are the only fields that separate one sound from another:
+   env is volume and fd is playback rate, so a consumer given only those cannot
+   tell two different samples apart. See the union comment in ayther_api.h for
+   the packing (source PCM always uses the {reg, data} arm). */
+static uint32_t ap_pcm_reg(unsigned int st, unsigned int ls)
+{
+  return (st & 0xFFu) | ((ls & 0xFFFFu) << 8);
+}
+
+void audio_probe_pcm_key(int ch, int on, unsigned int env, unsigned int pan,
+                         unsigned int fd, unsigned int st, unsigned int ls)
 {
   ap_event_t ev;
   if (!audio_probe_is_enabled()) return;
   memset(&ev, 0, sizeof(ev));
   ev.source  = AP_SRC_PCM;
   ev.channel = (unsigned char)ch;
+  ev.reg     = ap_pcm_reg(st, ls);
   if (on) {
     ev.type = AP_EV_NOTE_ON;
-    ev.data = env;
-    ev.voice.op_mul[0] = fd & 0xFF;
-    ev.voice.op_mul[1] = (fd >> 8) & 0xFF;
-    ev.voice.pan = pan;
+    ev.data = (fd & 0xFFFFu) | ((env & 0xFFu) << 16) | ((pan & 0xFFu) << 24);
   } else {
+    /* The key-off keeps reg so the consumer can close the block by identity
+       even if the channel was re-pointed in between. */
     ev.type = AP_EV_NOTE_OFF;
   }
   ap_emit(&ev);
@@ -623,8 +634,7 @@ void audio_probe_pcm_volume(int ch, unsigned int env, unsigned int pan)
   ev.source  = AP_SRC_PCM;
   ev.channel = (unsigned char)ch;
   ev.type    = AP_EV_VOLUME;
-  ev.data    = env;
-  ev.voice.pan = pan;
+  ev.data    = (env & 0xFFu) | ((pan & 0xFFu) << 8);
   ap_emit(&ev);
 }
 

@@ -173,7 +173,10 @@ enum ayther_legacy_memory_id
 #define AYTHER_LAYOUT_RAW_V1         UINT32_C(1)
 #define AYTHER_LAYOUT_SPRITE_V1      UINT32_C(1)
 #define AYTHER_LAYOUT_AUDIO_WRITE_V1 UINT32_C(1)
-#define AYTHER_LAYOUT_AUDIO_EVENT_V1 UINT32_C(1)
+/* Bumped to 2: PCM events moved off the `voice` arm and gained st/ls (see the
+ * union comment on ayther_audio_event_v1). Every event carries this in its
+ * `schema` byte, so a consumer can tell the two apart at runtime. */
+#define AYTHER_LAYOUT_AUDIO_EVENT_V1 UINT32_C(2)
 #define AYTHER_LAYOUT_FRAME_DELTA_V1 UINT32_C(1)
 
 /* Native-endian in-process layout. Multi-byte fields use host endianness as
@@ -240,7 +243,33 @@ typedef struct ayther_audio_voice_v1
 
 /* `group` is non-zero only for logical trigger anchors (NOTE_ON and
  * DAC_START). A fixed coincidence window is measured from the first anchor in
- * a group; raw writes, frame markers and release events always use group 0. */
+ * a group; raw writes, frame markers and release events always use group 0.
+ *
+ * WHICH ARM OF THE UNION APPLIES IS DECIDED BY `source`, NOT BY `type`:
+ *
+ *   FM  -> the `voice` arm on NOTE_ON (resolved snapshot + canonical hashes);
+ *          every other FM event uses {reg, data}.
+ *   PSG -> {reg, data}.
+ *   PCM -> {reg, data}, ALWAYS. The RF5C164 has no operators, so the `voice`
+ *          arm never applied to it; up to schema 1 the PCM path wrote `data`
+ *          (one arm) and `voice.pan` (the other) into the same event, which
+ *          only worked because those two fields happen not to overlap.
+ *          Schema 2 packs every PCM field into {reg, data}:
+ *
+ *            NOTE_ON   reg  = st | (ls << 8)
+ *                      data = fd | (env << 16) | (pan << 24)
+ *            NOTE_OFF  reg  = st | (ls << 8),  data = 0
+ *            VOLUME    data = env | (pan << 8)
+ *            PITCH     data = fd
+ *
+ *          `st` is the ST register byte (Wave RAM start address >> 19) and
+ *          `ls` the 16-bit loop address: TOGETHER THEY SAY WHICH SAMPLE PLAYS.
+ *          `fd` is the 5.11 address increment — playback rate RELATIVE to that
+ *          sample, not an absolute note. `env` is the envelope multiplier.
+ *
+ *          A consumer that has to identify sounds needs st/ls. Schema 1 shipped
+ *          only env/pan/fd — volume and rate — so two SFX playing different
+ *          samples at the same rate and level were indistinguishable. */
 typedef struct ayther_audio_event_v1
 {
   uint64_t t_global;

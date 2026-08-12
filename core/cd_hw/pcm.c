@@ -432,13 +432,16 @@ void pcm_write(unsigned int address, unsigned char data, unsigned int cycles)
         {
           int was_on = (old_status & (1 << i));
           int is_on = (pcm.status & (1 << i));
+          /* st is kept as 16.11 fixed point; the ST register byte is st >> 19. */
+          unsigned int st = pcm.chan[i].st >> (8 + 11);
           if (!was_on && is_on)
           {
-            audio_probe_pcm_key(i, 1, pcm.chan[i].env, pcm.chan[i].pan, pcm.chan[i].fd.w);
+            audio_probe_pcm_key(i, 1, pcm.chan[i].env, pcm.chan[i].pan,
+                                pcm.chan[i].fd.w, st, pcm.chan[i].ls.w);
           }
           else if (was_on && !is_on)
           {
-            audio_probe_pcm_key(i, 0, 0, 0, 0);
+            audio_probe_pcm_key(i, 0, 0, 0, 0, st, pcm.chan[i].ls.w);
           }
         }
       }

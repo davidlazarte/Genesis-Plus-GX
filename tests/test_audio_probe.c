@@ -7,7 +7,7 @@
  * decoding from the register shadow, channel-independent fingerprints,
  * note on/off, DAC start/stop, PSG raw, per-channel gain (set/get/clamp),
  * coincidence-window grouping, observable ring-buffer overflow, the callback
- * path, and the context accessor.
+ * path, the context accessor, and the CD-PCM packing (schema 2).
  */
 
 #include <stdio.h>
@@ -267,6 +267,57 @@ int main(void)
   audio_probe_get_transport_stats(&stats);
   CHECK((stats.flags & AYTHER_AUDIO_TRANSPORT_CALLBACK_ACTIVE) == 0,
         "transport reports return to polling mode");
+
+  /* 12b. CD-PCM packing (schema 2). The RF5C164 has no operators, so every
+     field rides the {reg, data} arm — and st/ls travel because they are the
+     only thing that says WHICH SAMPLE plays: env is volume and fd is rate. */
+  audio_probe_reset();
+  {
+    ap_event_t pcm[8];
+    int n;
+
+    audio_probe_pcm_key(3, 1, 0xC4, 0x1F, 0x0800, 0x2A, 0xBEEF);
+    n = drain(pcm, 8);
+    CHECK(n == 1, "PCM key-on emits one event");
+    CHECK(pcm[0].source == AP_SRC_PCM && pcm[0].type == AP_EV_NOTE_ON,
+          "PCM key-on is a NOTE_ON from the PCM source");
+    CHECK(pcm[0].channel == 3, "PCM key-on carries its channel");
+    CHECK(pcm[0].schema == 2, "PCM events declare schema 2");
+    CHECK((pcm[0].reg & 0xFF) == 0x2A, "PCM key-on carries st (which sample)");
+    CHECK(((pcm[0].reg >> 8) & 0xFFFF) == 0xBEEF, "PCM key-on carries ls");
+    CHECK((pcm[0].data & 0xFFFF) == 0x0800, "PCM key-on carries fd (rate)");
+    CHECK(((pcm[0].data >> 16) & 0xFF) == 0xC4, "PCM key-on carries env (volume)");
+    CHECK(((pcm[0].data >> 24) & 0xFF) == 0x1F, "PCM key-on carries pan");
+
+    /* THE POINT OF st/ls: same rate, same level, different sample. Under
+       schema 1 these two key-ons were byte-identical past the channel. */
+    audio_probe_pcm_key(0, 1, 0xC4, 0x1F, 0x0800, 0x2A, 0xBEEF);
+    audio_probe_pcm_key(0, 1, 0xC4, 0x1F, 0x0800, 0x71, 0xBEEF);
+    n = drain(pcm, 8);
+    CHECK(n == 2 && pcm[0].data == pcm[1].data,
+          "two different samples at the same rate/level share env/fd/pan…");
+    CHECK(pcm[0].reg != pcm[1].reg,
+          "…and are told apart ONLY by st/ls");
+
+    /* key-off keeps reg so a consumer can close the block by identity */
+    audio_probe_pcm_key(3, 0, 0, 0, 0, 0x2A, 0xBEEF);
+    n = drain(pcm, 8);
+    CHECK(n == 1 && pcm[0].type == AP_EV_NOTE_OFF, "PCM key-off emits NOTE_OFF");
+    CHECK((pcm[0].reg & 0xFF) == 0x2A && ((pcm[0].reg >> 8) & 0xFFFF) == 0xBEEF,
+          "PCM key-off still identifies the sample");
+    CHECK(pcm[0].data == 0, "PCM key-off carries no level or rate");
+
+    audio_probe_pcm_volume(5, 0x40, 0x0F);
+    n = drain(pcm, 8);
+    CHECK(n == 1 && pcm[0].type == AP_EV_VOLUME, "PCM volume emits VOLUME");
+    CHECK((pcm[0].data & 0xFF) == 0x40 && ((pcm[0].data >> 8) & 0xFF) == 0x0F,
+          "PCM volume packs env and pan into data");
+
+    audio_probe_pcm_pitch(5, 0x1234);
+    n = drain(pcm, 8);
+    CHECK(n == 1 && pcm[0].type == AP_EV_PITCH && pcm[0].data == 0x1234,
+          "PCM pitch carries fd");
+  }
 
   /* 13. context accessor reflects emulator globals */
   rominfo.realchecksum = 0xBEEF;

@@ -8,6 +8,33 @@ static unsigned int ayther_rc_cache_flags = 0;
 static uint8 ayther_rc_cache_mask = 0;
 static uint16 ayther_rc_cache_pixels[320 * 300];
 
+/* Cache MULTICAPA (#406). El de arriba es de `ayther_recompose_frame` y
+ * multilayer no lo tocaba: pedir el mismo frame dos veces costaba lo mismo las
+ * dos veces (medido desde el frontend: 0,28 → 0,29 ms). El frontend hace
+ * exactamente eso cada vez que el emulador esta en pausa y la UI repinta.
+ *
+ * `have` es lo que hace que esto sirva con llamadas heterogeneas: una llamada
+ * que pide solo el composite guarda solo el composite, y una posterior que pida
+ * ademas los planos NO puede servirse del cache. Sin ese bit, el cache
+ * devolveria buffers jamas escritos — el defecto de cache clasico, y ademas
+ * silencioso.
+ *
+ * Son 5 x 320x300 x 2 = 960 KB de estaticos. Se paga en el fork, que solo
+ * compila para PC; el core stock no incluye este archivo. */
+#define AYTHER_ML_A    (1u << 0)
+#define AYTHER_ML_B    (1u << 1)
+#define AYTHER_ML_W    (1u << 2)
+#define AYTHER_ML_SPR  (1u << 3)
+#define AYTHER_ML_COMP (1u << 4)
+
+static uint64_t ayther_ml_cache_generation = ~(uint64_t)0;
+static unsigned int ayther_ml_cache_flags = 0;
+static uint8 ayther_ml_cache_mask = 0;
+static uint8 ayther_ml_cache_have = 0;
+static int ayther_ml_cache_w = 0;
+static int ayther_ml_cache_h = 0;
+static uint16 ayther_ml_cache_px[5][320 * 300];
+
 int ayther_recompose_frame(uint16 *out, int cap, unsigned int flags,
                            int *out_w, int *out_h)
 {
@@ -214,9 +241,10 @@ int ayther_core_recompose_multilayer(
   uint8 *s_bdata;
   int    s_bpitch, s_bvx, s_bvy;
   int    l, w, h, vs, ste, sh_rebuilt;
+  uint8  ml_want = 0;
   void (*rbg)(int);
   void (*robj)(int);
-  
+
   uint16 s_cram[64];
   uint8 s_regs[0x20];
   uint8 s_vsram[0x80];
@@ -230,6 +258,32 @@ int ayther_core_recompose_multilayer(
   if (interlaced && config.render) return AYTHER_RC_ERR_INTERLACE2;
   if (config.ntsc) return AYTHER_RC_ERR_NTSC_FILTER;
   if (w <= 0 || h <= 0 || cap < w * h) return AYTHER_RC_ERR_INVALID_PARAMS;
+
+  /* ---- cache (#406): mismo frame, misma configuracion ---- */
+  {
+    const uint8 want = (uint8)((out_bg_a     ? AYTHER_ML_A    : 0) |
+                               (out_bg_b     ? AYTHER_ML_B    : 0) |
+                               (out_window   ? AYTHER_ML_W    : 0) |
+                               (out_sprites  ? AYTHER_ML_SPR  : 0) |
+                               (out_composite? AYTHER_ML_COMP : 0));
+    ml_want = want;
+    if (ayther_ml_cache_generation == ayther_core_frame_generation &&
+        ayther_ml_cache_flags == flags &&
+        ayther_ml_cache_mask == ayther_layer_mask &&
+        ayther_ml_cache_w == w && ayther_ml_cache_h == h &&
+        (want & ~ayther_ml_cache_have) == 0)
+    {
+      const int n = w * h * 2;
+      if (out_bg_a)      memcpy(out_bg_a,      ayther_ml_cache_px[0], n);
+      if (out_bg_b)      memcpy(out_bg_b,      ayther_ml_cache_px[1], n);
+      if (out_window)    memcpy(out_window,    ayther_ml_cache_px[2], n);
+      if (out_sprites)   memcpy(out_sprites,   ayther_ml_cache_px[3], n);
+      if (out_composite) memcpy(out_composite, ayther_ml_cache_px[4], n);
+      if (out_w) *out_w = w;
+      if (out_h) *out_h = h;
+      return 1;
+    }
+  }
 
   s_status = status;
   s_sprovr = spr_ovr;
@@ -423,6 +477,34 @@ int ayther_core_recompose_multilayer(
   status  = s_status;
   spr_ovr = s_sprovr;
   spr_col = s_sprcol;
+
+  /* ---- guardar en el cache (#406) ----
+     Si la clave cambio, lo guardado antes ya no vale y `have` arranca de cero:
+     acumular sobre datos de otro frame es exactamente el bug que este cache
+     podria introducir. Si la clave es la misma, se SUMAN las capas nuevas a las
+     que ya habia. */
+  if (w * h <= 320 * 300)
+  {
+    const int n = w * h * 2;
+    if (ayther_ml_cache_generation != ayther_core_frame_generation ||
+        ayther_ml_cache_flags != flags ||
+        ayther_ml_cache_mask != ayther_layer_mask ||
+        ayther_ml_cache_w != w || ayther_ml_cache_h != h)
+    {
+      ayther_ml_cache_generation = ayther_core_frame_generation;
+      ayther_ml_cache_flags = flags;
+      ayther_ml_cache_mask = ayther_layer_mask;
+      ayther_ml_cache_w = w;
+      ayther_ml_cache_h = h;
+      ayther_ml_cache_have = 0;
+    }
+    if (out_bg_a)      memcpy(ayther_ml_cache_px[0], out_bg_a,      n);
+    if (out_bg_b)      memcpy(ayther_ml_cache_px[1], out_bg_b,      n);
+    if (out_window)    memcpy(ayther_ml_cache_px[2], out_window,    n);
+    if (out_sprites)   memcpy(ayther_ml_cache_px[3], out_sprites,   n);
+    if (out_composite) memcpy(ayther_ml_cache_px[4], out_composite, n);
+    ayther_ml_cache_have |= ml_want;
+  }
 
   if (out_w) *out_w = w;
   if (out_h) *out_h = h;

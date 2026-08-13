@@ -4124,12 +4124,18 @@ static int32_t AYTHER_CALL ayther_write_control_v1(uint32_t region_id,
    if ((region_id == AYTHER_REGION_LAYER_DIM) &&
        (*(const uint8_t *)data > 1))
       return AYTHER_STATUS_INVALID_ARGUMENT;
+   /* Bits reservados de la máscara de mute. Ahora son 4 bytes (FM 0-5, PSG 6-9,
+      PCM 10-17) y lo que sobra —18 en adelante— sigue rechazándose: un bit puesto
+      ahí es un frontend que cree tener canales que este core no tiene, y decirlo
+      es mejor que ignorarlo en silencio. La comparación va contra el byte_size
+      de la región y no contra un sizeof escrito a mano, para que ensanchar la
+      máscara otra vez no deje este chequeo muerto sin que nadie lo note. */
    if ((region_id == AYTHER_REGION_AUDIO_MUTE) &&
-       byte_count == sizeof(uint16_t))
+       (byte_count == mapping.byte_size))
    {
-      uint16_t mute;
+      uint32_t mute = 0;
       memcpy(&mute, data, sizeof(mute));
-      if ((mute & UINT16_C(0xFC00)) != 0)
+      if ((mute & UINT32_C(0xFFFC0000)) != 0)
          return AYTHER_STATUS_INVALID_ARGUMENT;
    }
 

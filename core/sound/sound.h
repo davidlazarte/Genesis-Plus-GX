@@ -83,22 +83,38 @@ extern uint32 ayther_audio_write_overflow;
 
 
 /* ----------------------------------------------------------------------------
- * AYTHER fork delta: máscara de SILENCIADO POR CANAL (2 bytes, ESCRIBIBLE desde
- * el frontend vía el id de memoria 0x10D). Bits 0-5 = canales FM (YM2612) 0-5;
- * bits 6-9 = canales PSG (SN76489) 0-3. Bit set = ese canal se pone a CERO en el
- * mixer de salida, SIN tocar el estado de los registros del chip (el análogo de
- * audio al sprite_suppress 0x103). Como sólo afecta el PCM emitido y no el estado
- * interno, es replay-safe: el chip evoluciona idéntico aunque el mute esté puesto.
- * Es el primitivo de la sustitución por evento (C-A3): mutear los canales de un
- * evento mientras suena su asset HD.
+ * AYTHER fork delta: máscara de SILENCIADO POR CANAL (4 bytes, ESCRIBIBLE desde
+ * el frontend vía el id de memoria 0x10D):
+ *
+ *   bits  0-5   canales FM  (YM2612)   0-5
+ *   bits  6-9   canales PSG (SN76489)  0-3
+ *   bits 10-17  canales PCM (RF5C164 de Sega CD) 0-7
+ *   bits 18-31  libres
+ *
+ * Bit set = ese canal se pone a CERO en el mixer de salida, SIN tocar el estado
+ * de los registros del chip (el análogo de audio al sprite_suppress 0x103). Como
+ * sólo afecta el PCM emitido y no el estado interno, es replay-safe: el chip
+ * evoluciona idéntico aunque el mute esté puesto. Es el primitivo de la
+ * sustitución por evento (C-A3): mutear los canales de un evento mientras suena
+ * su asset HD.
+ *
+ * Eran 2 bytes hasta 2026-08-13. El chip PCM de Sega CD agrega ocho canales que
+ * no entraban, y dejarlo afuera lo habría empujado al OTRO camino de silencio
+ * que existe en este core —`audio_probe_set_channel_gain`, que sí lo soporta—.
+ * Tener la decisión de mute escrita en dos lugares es exactamente el defecto que
+ * el frontend corrigió en su issue #329: la voz del chip callaba por un camino y
+ * el reemplazo seguía sonando por el otro. Un solo mecanismo, más ancho.
  * -------------------------------------------------------------------------- */
-extern uint16 ayther_audio_mute;
+extern uint32 ayther_audio_mute;
 #define AYTHER_FM_MUTED(ch) \
   (AYTHER_SUBSCRIBED(AYTHER_SUB_RENDER_CONTROLS) && \
    (ayther_audio_mute & (1u << (ch))))
 #define AYTHER_PSG_MUTED(ch) \
   (AYTHER_SUBSCRIBED(AYTHER_SUB_RENDER_CONTROLS) && \
    (ayther_audio_mute & (1u << (6 + (ch)))))
+#define AYTHER_PCM_MUTED(ch) \
+  (AYTHER_SUBSCRIBED(AYTHER_SUB_RENDER_CONTROLS) && \
+   (ayther_audio_mute & (1u << (10 + (ch)))))
 
 #else
 

@@ -44,7 +44,7 @@ int8 audio_hard_disable = 0;
 
 #ifdef AYTHER_EXTENSIONS
 /* AYTHER fork delta: máscara de mute por canal (ver sound.h). 0 = todo suena. */
-uint16 ayther_audio_mute = 0;
+uint32 ayther_audio_mute = 0;
 #endif
 
 /* YM2612 internal clock = input clock / 6 = (master clock / 7) / 6 */

@@ -248,6 +248,18 @@ void pcm_run(unsigned int length)
             }
 #endif
 
+#ifdef AYTHER_EXTENSIONS
+            /* Silenciado por canal (0x10D). Se aplica DESPUES de haber leido la
+               muestra y avanzado `addr` unas lineas mas arriba, a proposito: el
+               chip tiene que evolucionar igual con el mute puesto y sin el, o el
+               replay divergiria. Sale a cero solo lo que se suma al mixer. */
+            if (AYTHER_PCM_MUTED(j))
+            {
+              l_delta = 0;
+              r_delta = 0;
+            }
+#endif
+
             /* multiply PCM data with ENV & stereo PAN data then add to L/R outputs (14.5 fixed point) */
             l += l_delta;
             r += r_delta;

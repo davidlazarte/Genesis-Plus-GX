@@ -45,6 +45,20 @@ int8 audio_hard_disable = 0;
 #ifdef AYTHER_EXTENSIONS
 /* AYTHER fork delta: máscara de mute por canal (ver sound.h). 0 = todo suena. */
 uint32 ayther_audio_mute = 0;
+
+/* AYTHER fork delta: log de escrituras crudas a los chips (ids 0x109/0x10A).
+   VIVE ACA Y NO EN audio_probe.c a proposito: sound.h lo declara bajo
+   AYTHER_EXTENSIONS, pero audio_probe.c solo se compila con SOUND_PROBE. Con
+   `extensions=1 probe=0` —una de las combinaciones que la matriz de CI
+   construye— nadie lo definia y el link se caia con tres simbolos indefinidos.
+   La declaracion y la definicion ahora estan detras del MISMO flag, que es la
+   unica forma de que esto no se vuelva a romper.
+
+   Sin el probe compilado nadie lo llena, y eso es correcto: el log queda vacio,
+   que es justo lo que significa no tener el probe. */
+AytherAudioWrite ayther_audio_writes[AYTHER_AUDIO_WRITE_CAP];
+uint32 ayther_audio_write_n = 0;
+uint32 ayther_audio_write_overflow = 0;
 #endif
 
 /* YM2612 internal clock = input clock / 6 = (master clock / 7) / 6 */

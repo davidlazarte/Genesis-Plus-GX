@@ -45,11 +45,11 @@
 #include "audio_probe.h"
 #include "audio_probe_atomic.h"
 
-#ifdef AYTHER_EXTENSIONS
-AytherAudioWrite ayther_audio_writes[AYTHER_AUDIO_WRITE_CAP];
-uint32 ayther_audio_write_n = 0;
-uint32 ayther_audio_write_overflow = 0;
-#endif
+/* El log de escrituras crudas (ayther_audio_writes / _n / _overflow) SE DEFINE
+   EN sound.c, no acá. Estuvo definido en este archivo y eso rompía el link con
+   AYTHER_EXTENSIONS=1 y SOUND_PROBE=0: sound.h lo declara bajo `extensions` pero
+   este archivo sólo se compila con `probe`, así que en esa combinación nadie lo
+   definía. Ver sound.c. */
 
 /* Registered inline consumer. The enabled fast-path flag avoids taking the
    configuration lock in the normal polling mode. The lock protects the

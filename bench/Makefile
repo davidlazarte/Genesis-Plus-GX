@@ -10,21 +10,29 @@ COMMON_CPPFLAGS := -DSOUND_PROBE -I$(CORE_DIR)/tests/stub -I$(CORE_DIR)/core/deb
 PROBE_SRC       := $(CORE_DIR)/core/debug/audio_probe.c
 PROBE_HEADERS   := $(CORE_DIR)/tests/stub/shared.h $(CORE_DIR)/core/debug/audio_probe.h
 
+# El nombre del binario depende del SISTEMA; las recetas, del SHELL. Ver la nota
+# larga en tests/Makefile: en Windows, si hay un `sh` en el PATH, GNU make lo
+# elige como SHELL y las recetas en sintaxis de cmd mueren con «syntax error
+# near unexpected token». Este archivo tenia el mismo defecto que aquel.
 ifeq ($(OS),Windows_NT)
 EXE_EXT := .exe
-define make_dir
-	@if not exist "$(subst /,\,$1)" mkdir "$(subst /,\,$1)"
-endef
-define remove_build_dir
-	@if exist "$(subst /,\,$1)" rmdir /S /Q "$(subst /,\,$1)"
-endef
 else
 EXE_EXT :=
+endif
+
+ifeq ($(findstring sh,$(notdir $(SHELL))),sh)
 define make_dir
 	@mkdir -p "$1"
 endef
 define remove_build_dir
 	@rm -rf -- "$1"
+endef
+else
+define make_dir
+	@if not exist "$(subst /,\,$1)" mkdir "$(subst /,\,$1)"
+endef
+define remove_build_dir
+	@if exist "$(subst /,\,$1)" rmdir /S /Q "$(subst /,\,$1)"
 endef
 endif
 

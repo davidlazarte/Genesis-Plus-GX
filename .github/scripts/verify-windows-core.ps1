@@ -58,6 +58,13 @@ $probeExports = @(
 )
 if ($AytherExtensions -eq 1) {
     $requiredExports += 'ayther_get_interface'
+    # Segunda puerta de entrada, deliberada. La recomposicion multicapa se
+    # resuelve por simbolo directo y no por la interfaz: el frontend la carga
+    # con GetProcAddress (ayther_session.cpp) y su oraculo tambien. Al agregarla
+    # nadie actualizo este verificador, y como el job que lo corre ya estaba
+    # rojo por otra causa, la regla siguio diciendo "solo ayther_get_interface"
+    # sin que nadie lo notara.
+    $requiredExports += 'ayther_recompose_multilayer'
 }
 if ($AytherExtensions -eq 1 -and $SoundProbe -eq 1) {
     $requiredExports += $probeExports
@@ -68,8 +75,12 @@ foreach ($symbol in $requiredExports) {
         throw "Missing PE export: $symbol"
     }
 }
+# La superficie AYTHER exportada es CERRADA: exactamente las dos de arriba y
+# ninguna mas. Que sean dos y no una no debilita el chequeo — lo que evita es
+# que un simbolo nuevo se escape sin decision explicita, que es para lo que
+# existe. Agregar una tercera exige tocar esta lista a proposito.
 if ($AytherExtensions -eq 1 -and
-    $exports -match '(?m)^\s*Name: ayther_(?!get_interface\s*$)') {
+    $exports -match '(?m)^\s*Name: ayther_(?!(get_interface|recompose_multilayer)\s*$)') {
     throw 'An unexpected additional AYTHER entry point was exported.'
 }
 if ($AytherExtensions -eq 0 -and

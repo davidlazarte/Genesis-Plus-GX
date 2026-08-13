@@ -62,7 +62,21 @@ FULL_CORE_BIN := $(BUILD_DIR)/full_core_replay$(EXE_EXT)
 TRACE_BIN := $(BUILD_DIR)/audio_probe_trace$(EXE_EXT)
 TRACE_GOLDEN := ayther/golden/audio_probe_trace.json
 TRACE_ACTUAL := $(ARTIFACT_DIR)/audio_probe_trace.actual.json
-FULL_CORE_GOLDEN := ayther/golden/full_core_replay-x64.json
+# UN GOLDEN POR PLATAFORMA, y no uno solo llamado "-x64". Linux y Windows corren
+# los DOS este mismo check, y con el mismo core dan hashes DISTINTOS de video,
+# audio y estado — medido: video 4d39e98f (Linux) contra dd112c2b (Windows). Con
+# un archivo unico era imposible que ambos jobs pasaran, y por eso este check
+# estuvo rojo sin que la causa se viera: parecia un golden desactualizado.
+#
+# La telemetria SI coincide entre plataformas, asi que la divergencia esta en la
+# emulacion misma (compiladores distintos sobre el mismo codigo), no en lo que el
+# probe reporta. Que cada plataforma tenga su golden lo deja EXPLICITO en vez de
+# esconderlo detras de un rojo permanente.
+ifeq ($(OS),Windows_NT)
+FULL_CORE_GOLDEN := ayther/golden/full_core_replay-windows-x64.json
+else
+FULL_CORE_GOLDEN := ayther/golden/full_core_replay-linux-x64.json
+endif
 FULL_CORE_ACTUAL := $(ARTIFACT_DIR)/full_core_replay.actual.json
 FULL_CORE_REPORT := $(ARTIFACT_DIR)/full_core_replay.frames.jsonl
 FULL_CORE_BENCHMARK := $(ARTIFACT_DIR)/full_core_benchmark.json

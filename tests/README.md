@@ -73,9 +73,22 @@ make -f Makefile.libretro platform=unix SOUND_PROBE=1 -j2
 make -C tests check-full-core CORE=../genesis_plus_gx_libretro.so
 ```
 
-The x64 golden summary is `ayther/golden/full_core_replay-x64.json`. Video,
-audio, serialized state, telemetry, input, configuration and replay hashes are
-byte-identical on Linux x64 and Windows x64 MSVCRT. The actual summary,
+The golden summary is **per platform**: `ayther/golden/full_core_replay-linux-x64.json`
+and `-windows-x64.json`; the Makefile picks one by host OS.
+
+This used to be a single `-x64.json`, on the stated assumption that every hash
+was "byte-identical on Linux x64 and Windows x64 MSVCRT". **It is not.** Measured
+on the same core at the same commit: video `4d39e98f` on Linux against
+`dd112c2b` on Windows, and audio and serialized state differ too. Both platforms
+run this check, so one shared file made it impossible for both jobs to pass —
+which is why it sat red while looking like a merely stale golden.
+
+Input, configuration and **telemetry** hashes *are* identical across platforms.
+That narrows the divergence to emulation itself — the two are built by different
+compilers — and not to what the probe reports. Worth investigating on its own; a
+per-platform golden makes it visible instead of hiding it behind a permanent red.
+
+The actual summary,
 per-frame JSONL trace, first-frame savestate diagnostic and p50/p95/p99 frame
 benchmark remain in `tests/artifacts/`; CI uploads them even when the golden or
 replay differs.
@@ -127,7 +140,7 @@ tests/
 │   ├── generated_rom.c/.h
 │   ├── full_core_replay.c
 │   ├── raster_rom_probe.c
-│   └── golden/{audio_probe_trace,full_core_replay-x64}.json
+│   └── golden/{audio_probe_trace,full_core_replay-{linux,windows}-x64}.json
 ├── ci/verify_ayther_api.c # dynamic ABI/symbol verifier
 ├── stub/
 │   └── shared.h        # minimal emulator stand-in for isolated builds

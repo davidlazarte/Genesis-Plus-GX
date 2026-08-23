@@ -50,6 +50,17 @@ if (AYTHER_IFACE_HAS(api, get_recompose_stats))
 |---|---|
 | 1.0 | Initial contract: regions, snapshots, subscriptions, recomposition, audio transport, frame delta. |
 | 1.1 | **Additive.** Appends `recompose_stats_size` + `get_recompose_stats` and the `AYTHER_CAP_RECOMPOSE_STATS_V1` capability bit (#26). No existing field moved or changed meaning. |
+| 1.2 | **Additive.** Appends `recompose_multilayer` to the descriptor and adds the `AYTHER_REGION_WORD_SWAPPED_LE` region flag (#32). The standalone `ayther_recompose_multilayer` export is now **deprecated** and is emitted only in the legacy profile. |
+
+Two earlier changes were shipped inside 1.0 without a bump, which is what this
+table exists to prevent from recurring:
+
+- `AYTHER_LAYOUT_AUDIO_EVENT_V1` went from `1` to `2` when PCM events moved off
+  the `voice` arm. Every event carries the layout in its `schema` byte, so a
+  consumer can tell the two apart at runtime — but it should have been a minor
+  bump, not a silent redefinition.
+- `AUDIO_MUTE` widened from `uint16_t` to `uint32_t` (bit 18 onwards reserved)
+  when the Mega CD PCM channels were added.
 
 ## Descriptor and capabilities
 
@@ -78,8 +89,16 @@ This is an in-process ABI, not a serialized wire format. Fixed-width scalar
 fields use the host endianness reported by `host_endianness`. CRAM, VSRAM,
 sprites, audio writes, counters and raster reasons are marked
 `AYTHER_REGION_NATIVE_ENDIAN`; VRAM and VDP register regions retain the core's
-raw byte representation. In particular, existing word-swapped VRAM/CRAM
-semantics are unchanged.
+raw byte representation.
+
+**VRAM is word-swapped on little-endian hosts**: the logical byte at offset
+`off` lives at `off ^ 1`, the emulator's internal layout. Since 1.2 the region
+declares this with `AYTHER_REGION_WORD_SWAPPED_LE` in `access_flags`, so a
+consumer can discover it from the descriptor instead of from prose — reading it
+straight gives an image with the bytes of every tile crossed, which looks like a
+frontend bug. This is a different axis from `AYTHER_REGION_NATIVE_ENDIAN`: that
+one is about the byte order of multi-byte *fields*, this one about the order of
+*bytes within the emulated memory*.
 
 `read_region` copies bytes into frontend-owned memory. It never exposes a new
 mutable core pointer. `build_id` and the interface descriptor are core-owned and
@@ -118,7 +137,7 @@ size, access flags and the transition-era legacy ID.
 
 | v1 region | Layout | Capacity / bytes | Public access | Legacy ID |
 |---|---:|---:|---|---:|
-| `VRAM` | raw bytes | 65,536 / 65,536 | read | standard `0x003` |
+| `VRAM` | raw bytes, **word-swapped on LE** | 65,536 / 65,536 | read | standard `0x003` |
 | `CRAM` | `uint16_t` | 64 / 128 | read | `0x100` |
 | `VDP_REGS` | `uint8_t` | 32 / 32 | read | `0x101` |
 | `VSRAM` | `uint16_t` | 64 / 128 | read | `0x107` |
@@ -132,7 +151,7 @@ size, access flags and the transition-era legacy ID.
 | `AUDIO_WRITE_COUNT` | `uint32_t` | 1 / 4 | frame read | `0x10A` |
 | `PARSED_SPRITES` | `ayther_sprite_v1` | 128 / 1,280 | frame read | `0x10B` |
 | `PARSED_SPRITE_COUNT` | `uint8_t` | 1 / 1 | frame read | `0x10C` |
-| `AUDIO_MUTE` | `uint16_t` | 1 / 2 | read/control | `0x10D` |
+| `AUDIO_MUTE` | `uint32_t` | 1 / 4 | read/control | `0x10D` |
 | `RASTER_FALLBACK_REASONS` | `uint32_t` | 1 / 4 | frame read | `0x10E` |
 
 The public ABI treats emulated memory and frame counters as read-only. The
@@ -238,7 +257,10 @@ snapshot generation, and advances the generation on success.
 
 - layer mask: only A/B/Window/Sprite bits (`0x0F`);
 - layer dim: boolean `0` or `1`;
-- audio mute: only FM/PSG channel bits `0x03FF`;
+- audio mute: 18 valid channel bits (FM 0-5, PSG 6-9, Mega CD PCM 10-17);
+  anything at bit 18 or above is rejected. It widened from `uint16_t`/`0x03FF`
+  when the PCM chip was added, so a legacy reader of `0x10D` that still assumes
+  two bytes reads half the mask — and on a big-endian host, the wrong half;
 - suppression bitmaps: bounded full or partial writes;
 - plane suppression activity: derived automatically from the plane bitmap.
 

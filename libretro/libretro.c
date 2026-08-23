@@ -3850,6 +3850,13 @@ static int32_t ayther_map_region(uint32_t region_id,
          mapping->capacity = sizeof(vram);
          mapping->byte_size = sizeof(vram);
          mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_VRAM;
+#ifdef LSB_FIRST
+         /* #32: la VRAM sale en el layout interno del emulador, no en orden
+            logico: el byte `off` esta en `off ^ 1`. Declararlo en el descriptor
+            es lo unico que le permite a un consumidor saberlo sin leer la
+            documentacion en prosa. */
+         mapping->access_flags |= AYTHER_REGION_WORD_SWAPPED_LE;
+#endif
          break;
       case AYTHER_REGION_CRAM:
          mapping->data = cram;
@@ -4240,7 +4247,7 @@ static int32_t AYTHER_CALL ayther_recompose_frame_v1(uint16_t *out_pixels,
    return AYTHER_STATUS_OK;
 }
 
-AYTHER_API int32_t AYTHER_CALL ayther_recompose_multilayer(
+static int32_t AYTHER_CALL ayther_recompose_multilayer_v1(
     uint16_t *out_bg_a, uint16_t *out_bg_b, uint16_t *out_window,
     uint16_t *out_sprites, uint16_t *out_composite,
     uint32_t pixel_capacity, uint32_t flags,
@@ -4279,6 +4286,23 @@ AYTHER_API int32_t AYTHER_CALL ayther_recompose_multilayer(
    *out_height = (uint32_t)height;
    return AYTHER_STATUS_OK;
 }
+
+#ifdef AYTHER_LEGACY_PROFILE
+/* #32: el simbolo suelto sobrevive SOLO en el perfil legacy. Desde ABI 1.2 la
+   funcion vive en el descriptor; mantener las dos formas en el perfil estandar
+   dejaba dos superficies publicas que versionar, y era la razon por la que el
+   closure de exports decia una cosa en Windows y otra en Linux. */
+AYTHER_API int32_t AYTHER_CALL ayther_recompose_multilayer(
+    uint16_t *out_bg_a, uint16_t *out_bg_b, uint16_t *out_window,
+    uint16_t *out_sprites, uint16_t *out_composite,
+    uint32_t pixel_capacity, uint32_t flags,
+    uint32_t *out_width, uint32_t *out_height)
+{
+   return ayther_recompose_multilayer_v1(out_bg_a, out_bg_b, out_window,
+         out_sprites, out_composite, pixel_capacity, flags,
+         out_width, out_height);
+}
+#endif
 
 static int32_t AYTHER_CALL ayther_poll_audio_events_v1(
       ayther_audio_event_v1 *out, uint32_t event_capacity,
@@ -4354,7 +4378,7 @@ static int32_t AYTHER_CALL ayther_set_subscriptions_v1(
 }
 
 static const char ayther_build_id[] =
-   "Genesis Plus GX AYTHER ABI 1.1; core v1.7.4" GIT_VERSION;
+   "Genesis Plus GX AYTHER ABI 1.2; core v1.7.4" GIT_VERSION;
 
 #if defined(LSB_FIRST) || defined(_WIN32) || defined(__LITTLE_ENDIAN__)
 #define AYTHER_HOST_ENDIANNESS AYTHER_ENDIAN_LITTLE
@@ -4422,7 +4446,7 @@ static int32_t AYTHER_CALL ayther_get_recompose_stats_v1(
 
 static const ayther_interface_v1 ayther_interface_1 =
 {
-   AYTHER_ABI_VERSION_1_1,
+   AYTHER_ABI_VERSION_1_2,
    sizeof(ayther_interface_v1),
    AYTHER_CAP_LEGACY_MEMORY | AYTHER_CAP_REGION_QUERY |
       AYTHER_CAP_REGION_READ | AYTHER_CAP_CONTROL_WRITE |
@@ -4457,7 +4481,8 @@ static const ayther_interface_v1 ayther_interface_1 =
    ayther_poll_frame_delta_v1,
    sizeof(ayther_recompose_stats_v1),
    0,
-   ayther_get_recompose_stats_v1
+   ayther_get_recompose_stats_v1,
+   ayther_recompose_multilayer_v1
 };
 
 AYTHER_API const ayther_interface_v1 *AYTHER_CALL ayther_get_interface(

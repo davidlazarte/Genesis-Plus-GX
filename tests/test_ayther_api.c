@@ -52,8 +52,10 @@ int main(void)
         "ABI version uses major/minor encoding");
   CHECK(AYTHER_ABI_VERSION_1_1 == UINT32_C(0x00010001),
         "ABI 1.1 is a minor bump over 1.0");
-  CHECK(AYTHER_ABI_VERSION_LATEST == AYTHER_ABI_VERSION_1_1,
-        "latest ABI is 1.1");
+  CHECK(AYTHER_ABI_VERSION_1_2 == UINT32_C(0x00010002),
+        "ABI 1.2 is a minor bump over 1.1");
+  CHECK(AYTHER_ABI_VERSION_LATEST == AYTHER_ABI_VERSION_1_2,
+        "latest ABI is 1.2");
   CHECK(AYTHER_ABI_VERSION_MAJOR(AYTHER_ABI_VERSION_1_1) == 1 &&
         AYTHER_ABI_VERSION_MINOR(AYTHER_ABI_VERSION_1_1) == 1,
         "major/minor accessors split the version");
@@ -72,8 +74,21 @@ int main(void)
   CHECK(offsetof(ayther_interface_v1, query_region) <
         offsetof(ayther_interface_v1, poll_frame_delta) &&
         offsetof(ayther_interface_v1, poll_frame_delta) <
-        offsetof(ayther_interface_v1, get_recompose_stats),
+        offsetof(ayther_interface_v1, get_recompose_stats) &&
+        offsetof(ayther_interface_v1, get_recompose_stats) <
+        offsetof(ayther_interface_v1, recompose_multilayer),
         "interface fields are append-only");
+  CHECK(offsetof(ayther_interface_v1, recompose_multilayer) ==
+        offsetof(ayther_interface_v1, get_recompose_stats) +
+        sizeof(ayther_get_recompose_stats_v1_fn),
+        "1.2 appends right after the 1.1 block");
+  /* El flag de word-swap ocupa el bit 5; los cinco anteriores no se mueven. */
+  CHECK(AYTHER_REGION_WORD_SWAPPED_LE == (UINT32_C(1) << 5) &&
+        AYTHER_REGION_DEPRECATED_LEGACY == (UINT32_C(1) << 4),
+        "region access flags are append-only");
+  CHECK(AYTHER_STATUS_RC_JOURNAL_OVERFLOW == -24 &&
+        AYTHER_RC_ERR_JOURNAL_OVERFLOW == -5,
+        "the journal-overflow status codes are stable");
   CHECK(AYTHER_REGION_COUNT == 17, "all sixteen v1 regions are inventoried");
   CHECK(AYTHER_LEGACY_MEMORY_CRAM == 0x100,
         "legacy memory IDs remain stable");

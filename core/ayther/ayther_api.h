@@ -45,7 +45,13 @@ extern "C" {
  * de su propio sizeof. La regla para el cliente es "major igual, minor >= el que
  * necesito", no "version == la mía". */
 #define AYTHER_ABI_VERSION_1_1 UINT32_C(0x00010001)
-#define AYTHER_ABI_VERSION_LATEST AYTHER_ABI_VERSION_1_1
+/* 1.2 (#32): `recompose_multilayer` entra al descriptor. Era el unico simbolo
+ * AYTHER exportado ademas de `ayther_get_interface`, y contradecia el principio
+ * de un solo punto de entrada versionado: un consumidor tenia que resolverlo
+ * por nombre, sin `struct_size` ni capability que le dijeran si estaba. El
+ * export directo sobrevive solo en el perfil legacy. */
+#define AYTHER_ABI_VERSION_1_2 UINT32_C(0x00010002)
+#define AYTHER_ABI_VERSION_LATEST AYTHER_ABI_VERSION_1_2
 
 #define AYTHER_ABI_VERSION_MAJOR(v) ((uint32_t)(v) >> 16)
 #define AYTHER_ABI_VERSION_MINOR(v) ((uint32_t)(v) & UINT32_C(0xFFFF))
@@ -186,6 +192,15 @@ enum ayther_legacy_memory_id
 #define AYTHER_REGION_FRAME_SCOPED         (UINT32_C(1) << 2)
 #define AYTHER_REGION_NATIVE_ENDIAN        (UINT32_C(1) << 3)
 #define AYTHER_REGION_DEPRECATED_LEGACY    (UINT32_C(1) << 4)
+/* #32: la region se entrega en el layout INTERNO word-swapped del emulador en
+ * hosts little-endian: el byte logico `off` vive en `off ^ 1`. Aplica a VRAM y
+ * a la Work RAM legacy. Estaba documentado en prosa y en ningun lado del
+ * contrato, asi que un consumidor que solo leyera el descriptor no tenia como
+ * enterarse — y el sintoma es una imagen con los bytes de cada tile cruzados,
+ * que se lee como un bug del frontend. No es lo mismo que la ausencia de
+ * NATIVE_ENDIAN: eso habla del orden de los campos multi-byte, esto del orden
+ * de los BYTES dentro de la memoria emulada. */
+#define AYTHER_REGION_WORD_SWAPPED_LE      (UINT32_C(1) << 5)
 
 #define AYTHER_LAYOUT_RAW_V1         UINT32_C(1)
 #define AYTHER_LAYOUT_SPRITE_V1      UINT32_C(1)
@@ -445,6 +460,12 @@ typedef struct ayther_recompose_stats_v1
 typedef int32_t (AYTHER_CALL *ayther_get_recompose_stats_v1_fn)(
     ayther_recompose_stats_v1 *out, uint32_t out_size);
 
+typedef int32_t (AYTHER_CALL *ayther_recompose_multilayer_v1_fn)(
+    uint16_t *out_bg_a, uint16_t *out_bg_b, uint16_t *out_window,
+    uint16_t *out_sprites, uint16_t *out_composite,
+    uint32_t pixel_capacity, uint32_t flags,
+    uint32_t *out_width, uint32_t *out_height);
+
 typedef struct ayther_interface_v1
 {
   uint32_t abi_version;
@@ -479,6 +500,8 @@ typedef struct ayther_interface_v1
   uint32_t recompose_stats_size;
   uint32_t reserved2;
   ayther_get_recompose_stats_v1_fn get_recompose_stats;
+  /* --- ABI 1.2 (#32) --- */
+  ayther_recompose_multilayer_v1_fn recompose_multilayer;
 } ayther_interface_v1;
 
 /* Un campo opcional es legible sólo si el descriptor llega hasta él. Esta es la
@@ -493,11 +516,18 @@ typedef const ayther_interface_v1 *(AYTHER_CALL *ayther_get_interface_fn)(
 AYTHER_API const ayther_interface_v1 *AYTHER_CALL ayther_get_interface(
     uint32_t requested_version);
 
+/* DEPRECADO (#32). Desde ABI 1.2 esta funcion vive en el descriptor como
+ * `recompose_multilayer` y hay que resolverla por ahi, con `AYTHER_IFACE_HAS`.
+ * El simbolo suelto solo se exporta si el core se compilo con
+ * AYTHER_LEGACY_PROFILE=1, para no romper a los consumidores que ya lo
+ * resuelven con GetProcAddress mientras migran. */
+#ifdef AYTHER_LEGACY_PROFILE
 AYTHER_API int32_t AYTHER_CALL ayther_recompose_multilayer(
     uint16_t *out_bg_a, uint16_t *out_bg_b, uint16_t *out_window,
     uint16_t *out_sprites, uint16_t *out_composite,
     uint32_t pixel_capacity, uint32_t flags,
     uint32_t *out_width, uint32_t *out_height);
+#endif
 
 #ifdef __cplusplus
 }

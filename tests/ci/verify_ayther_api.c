@@ -358,6 +358,41 @@ int main(int argc, char **argv)
           "recompose stats reject an undersized destination");
   }
 
+  /* ABI 1.2 (#32): la recomposicion multicapa se negocia por el descriptor. El
+     simbolo suelto era la unica superficie AYTHER fuera de
+     `ayther_get_interface`, y por eso el closure de exports decia una cosa en
+     Windows y otra en Linux. */
+  if (AYTHER_IFACE_HAS(api, recompose_multilayer))
+  {
+    uint32_t width = 0;
+    uint32_t height = 0;
+    CHECK(api->recompose_multilayer != NULL,
+          "the descriptor exposes multilayer recomposition");
+    CHECK(api->recompose_multilayer(NULL, NULL, NULL, NULL, NULL, 0, 0,
+          NULL, NULL) == AYTHER_STATUS_INVALID_ARGUMENT,
+          "multilayer recomposition validates its output dimensions");
+    CHECK(api->recompose_multilayer(NULL, NULL, NULL, NULL, NULL,
+          UINT32_MAX, 0, &width, &height) == AYTHER_STATUS_OUT_OF_BOUNDS,
+          "multilayer recomposition rejects an out-of-range capacity");
+  }
+
+  /* #32: la VRAM se entrega word-swapped en hosts little-endian y hasta ahora
+     eso solo vivia en la documentacion en prosa. Un consumidor que lee el
+     descriptor tiene que poder enterarse por el descriptor. */
+  {
+    ayther_region_info_v1 vram_info;
+    memset(&vram_info, 0, sizeof(vram_info));
+    if (api->query_region(AYTHER_REGION_VRAM, &vram_info,
+          sizeof(vram_info)) == AYTHER_STATUS_OK)
+    {
+      CHECK(vram_info.byte_size == UINT32_C(0x10000),
+            "VRAM is exposed as 64 KiB");
+      if (api->host_endianness == AYTHER_ENDIAN_LITTLE)
+        CHECK((vram_info.access_flags & AYTHER_REGION_WORD_SWAPPED_LE) != 0,
+              "VRAM declares its word-swapped layout on little-endian hosts");
+    }
+  }
+
   printf("AYTHER ABI dynamic tests: %d passed, %d failed; build=%.*s\n",
          passed, failed, (int)api->build_id_size, api->build_id);
   close_library(library);

@@ -267,7 +267,10 @@ void psg_write(unsigned int clocks, unsigned int data)
   /* AYTHER fork delta: registrar la escritura cruda al PSG (byte ORIGINAL, antes
      de que el switch de abajo recalcule `data`). El protocolo de latch (bit 7 =
      latch de registro, si no dato al registro latcheado) lo replica el host. */
-  // ayther_record_audio_write removed
+  /* El log lo produce audio_probe.c, no esta ruta: por eso este hook quedo
+     vacio. Consecuencia todavia abierta (#29): con SOUND_PROBE=0 la region
+     AUDIO_WRITES existe y siempre viene vacia, aunque la capability se
+     anuncie igual. */
 
   /* PSG chip synchronization */
   if (clocks > psg.clocks)

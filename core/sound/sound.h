@@ -67,7 +67,13 @@ extern void restore_sound_buffer();
  * El core queda "tonto": sólo registra (cycle, addr, data, chip); toda la
  * interpretación (estado de canal, key-on/off, firma) vive en el host. La ABI
  * v1 hace que el core reinicie contadores/overflow por frame; la escritura de
- * reset por IDs legacy sigue aceptada durante la transición. sound.c.
+ * reset por IDs legacy sigue aceptada durante la transición.
+ *
+ * OJO (#32): el productor vive en core/debug/audio_probe.c, así que este buffer
+ * SÓLO se llena con SOUND_PROBE=1. Los hooks de sound.c/psg.c están vacíos. El
+ * comentario anterior decía "sound.c" y hacía pensar que el log era
+ * independiente del probe; corregir el comportamiento —o dejar de anunciar la
+ * capability cuando no hay productor— es #29.
  * -------------------------------------------------------------------------- */
 #ifdef AYTHER_EXTENSIONS
 

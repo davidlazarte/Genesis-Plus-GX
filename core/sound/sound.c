@@ -158,7 +158,10 @@ static void YM2612_Write(unsigned int cycles, unsigned int a, unsigned int v)
   /* AYTHER fork delta: registrar la escritura cruda al bus FM (orden temporal).
      Loguea address-port (a=0/2) y data-port (a=1/3); el host replica el latch de
      dirección de YM2612Write para reconstruir el registro (p.ej. 0x28 key-on). */
-  // ayther_record_audio_write removed
+  /* El log lo produce audio_probe.c, no esta ruta: por eso este hook quedo
+     vacio. Consecuencia todavia abierta (#29): con SOUND_PROBE=0 la region
+     AUDIO_WRITES existe y siempre viene vacia, aunque la capability se
+     anuncie igual. */
 
   /* write FM register */
   YM2612Write(a, v);
@@ -254,7 +257,10 @@ static void YM3438_Write(unsigned int cycles, unsigned int a, unsigned int v)
   fm_update(cycles);
 
   /* AYTHER fork delta: registrar la escritura cruda al bus FM (core enhanced). */
-  // ayther_record_audio_write removed
+  /* El log lo produce audio_probe.c, no esta ruta: por eso este hook quedo
+     vacio. Consecuencia todavia abierta (#29): con SOUND_PROBE=0 la region
+     AUDIO_WRITES existe y siempre viene vacia, aunque la capability se
+     anuncie igual. */
 
   /* write FM register */
   OPN2_Write(&ym3438, a, v);

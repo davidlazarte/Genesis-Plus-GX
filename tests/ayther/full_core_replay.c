@@ -57,12 +57,10 @@ struct core_api
   bool (*unserialize)(const void *data, size_t size);
   ayther_get_interface_fn get_ayther_interface;
   const ayther_interface_v1 *ayther;
-  /* Export directo, fuera del descriptor. Es opcional a proposito: el perfil
-     legacy lo tiene y el estandar puede no tenerlo, y el test no debe fallar
-     por eso. (#32 lo mueve al descriptor.) */
-  int32_t (AYTHER_CALL *recompose_multilayer)(
-      uint16_t *, uint16_t *, uint16_t *, uint16_t *, uint16_t *,
-      uint32_t, uint32_t, uint32_t *, uint32_t *);
+  /* #32: se resuelve por el DESCRIPTOR (ABI 1.2). Cuando salia del export
+     directo, quitar ese simbolo del perfil estandar habria dejado el test de
+     aislamiento del raster replay sin ejecutarse, en silencio y en verde. */
+  ayther_recompose_multilayer_v1_fn recompose_multilayer;
 };
 
 struct frame_record
@@ -435,17 +433,11 @@ static int load_api(library_t library, struct core_api *api,
     return 1;
   if (!LOAD_API(api, library, get_ayther_interface, "ayther_get_interface"))
     return 0;
-  /* Opcional: su ausencia no es un fallo, solo deja sin verificar el
-     aislamiento del raster replay. Se resuelve sin LOAD_API porque ese macro
-     trata la ausencia como error. */
-  {
-    void *symbol = library_symbol(library, "ayther_recompose_multilayer");
-    if (symbol)
-      memcpy(&api->recompose_multilayer, &symbol,
-             sizeof(api->recompose_multilayer));
-  }
+
 
   api->ayther = api->get_ayther_interface(AYTHER_ABI_VERSION_1_0);
+  if (api->ayther && AYTHER_IFACE_HAS(api->ayther, recompose_multilayer))
+    api->recompose_multilayer = api->ayther->recompose_multilayer;
   if (!api->ayther ||
       !(api->ayther->capabilities & AYTHER_CAP_FRAME_SNAPSHOT) ||
       !(api->ayther->capabilities & AYTHER_CAP_RECOMPOSE_V1) ||

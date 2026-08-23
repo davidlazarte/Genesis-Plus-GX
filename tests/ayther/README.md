@@ -77,9 +77,13 @@ big-endian 68000 form. It covers:
 an initial savestate and runs one reference plus two restore/replay passes over
 the same 120-frame input/config stream. The versioned golden includes video,
 audio, serialized-state, telemetry, input, configuration and aggregate replay
-hashes. After canonicalizing process-local pointers in the Z80 and YM2612
-contexts, every golden hash—including the serialized-state digest—is identical
-on Linux x64 and Windows x64 MSVCRT. The per-frame JSONL artifact additionally
+hashes. Process-local pointers in the Z80 and YM2612 contexts are canonicalized before
+hashing. Even so, the video, audio, state and replay digests **differ between
+Linux x64 (gcc/clang) and Windows x64 (llvm-mingw MSVCRT)**, so there is one
+golden per platform; input, configuration and telemetry hashes do match. See
+`tests/README.md` for the measurement and #38 for the diagnosis. (This file used
+to claim the hashes were identical everywhere, which stopped being true when the
+per-platform goldens were introduced.) The per-frame JSONL artifact additionally
 records fallback reasons, recomposition differences, sprites, audio writes and
 event counts.
 

@@ -115,43 +115,27 @@ jobs:
           nm -D --defined-only genesis_plus_gx_libretro.so > ayther-artifacts/exports.txt
           grep -Eq '[[:space:]]retro_init$' ayther-artifacts/exports.txt
           grep -Eq '[[:space:]]retro_run$' ayther-artifacts/exports.txt
-          if [[ "$AYTHER_EXTENSIONS" == "1" ]]; then
-            grep -Eq '[[:space:]]ayther_get_interface$' ayther-artifacts/exports.txt
-            if grep -E '[[:space:]]ayther_' ayther-artifacts/exports.txt | \
-               grep -Ev '[[:space:]]ayther_get_interface$'; then
-              echo "unexpected additional AYTHER export" >&2
-              exit 1
-            fi
-          else
+          # #32: el closure lo decide tests/ci/check_exports.sh contra
+          # allowed_exports.txt, la MISMA lista que usa el job de Windows.
+          # Cuando la regla estaba escrita aca y en el .ps1, divergieron sin que
+          # nada lo notara: cada job solo corre en su plataforma.
+          awk '{print $NF}' ayther-artifacts/exports.txt | sort -u > ayther-artifacts/export_names.txt
+          bash tests/ci/check_exports.sh ayther-artifacts/export_names.txt "$AYTHER_EXTENSIONS" "$LEGACY_PROFILE" "$SOUND_PROBE" | tee ayther-artifacts/export_closure.txt
+          if [[ "$AYTHER_EXTENSIONS" != "1" ]]; then
+            # Sin extensiones no puede quedar ni la implementacion interna.
             nm --defined-only genesis_plus_gx_libretro.so > ayther-artifacts/symbols.txt
             if grep -Eq '[[:space:]](ayther_|audio_probe_)' ayther-artifacts/symbols.txt; then
               echo "AYTHER implementation leaked from extensions-off build" >&2
               exit 1
             fi
           fi
-          if [[ "$AYTHER_EXTENSIONS" == "1" && "$SOUND_PROBE" == "1" ]]; then
-            grep -Eq '[[:space:]]audio_probe_poll$' ayther-artifacts/exports.txt
-            grep -Eq '[[:space:]]audio_probe_set_callback$' ayther-artifacts/exports.txt
-          elif grep -Eq '[[:space:]]audio_probe_' ayther-artifacts/exports.txt; then
-            echo "audio_probe symbols leaked from the feature-off build" >&2
-            exit 1
-          fi
           "$CC" -O2 -Wall -Wextra -o ayther-artifacts/load_core tests/ci/load_core.c -ldl
+          # Lo que tiene que RESOLVER dinamicamente sale de la misma lista, para
+          # no volver a mantener dos copias de la superficie publica.
           required=(retro_init retro_run)
-          if [[ "$AYTHER_EXTENSIONS" == "1" ]]; then
-            required+=(ayther_get_interface)
-          fi
-          if [[ "$AYTHER_EXTENSIONS" == "1" && "$SOUND_PROBE" == "1" ]]; then
-            required+=(
-              audio_probe_poll
-              audio_probe_set_callback
-              audio_probe_get_transport_stats
-              audio_probe_reset_transport_stats
-              audio_probe_get_context
-              audio_probe_set_channel_gain
-              audio_probe_get_channel_gain
-            )
-          fi
+          for symbol in $(sed -n 's/^export closure OK ([^)]*): //p' ayther-artifacts/export_closure.txt); do
+            required+=("$symbol")
+          done
           ayther-artifacts/load_core "$(pwd)/genesis_plus_gx_libretro.so" "${required[@]}"
           "$CC" -O2 -Wall -Wextra -Icore -o ayther-artifacts/verify_ayther_api \
             tests/ci/verify_ayther_api.c -ldl

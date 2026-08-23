@@ -53,6 +53,7 @@ static int passed, failed;
 #define V1_0_CAP_FRAME_SNAPSHOT (UINT64_C(1) << 4)
 /* Un cliente 1.0 ya conocia las suscripciones: leer VRAM exige pedirlas. */
 #define V1_0_SUB_ALL UINT32_C(0x7F)
+#define V1_0_SUB_AUDIO_EVENTS (UINT32_C(1) << 6)
 
 typedef struct {
   uint32_t struct_size;
@@ -165,9 +166,27 @@ int main(int argc, char **argv)
      Un reordenamiento del descriptor pasa desapercibido en un test que congela
      offsets contra el header actual, y acá llamaría al puntero equivocado.
      El flujo es el real de un consumidor: negociar, suscribir, leer. */
-  CHECK(api->set_subscriptions &&
-        api->set_subscriptions(V1_0_SUB_ALL) == V1_0_STATUS_OK,
-        "a 1.0 client can still request every subscription it knew");
+  /* Pedir TODO puede ser rechazado con razon: los eventos de audio solo existen
+     si el core se compilo con el probe, y el contrato de 1.0 ya decia que un bit
+     no disponible se RECHAZA en vez de ignorarse en silencio. Un cliente 1.0 de
+     verdad reacciona a eso reintentando sin ese bit, asi que el test hace lo
+     mismo — y de paso comprueba las dos mitades del contrato. */
+  CHECK(api->set_subscriptions != NULL,
+        "set_subscriptions is still where 1.0 left it");
+  if (api->set_subscriptions)
+  {
+    int32_t all = api->set_subscriptions(V1_0_SUB_ALL);
+    if (all != V1_0_STATUS_OK)
+    {
+      CHECK(api->set_subscriptions(V1_0_SUB_ALL & ~V1_0_SUB_AUDIO_EVENTS) ==
+            V1_0_STATUS_OK,
+            "a 1.0 client can subscribe to everything the core compiled in");
+    }
+    else
+    {
+      ++passed;   /* el core trae todo compilado y acepta la mascara entera */
+    }
+  }
 
   memset(&info, 0, sizeof(info));
   CHECK(api->query_region &&

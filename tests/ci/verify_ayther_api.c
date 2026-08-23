@@ -160,9 +160,13 @@ int main(int argc, char **argv)
   CHECK(AYTHER_ABI_VERSION_MAJOR(api->abi_version) ==
         AYTHER_ABI_VERSION_MAJOR(AYTHER_ABI_VERSION_1_0),
         "descriptor reports the ABI major this client was built against");
-  CHECK(AYTHER_ABI_VERSION_MINOR(api->abi_version) >=
-        AYTHER_ABI_VERSION_MINOR(AYTHER_ABI_VERSION_1_0),
-        "descriptor minor is at least the one this client needs");
+  /* No se compara el minor contra el de 1.0 -que es 0, y daria una tautologia
+     que gcc marca con -Wtype-limits-. Lo que hay que exigir es que el
+     descriptor cubra los campos que este cliente conoce, y eso lo dice
+     `struct_size`, no la version. */
+  CHECK(api->struct_size >= offsetof(ayther_interface_v1, poll_frame_delta) +
+        sizeof(api->poll_frame_delta),
+        "the descriptor covers every field this client knows");
   /* Un cliente 1.0 pide 1.0 y tiene que recibir un descriptor usable, aunque el
      core ya sea 1.1: esto es el test de compatibilidad hacia atras. */
   CHECK(get_interface(AYTHER_ABI_VERSION_1_0) != NULL &&

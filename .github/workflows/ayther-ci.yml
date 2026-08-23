@@ -227,7 +227,14 @@ jobs:
           CC=clang
           CORE=../genesis_plus_gx_libretro.so
 
-      - name: Enforce compiled-idle overhead target
+      # El numero se publica pero NO bloquea. Evidencia: dos corridas PARALELAS
+      # del mismo commit midieron 1,023% y 1,708% -0,7 puntos de spread sobre
+      # binarios identicos-, o sea que el ruido del runner compartido es mayor
+      # que el propio umbral de 1%. Un gate asi no mide el codigo, mide en que
+      # maquina toco correr, y su unico efecto es ensenar a ignorar el rojo.
+      # La medicion sigue siendo util como serie temporal. Ver #35.
+      - name: Measure compiled-idle overhead (informative)
+        continue-on-error: true
         run: >-
           make -C tests check-profile-comparison
           CC=clang
@@ -279,7 +286,7 @@ jobs:
           retention-days: 14
 
   full-core-sanitize:
-    name: Full core under ASan and UBSan (Linux)
+    name: Full core under UBSan (Linux)
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -291,14 +298,21 @@ jobs:
       # contra tests/stub, o sea todo menos vdp_render.c, vdp_ctrl.c, ym2612.c y
       # libretro.c, que es donde vive el fork. El unico test que los ejercita
       # -full_core_replay- nunca corria instrumentado.
-      - name: Build the core with ASan and UBSan
+      # UBSan y no ASan: el core se construye como .so con -Wl,--no-undefined, y
+      # el runtime de ASan no se linkea en una biblioteca compartida -se espera
+      # en el ejecutable que la carga-, asi que quedan undefined references a
+      # __asan_report_*. Hacerlo andar exigiria construir tambien el harness con
+      # ASan y precargar el runtime. UBSan si se puede linkear adentro con
+      # -static-libsan, y es el que encontro los hallazgos de #38.
+      # ASan sobre el core completo queda pendiente en #45.
+      - name: Build the core with UBSan
         env:
           CC: clang
           CXX: clang++
         run: >-
           make -B -f Makefile.libretro platform=unix
           SOUND_PROBE=1
-          CC="clang -fsanitize=address,undefined -fno-omit-frame-pointer -g"
+          CC="clang -fsanitize=undefined -static-libsan -fno-omit-frame-pointer -g"
           -j2
 
       - name: Build the replay harness
@@ -308,7 +322,7 @@ jobs:
       # una puerta dura sobre UB NUEVO, con el conocido listado por sitio exacto
       # y con dueno. Apagar -fsanitize=alignment para tapar el conocido taparia
       # tambien los futuros.
-      - name: Run the full-core replay under sanitizers
+      - name: Run the full-core replay under UBSan
         run: bash tests/ci/run_sanitizers.sh "$(pwd)/genesis_plus_gx_libretro.so"
 
       - name: Upload sanitizer diagnostics
@@ -402,6 +416,7 @@ jobs:
           CORE=../genesis_plus_gx_libretro.dll
 
       - name: Compare extensions-off and compiled-idle profiles
+        continue-on-error: true
         if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
         shell: pwsh
         run: |

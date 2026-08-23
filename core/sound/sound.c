@@ -44,7 +44,21 @@ int8 audio_hard_disable = 0;
 
 #ifdef AYTHER_EXTENSIONS
 /* AYTHER fork delta: máscara de mute por canal (ver sound.h). 0 = todo suena. */
-uint16 ayther_audio_mute = 0;
+uint32 ayther_audio_mute = 0;
+
+/* AYTHER fork delta: log de escrituras crudas a los chips (ids 0x109/0x10A).
+   VIVE ACA Y NO EN audio_probe.c a proposito: sound.h lo declara bajo
+   AYTHER_EXTENSIONS, pero audio_probe.c solo se compila con SOUND_PROBE. Con
+   `extensions=1 probe=0` —una de las combinaciones que la matriz de CI
+   construye— nadie lo definia y el link se caia con tres simbolos indefinidos.
+   La declaracion y la definicion ahora estan detras del MISMO flag, que es la
+   unica forma de que esto no se vuelva a romper.
+
+   Sin el probe compilado nadie lo llena, y eso es correcto: el log queda vacio,
+   que es justo lo que significa no tener el probe. */
+AytherAudioWrite ayther_audio_writes[AYTHER_AUDIO_WRITE_CAP];
+uint32 ayther_audio_write_n = 0;
+uint32 ayther_audio_write_overflow = 0;
 #endif
 
 /* YM2612 internal clock = input clock / 6 = (master clock / 7) / 6 */
@@ -144,7 +158,10 @@ static void YM2612_Write(unsigned int cycles, unsigned int a, unsigned int v)
   /* AYTHER fork delta: registrar la escritura cruda al bus FM (orden temporal).
      Loguea address-port (a=0/2) y data-port (a=1/3); el host replica el latch de
      dirección de YM2612Write para reconstruir el registro (p.ej. 0x28 key-on). */
-  // ayther_record_audio_write removed
+  /* El log lo produce audio_probe.c, no esta ruta: por eso este hook quedo
+     vacio. Consecuencia todavia abierta (#29): con SOUND_PROBE=0 la region
+     AUDIO_WRITES existe y siempre viene vacia, aunque la capability se
+     anuncie igual. */
 
   /* write FM register */
   YM2612Write(a, v);
@@ -240,7 +257,10 @@ static void YM3438_Write(unsigned int cycles, unsigned int a, unsigned int v)
   fm_update(cycles);
 
   /* AYTHER fork delta: registrar la escritura cruda al bus FM (core enhanced). */
-  // ayther_record_audio_write removed
+  /* El log lo produce audio_probe.c, no esta ruta: por eso este hook quedo
+     vacio. Consecuencia todavia abierta (#29): con SOUND_PROBE=0 la region
+     AUDIO_WRITES existe y siempre viene vacia, aunque la capability se
+     anuncie igual. */
 
   /* write FM register */
   OPN2_Write(&ym3438, a, v);

@@ -248,6 +248,18 @@ void pcm_run(unsigned int length)
             }
 #endif
 
+#ifdef AYTHER_EXTENSIONS
+            /* Silenciado por canal (0x10D). Se aplica DESPUES de haber leido la
+               muestra y avanzado `addr` unas lineas mas arriba, a proposito: el
+               chip tiene que evolucionar igual con el mute puesto y sin el, o el
+               replay divergiria. Sale a cero solo lo que se suma al mixer. */
+            if (AYTHER_PCM_MUTED(j))
+            {
+              l_delta = 0;
+              r_delta = 0;
+            }
+#endif
+
             /* multiply PCM data with ENV & stereo PAN data then add to L/R outputs (14.5 fixed point) */
             l += l_delta;
             r += r_delta;
@@ -432,13 +444,16 @@ void pcm_write(unsigned int address, unsigned char data, unsigned int cycles)
         {
           int was_on = (old_status & (1 << i));
           int is_on = (pcm.status & (1 << i));
+          /* st is kept as 16.11 fixed point; the ST register byte is st >> 19. */
+          unsigned int st = pcm.chan[i].st >> (8 + 11);
           if (!was_on && is_on)
           {
-            audio_probe_pcm_key(i, 1, pcm.chan[i].env, pcm.chan[i].pan, pcm.chan[i].fd.w);
+            audio_probe_pcm_key(i, 1, pcm.chan[i].env, pcm.chan[i].pan,
+                                pcm.chan[i].fd.w, st, pcm.chan[i].ls.w);
           }
           else if (was_on && !is_on)
           {
-            audio_probe_pcm_key(i, 0, 0, 0, 0);
+            audio_probe_pcm_key(i, 0, 0, 0, 0, st, pcm.chan[i].ls.w);
           }
         }
       }

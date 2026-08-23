@@ -73,9 +73,22 @@ make -f Makefile.libretro platform=unix SOUND_PROBE=1 -j2
 make -C tests check-full-core CORE=../genesis_plus_gx_libretro.so
 ```
 
-The x64 golden summary is `ayther/golden/full_core_replay-x64.json`. Video,
-audio, serialized state, telemetry, input, configuration and replay hashes are
-byte-identical on Linux x64 and Windows x64 MSVCRT. The actual summary,
+The golden summary is **per platform**: `ayther/golden/full_core_replay-linux-x64.json`
+and `-windows-x64.json`; the Makefile picks one by host OS.
+
+This used to be a single `-x64.json`, on the stated assumption that every hash
+was "byte-identical on Linux x64 and Windows x64 MSVCRT". **It is not.** Measured
+on the same core at the same commit: video `4d39e98f` on Linux against
+`dd112c2b` on Windows, and audio and serialized state differ too. Both platforms
+run this check, so one shared file made it impossible for both jobs to pass —
+which is why it sat red while looking like a merely stale golden.
+
+Input, configuration and **telemetry** hashes *are* identical across platforms.
+That narrows the divergence to emulation itself — the two are built by different
+compilers — and not to what the probe reports. Worth investigating on its own; a
+per-platform golden makes it visible instead of hiding it behind a permanent red.
+
+The actual summary,
 per-frame JSONL trace, first-frame savestate diagnostic and p50/p95/p99 frame
 benchmark remain in `tests/artifacts/`; CI uploads them even when the golden or
 replay differs.
@@ -127,7 +140,7 @@ tests/
 │   ├── generated_rom.c/.h
 │   ├── full_core_replay.c
 │   ├── raster_rom_probe.c
-│   └── golden/{audio_probe_trace,full_core_replay-x64}.json
+│   └── golden/{audio_probe_trace,full_core_replay-{linux,windows}-x64}.json
 ├── ci/verify_ayther_api.c # dynamic ABI/symbol verifier
 ├── stub/
 │   └── shared.h        # minimal emulator stand-in for isolated builds
@@ -140,3 +153,83 @@ tests/
 
 Generated binaries and mismatch reports live under `.build/` and `artifacts/`;
 both directories are ignored by Git.
+
+## Running the core under sanitizers (#38)
+
+`tests/ci/run_sanitizers.sh <core> [golden]` runs the **full-core replay**
+instrumented, not just the stub-built unit tests. Until it existed, ASan/UBSan
+covered everything except `vdp_render.c`, `vdp_ctrl.c`, `ym2612.c` and
+`libretro.c` — which is where the fork lives.
+
+```sh
+# Linux
+make -B -f Makefile.libretro platform=unix SOUND_PROBE=1 \
+  CC="clang -fsanitize=undefined -static-libsan -fno-omit-frame-pointer -g" -j2
+make -C tests full-core-replay CC=clang
+bash tests/ci/run_sanitizers.sh "$(pwd)/genesis_plus_gx_libretro.so"
+
+# Windows llvm-mingw (the toolchain ships no ASan runtime)
+make -f Makefile.libretro platform=win64 SOUND_PROBE=1 \
+  CC="cc -fsanitize=undefined -fno-omit-frame-pointer" -j8
+bash tests/ci/run_sanitizers.sh genesis_plus_gx_libretro.dll
+```
+
+**UBSan and not ASan**, on both platforms. The core is built as a shared library
+with `-Wl,--no-undefined`, and ASan's runtime does not link into one: it is
+expected in the executable that loads it, so you get undefined references to
+`__asan_report_*`. Making it work would mean building the harness with ASan too
+and preloading the runtime. `-static-libsan` puts UBSan's runtime inside the
+`.so`, and UBSan is what found everything this section documents. ASan over the
+full core is tracked in #45; over the stub-built tests it already runs.
+
+Do **not** build with `-fno-sanitize-recover=all`: it traps on the first report,
+which defeats `halt_on_error=0` and gives one finding per run instead of the
+full inventory. The verdict is the script's job, not the compiler's.
+
+Reports are grouped **per site** (file:line:col, with addresses normalised) and
+checked against `tests/ci/known_ub.txt`. Anything not listed there fails the run.
+The list currently holds eight misaligned 32-bit stores in `vdp_render.c`:
+upstream writes the line buffer four pixels at a time, and fine horizontal
+scroll makes the destination start at an odd offset. Harmless on x86, relevant
+once macOS arm64 joins the matrix (#35). Entries are removed by fixing the
+cause, not by widening the pattern.
+
+## Comparing two platforms' replays (#38)
+
+The Linux and Windows goldens still differ. `tests/ci/first_divergence.sh
+<a.frames.jsonl> <b.frames.jsonl> [name-a] [name-b]` reports the **first frame
+and subsystem** where two runs part ways, so the diagnosis starts from a
+location instead of from an aggregate hash. Download the other platform's
+`*.frames.jsonl` artifact and point the script at both.
+
+## Coverage added for the previously untested surfaces (#33)
+
+Three areas had no direct test and were only covered incidentally, if at all.
+
+**Legacy memory ids** (`check_memory_regions` in `full_core_replay.c`). Starting
+with `RETRO_MEMORY_VIDEO_RAM` — the delta this branch is named after — every id
+is checked for size, non-NULL, and **pointer stability across `retro_reset` and
+`retro_unserialize`**. A frontend caches those pointers once at load; if a reset
+reallocated the buffers it would keep reading freed memory, and the symptom
+would be intermittent graphical corruption far from the cause. The legacy VRAM
+pointer is also compared against the ABI region, since they are two windows onto
+the same memory.
+
+**Savestate round trip** (`check_savestate_roundtrip`). `save → load → save` must
+be byte-identical for the bytes the core writes; truncated buffers and corrupted
+headers must be rejected rather than silently accepted. Note the measurement it
+prints: **the core writes ~144 KB of the ~1,036 KB that `retro_serialize_size`
+declares (14%)**. That is libretro semantics — the size is an upper bound — but
+it means the tail of a saved file is whatever the frontend's buffer happened to
+contain, so two savestates of the same state are not byte-equal on disk.
+
+**A real ABI 1.0 client** (`tests/ci/abi_compat_1_0.c`). `test_ayther_api.c`
+freezes offsets against the *current* header, which catches a reordering but
+cannot answer whether an already-compiled frontend still works. This one does
+not include `ayther_api.h` at all: it transcribes the 1.0 prefix with its own
+types and uses it, the way a consumer from that era would.
+
+`HOOK_CPU=1` also joined the Linux matrix. It had not been built in CI, and it
+had been broken for a while: `cpuhook.h` *defined* `cpu_hook` instead of
+declaring it, which only linked under `-fcommon` (the default up to gcc 9 /
+clang 10).

@@ -24,6 +24,7 @@ typedef void *library_t;
 
 #include "libretro.h"
 #include "ayther/ayther_api.h"
+#include "ayther_raster.h"   /* #27: capacidad del journal raster */
 #include "generated_rom.h"
 
 #define REPLAY_FRAMES 120u
@@ -34,8 +35,8 @@ typedef void *library_t;
 #define FNV_PRIME UINT64_C(1099511628211)
 #define FIXTURE_CONFIGURATION \
   "region=auto;overscan=disabled;aspect=auto;sprite_limit=hardware;" \
-  "ntsc_filter=disabled;audio_filter=disabled;pixel_format=rgb565;" \
-  "audio_video=enabled;subscriptions=0x7f"
+"ntsc_filter=disabled;audio_filter=disabled;pixel_format=rgb565;" \
+"audio_video=enabled;subscriptions=0x7f"
 
 struct core_api
 {
@@ -54,8 +55,16 @@ struct core_api
   size_t (*serialize_size)(void);
   bool (*serialize)(void *data, size_t size);
   bool (*unserialize)(const void *data, size_t size);
+  /* #33: la superficie legacy de memoria no tenia ni un test, empezando por
+     RETRO_MEMORY_VIDEO_RAM, que es el delta que da nombre a esta rama. */
+  void *(*get_memory_data)(unsigned id);
+  size_t (*get_memory_size)(unsigned id);
   ayther_get_interface_fn get_ayther_interface;
   const ayther_interface_v1 *ayther;
+  /* #32: se resuelve por el DESCRIPTOR (ABI 1.2). Cuando salia del export
+     directo, quitar ese simbolo del perfil estandar habria dejado el test de
+     aislamiento del raster replay sin ejecutarse, en silencio y en verde. */
+  ayther_recompose_multilayer_v1_fn recompose_multilayer;
 };
 
 struct frame_record
@@ -421,7 +430,9 @@ static int load_api(library_t library, struct core_api *api,
         LOAD_API(api, library, run, "retro_run") &&
         LOAD_API(api, library, serialize_size, "retro_serialize_size") &&
         LOAD_API(api, library, serialize, "retro_serialize") &&
-        LOAD_API(api, library, unserialize, "retro_unserialize")))
+        LOAD_API(api, library, unserialize, "retro_unserialize") &&
+        LOAD_API(api, library, get_memory_data, "retro_get_memory_data") &&
+        LOAD_API(api, library, get_memory_size, "retro_get_memory_size")))
     return 0;
 
   if (!require_ayther)
@@ -429,7 +440,10 @@ static int load_api(library_t library, struct core_api *api,
   if (!LOAD_API(api, library, get_ayther_interface, "ayther_get_interface"))
     return 0;
 
+
   api->ayther = api->get_ayther_interface(AYTHER_ABI_VERSION_1_0);
+  if (api->ayther && AYTHER_IFACE_HAS(api->ayther, recompose_multilayer))
+    api->recompose_multilayer = api->ayther->recompose_multilayer;
   if (!api->ayther ||
       !(api->ayther->capabilities & AYTHER_CAP_FRAME_SNAPSHOT) ||
       !(api->ayther->capabilities & AYTHER_CAP_RECOMPOSE_V1) ||
@@ -561,6 +575,740 @@ static uint32_t compare_recomposition(const struct core_api *api,
   return different;
 }
 
+/* #26: el cache de recomposicion tiene que estar indexado tambien por el
+ * contenido de las regiones de control.
+ *
+ * El defecto que cubre: escribir una mascara entre dos recomposiciones del
+ * MISMO frame devolvia la imagen anterior, porque la clave era solo
+ * (generacion de frame, flags, layer_mask). El Lab hace exactamente esa
+ * secuencia con el emulador pausado, asi que el bug se veia como "la UI no
+ * responde" sin ningun error.
+ *
+ * La prueba alterna A -> B -> A -> A sobre un frame fijo:
+ *   - B tiene que dar pixeles distintos de A   (con el bug, daba los de A);
+ *   - el segundo A tiene que reproducir el primero bit a bit (fallo, porque
+ *     el cache quedo con B) — que el resultado dependa SOLO del estado y no
+ *     del orden de las llamadas;
+ *   - el tercer A tiene que ser ACIERTO de cache y byte-identico, para que
+ *     arreglar la correccion no equivalga a apagar el cache.
+ * Se afirma sobre los contadores y no sobre tiempos: cronometrar en un runner
+ * compartido mide ruido, no el mecanismo. */
+static int recompose_probe(const struct core_api *api, uint16_t *out,
+                           uint32_t *pixels)
+{
+  uint32_t width = 0;
+  uint32_t height = 0;
+  if (api->ayther->recompose_frame(out, MAX_RECOMPOSE_PIXELS, 0,
+                                   &width, &height) != AYTHER_STATUS_OK)
+    return 0;
+  *pixels = width * height;
+  return *pixels != 0;
+}
+
+static int recompose_stats(const struct core_api *api,
+                           ayther_recompose_stats_v1 *out)
+{
+  memset(out, 0, sizeof(*out));
+  out->struct_size = sizeof(*out);
+  return api->ayther->get_recompose_stats(out, sizeof(*out)) ==
+         AYTHER_STATUS_OK;
+}
+
+static int check_recompose_control_cache(const struct core_api *api)
+{
+  /* Un control por caso: el valor "activo" y el neutro al que se vuelve. La
+     lista arranca con layer_dim porque atenua TODO pixel que no sea sprite:
+     cualquier frame con algo dibujado cambia, asi que el caso no depende de
+     que la ROM sintetica tenga sprites o tiles en un lugar concreto. */
+  static const struct {
+    const char *name;
+    uint32_t region;
+    uint32_t offset;
+    uint8_t active;
+  } cases[] = {
+    { "layer_dim",            AYTHER_REGION_LAYER_DIM,       0, 1 },
+    { "sprite_suppress",      AYTHER_REGION_SPRITE_SUPPRESS, 0, 0xFF },
+    { "tile_suppress",        AYTHER_REGION_TILE_SUPPRESS,   0, 0xFF },
+    { "plane_tile_suppress",  AYTHER_REGION_PLANE_TILE_SUPPRESS, 0, 0xFF }
+  };
+  static uint16_t px_a1[MAX_RECOMPOSE_PIXELS];
+  static uint16_t px_b[MAX_RECOMPOSE_PIXELS];
+  static uint16_t px_a2[MAX_RECOMPOSE_PIXELS];
+  static uint16_t px_a3[MAX_RECOMPOSE_PIXELS];
+  const uint8_t neutral = 0;
+  size_t c;
+  int ok = 1;
+
+  if (!api->ayther->get_recompose_stats)
+  {
+    fprintf(stderr, "core lacks get_recompose_stats (ABI 1.1)\n");
+    return 0;
+  }
+
+  for (c = 0; c < sizeof(cases) / sizeof(cases[0]); ++c)
+  {
+    ayther_recompose_stats_v1 s0, s1, s2, s3;
+    uint32_t n_a1 = 0, n_b = 0, n_a2 = 0, n_a3 = 0;
+    uint32_t changed;
+
+    if (!recompose_probe(api, px_a1, &n_a1) || !recompose_stats(api, &s0))
+    {
+      fprintf(stderr, "recompose cache: baseline failed (%s)\n",
+              cases[c].name);
+      return 0;
+    }
+
+    if (api->ayther->write_control(cases[c].region, cases[c].offset,
+          &cases[c].active, 1, AYTHER_GENERATION_ANY, NULL) !=
+        AYTHER_STATUS_OK)
+    {
+      fprintf(stderr, "recompose cache: write_control failed (%s)\n",
+              cases[c].name);
+      return 0;
+    }
+    if (!recompose_probe(api, px_b, &n_b) || !recompose_stats(api, &s1))
+    {
+      fprintf(stderr, "recompose cache: probe failed with %s active\n",
+              cases[c].name);
+      return 0;
+    }
+
+    if (s1.controls_fingerprint == s0.controls_fingerprint)
+    {
+      fprintf(stderr, "recompose cache: fingerprint ignored %s\n",
+              cases[c].name);
+      ok = 0;
+    }
+    if (s1.single_hits != s0.single_hits)
+    {
+      fprintf(stderr, "recompose cache: stale hit after writing %s\n",
+              cases[c].name);
+      ok = 0;
+    }
+
+    /* Volver al estado neutro y recomponer: tiene que reproducir el primer
+       resultado exactamente. Aca es donde el bug original se manifestaba al
+       reves (el cache seguia sirviendo B). */
+    if (api->ayther->write_control(cases[c].region, cases[c].offset,
+          &neutral, 1, AYTHER_GENERATION_ANY, NULL) != AYTHER_STATUS_OK)
+    {
+      fprintf(stderr, "recompose cache: cannot restore %s to neutral\n",
+              cases[c].name);
+      return 0;
+    }
+    if (!recompose_probe(api, px_a2, &n_a2) || !recompose_stats(api, &s2))
+    {
+      fprintf(stderr, "recompose cache: probe failed after restoring %s\n",
+              cases[c].name);
+      return 0;
+    }
+    if (n_a2 != n_a1 || memcmp(px_a1, px_a2, n_a1 * sizeof(uint16_t)) != 0)
+    {
+      fprintf(stderr,
+              "recompose cache: result depends on call order (%s)\n",
+              cases[c].name);
+      ok = 0;
+    }
+
+    /* Sin cambios: ahora SI tiene que ser acierto, y byte-identico. */
+    if (!recompose_probe(api, px_a3, &n_a3) || !recompose_stats(api, &s3))
+    {
+      fprintf(stderr, "recompose cache: repeat probe failed (%s)\n",
+              cases[c].name);
+      return 0;
+    }
+    if (s3.single_hits != s2.single_hits + 1)
+    {
+      fprintf(stderr, "recompose cache: no hit for unchanged state (%s)\n",
+              cases[c].name);
+      ok = 0;
+    }
+    if (n_a3 != n_a1 || memcmp(px_a1, px_a3, n_a1 * sizeof(uint16_t)) != 0)
+    {
+      fprintf(stderr, "recompose cache: hit served wrong pixels (%s)\n",
+              cases[c].name);
+      ok = 0;
+    }
+
+    changed = 0;
+    if (n_b == n_a1)
+    {
+      uint32_t i;
+      for (i = 0; i < n_a1; ++i)
+        changed += px_b[i] != px_a1[i];
+    }
+    /* layer_dim es el unico caso con efecto garantizado sobre cualquier frame
+       no vacio; los demas dependen de donde caiga el contenido de la ROM, asi
+       que su valor esta en las afirmaciones de arriba (huella, fallo, orden). */
+    if (c == 0 && changed == 0)
+    {
+      fprintf(stderr,
+              "recompose cache: %s did not change any pixel\n",
+              cases[c].name);
+      ok = 0;
+    }
+    if (!ok)
+      return 0;
+  }
+  return 1;
+}
+
+/* #27: el raster replay no puede dejar rastro.
+ *
+ * `ayther_core_recompose_multilayer` reproduce los eventos del frame sobre el
+ * estado real del VDP (CRAM, VSRAM, la tabla de hscroll en VRAM, los registros
+ * y todo el estado DERIVADO que se calcula al escribirlos) y despues lo
+ * devuelve a su lugar. Es una funcion declarada de solo lectura, y de eso
+ * dependen los tres pases del replay determinista: si dejara una sola word
+ * movida, el frame siguiente divergiria y el sintoma apareceria lejos de la
+ * causa.
+ *
+ * Se verifican las tres cosas que el replay toca: la memoria del VDP, los
+ * registros, y el bitmask publico de motivos de fallback -que el replay
+ * anotaba desde adentro, mutando estado publico desde una lectura-. */
+static int check_raster_replay_isolation(const struct core_api *api,
+                                         uint16_t *scratch)
+{
+#define ISOLATION_SNAPSHOT_BYTES 0x10000u
+  static uint8_t before[4][ISOLATION_SNAPSHOT_BYTES];
+  static uint8_t after[ISOLATION_SNAPSHOT_BYTES];
+  static uint16_t layer_a[MAX_RECOMPOSE_PIXELS];
+  static uint16_t layer_b[MAX_RECOMPOSE_PIXELS];
+  static const struct { uint32_t id; uint32_t size; const char *name; } regions[] = {
+    { AYTHER_REGION_VRAM,     0x10000, "vram" },
+    { AYTHER_REGION_CRAM,     0x80,    "cram" },
+    { AYTHER_REGION_VSRAM,    0x80,    "vsram" },
+    { AYTHER_REGION_VDP_REGS, 0x20,    "vdp regs" }
+  };
+  ayther_recompose_stats_v1 stats_before, stats_after;
+  uint32_t fallback_before = 0;
+  uint32_t fallback_after = 0;
+  uint32_t width = 0;
+  uint32_t height = 0;
+  size_t r;
+  int ok = 1;
+
+  if (!api->recompose_multilayer)
+    return 1;   /* perfil sin el símbolo: nada que verificar */
+
+  /* TODO se fotografia antes de UNA sola recomposicion. Con una llamada por
+     region, la primera hacia el replay y las siguientes se servian del cache
+     multicapa: el test pasaba sin haber ejecutado nunca el codigo que dice
+     vigilar. */
+  for (r = 0; r < sizeof(regions) / sizeof(regions[0]); ++r)
+  {
+    if (api->ayther->read_region(regions[r].id, 0, before[r], regions[r].size,
+          AYTHER_GENERATION_ANY, NULL) != AYTHER_STATUS_OK)
+    {
+      fprintf(stderr, "raster isolation: cannot read %s\n", regions[r].name);
+      return 0;
+    }
+  }
+  if (api->ayther->read_region(AYTHER_REGION_RASTER_FALLBACK_REASONS, 0,
+        &fallback_before, sizeof(fallback_before), AYTHER_GENERATION_ANY,
+        NULL) != AYTHER_STATUS_OK ||
+      !recompose_stats(api, &stats_before))
+    return 0;
+
+  /* Dos capas y el composite: el camino que ejercita el replay completo,
+     incluido el bucle por linea que aplica los eventos. */
+  {
+    int32_t status = api->recompose_multilayer(layer_a, layer_b, NULL, NULL,
+          scratch, MAX_RECOMPOSE_PIXELS, 0, &width, &height);
+    if (status != AYTHER_STATUS_OK)
+    {
+      /* Un error temprano tambien deja el replay sin ejecutar. Sin este
+         chequeo el test daria verde sin haber mirado nunca lo que vigila. */
+      fprintf(stderr,
+              "raster isolation: multilayer recomposition failed (%d)\n",
+              (int)status);
+      return 0;
+    }
+  }
+
+  if (!recompose_stats(api, &stats_after))
+  {
+    fprintf(stderr, "raster isolation: recompose stats unavailable\n");
+    return 0;
+  }
+  if (stats_after.multilayer_hits != stats_before.multilayer_hits)
+  {
+    /* Si la llamada se sirvio del cache no se ejecuto el replay, y entonces
+       este test no verifico nada. Decirlo es mejor que dar un verde vacio. */
+    fprintf(stderr,
+            "raster isolation: the probe hit the cache and never replayed\n");
+    return 0;
+  }
+
+  for (r = 0; r < sizeof(regions) / sizeof(regions[0]); ++r)
+  {
+    if (api->ayther->read_region(regions[r].id, 0, after, regions[r].size,
+          AYTHER_GENERATION_ANY, NULL) != AYTHER_STATUS_OK)
+      return 0;
+    if (memcmp(before[r], after, regions[r].size) != 0)
+    {
+      fprintf(stderr, "raster isolation: recomposition modified %s\n",
+              regions[r].name);
+      ok = 0;
+    }
+  }
+  if (api->ayther->read_region(AYTHER_REGION_RASTER_FALLBACK_REASONS, 0,
+        &fallback_after, sizeof(fallback_after), AYTHER_GENERATION_ANY,
+        NULL) != AYTHER_STATUS_OK)
+    return 0;
+  if (fallback_after != fallback_before)
+  {
+    fprintf(stderr,
+            "raster isolation: recomposition changed fallback reasons "
+"(%u -> %u)\n", fallback_before, fallback_after);
+    ok = 0;
+  }
+  return ok;
+#undef ISOLATION_SNAPSHOT_BYTES
+}
+
+/* #27: contabilidad del journal. Un desborde silencioso dejaba que la
+ * recomposicion reprodujera un prefijo del frame y devolviera exito, que es
+ * justo lo que un frontend no puede detectar solo. */
+static int check_raster_journal_accounting(const struct core_api *api)
+{
+  ayther_frame_delta_v1 delta;
+  memset(&delta, 0, sizeof(delta));
+  delta.struct_size = sizeof(delta);
+  if (api->ayther->poll_frame_delta(&delta, sizeof(delta)) != AYTHER_STATUS_OK)
+  {
+    fprintf(stderr, "journal accounting: frame delta unavailable\n");
+    return 0;
+  }
+  if (delta.raster_event_count > AYTHER_RASTER_JOURNAL_MAX)
+  {
+    fprintf(stderr, "journal accounting: count %u exceeds capacity\n",
+            delta.raster_event_count);
+    return 0;
+  }
+  /* El journal solo guarda lo REPRODUCIBLE, asi que en esta ROM -que escribe
+     VRAM durante el display activo todo el tiempo- tiene que quedar lejos del
+     tope. Cuando se llenaba con eventos que el replay ni mira, desbordaba en
+     los 120 frames y perdia los que si importaban. */
+  if (delta.raster_events_dropped != 0)
+  {
+    fprintf(stderr,
+            "journal accounting: %u events dropped on the fixture\n",
+            delta.raster_events_dropped);
+    return 0;
+  }
+  fprintf(stderr, "raster journal: %u/%u events, %u dropped\n",
+          delta.raster_event_count, (unsigned)AYTHER_RASTER_JOURNAL_MAX,
+          delta.raster_events_dropped);
+  return 1;
+}
+
+/* #33: la superficie de memoria legacy no tenia cobertura.
+ *
+ * Empezando por `RETRO_MEMORY_VIDEO_RAM`, que es el delta que da nombre a esta
+ * rama: upstream devuelve NULL y el fork expone los 64 KB de VRAM. Que ese
+ * puntero siga siendo valido y del mismo tamano DESPUES de un reset o de cargar
+ * un savestate es justo lo que un frontend asume sin poder verificarlo -lo
+ * cachea una vez al cargar el core- y lo que nadie estaba comprobando.
+ *
+ * La estabilidad del puntero importa mas de lo que parece: si `retro_reset`
+ * reasignara los buffers, el frontend seguiria leyendo memoria liberada y el
+ * sintoma serian graficos corruptos intermitentes, lejos de la causa. */
+static int check_memory_regions(const struct core_api *api,
+                                const void *checkpoint, size_t state_size)
+{
+  static const struct { unsigned id; size_t size; const char *name; } expected[] = {
+    { RETRO_MEMORY_VIDEO_RAM,                  0x10000, "VIDEO_RAM (vram)" },
+    { AYTHER_LEGACY_MEMORY_CRAM,               0x80,    "CRAM" },
+    { AYTHER_LEGACY_MEMORY_VDP_REGS,           0x20,    "VDP regs" },
+    { AYTHER_LEGACY_MEMORY_VSRAM,              0x80,    "VSRAM" },
+    { AYTHER_LEGACY_MEMORY_LAYER_MASK,         1,       "layer mask" },
+    { AYTHER_LEGACY_MEMORY_SPRITE_SUPPRESS,    16,      "sprite suppress" },
+    { AYTHER_LEGACY_MEMORY_TILE_SUPPRESS,      512,     "tile suppress" },
+    { AYTHER_LEGACY_MEMORY_PLANE_TILE_SUPPRESS, 3 * 1024, "plane tile suppress" },
+    { AYTHER_LEGACY_MEMORY_PLANE_SUPPRESS_ACTIVE, 1,   "plane suppress active" },
+    { AYTHER_LEGACY_MEMORY_LAYER_DIM,          1,       "layer dim" },
+    { AYTHER_LEGACY_MEMORY_RASTER_DIRTY,       4,       "raster reasons" }
+  };
+  void *before[sizeof(expected) / sizeof(expected[0])];
+  size_t i;
+  int ok = 1;
+
+  for (i = 0; i < sizeof(expected) / sizeof(expected[0]); ++i)
+  {
+    before[i] = api->get_memory_data(expected[i].id);
+    if (!before[i])
+    {
+      fprintf(stderr, "memory regions: %s is NULL\n", expected[i].name);
+      ok = 0;
+      continue;
+    }
+    if (api->get_memory_size(expected[i].id) != expected[i].size)
+    {
+      fprintf(stderr, "memory regions: %s is %u bytes, expected %u\n",
+              expected[i].name,
+              (unsigned)api->get_memory_size(expected[i].id),
+              (unsigned)expected[i].size);
+      ok = 0;
+    }
+  }
+
+  /* Un id que el core no conoce tiene que devolver NULL y tamano 0, no un
+     puntero a cualquier cosa. */
+  if (api->get_memory_data(0x1FF) != NULL ||
+      api->get_memory_size(0x1FF) != 0)
+  {
+    fprintf(stderr, "memory regions: an unknown id returned a mapping\n");
+    ok = 0;
+  }
+
+  /* Estabilidad a traves de reset y de unserialize. */
+  api->reset();
+  for (i = 0; i < sizeof(expected) / sizeof(expected[0]); ++i)
+  {
+    if (before[i] && api->get_memory_data(expected[i].id) != before[i])
+    {
+      fprintf(stderr, "memory regions: %s moved across retro_reset\n",
+              expected[i].name);
+      ok = 0;
+    }
+  }
+  if (!api->unserialize(checkpoint, state_size))
+  {
+    fprintf(stderr, "memory regions: could not restore the checkpoint\n");
+    return 0;
+  }
+  for (i = 0; i < sizeof(expected) / sizeof(expected[0]); ++i)
+  {
+    if (before[i] && api->get_memory_data(expected[i].id) != before[i])
+    {
+      fprintf(stderr, "memory regions: %s moved across retro_unserialize\n",
+              expected[i].name);
+      ok = 0;
+    }
+  }
+
+  /* El puntero legacy de VRAM y la region de la ABI tienen que ver lo mismo:
+     son dos ventanas a la misma memoria, y si divergieran el Lab mostraria una
+     cosa y el motor HD usaria otra. */
+  {
+    static uint8_t via_abi[0x10000];
+    const uint8_t *via_legacy = (const uint8_t *)before[0];
+    if (via_legacy &&
+        api->ayther->read_region(AYTHER_REGION_VRAM, 0, via_abi,
+          sizeof(via_abi), AYTHER_GENERATION_ANY, NULL) == AYTHER_STATUS_OK &&
+        memcmp(via_abi, via_legacy, sizeof(via_abi)) != 0)
+    {
+      fprintf(stderr, "memory regions: legacy VRAM and the ABI region differ\n");
+      ok = 0;
+    }
+  }
+  return ok;
+}
+
+/* #33: ida y vuelta del savestate.
+ *
+ * El replay ya prueba que restaurar y re-simular da los mismos hashes, pero eso
+ * no cubre que el estado SERIALIZADO sea estable: un campo sin inicializar o
+ * padding sin limpiar produce dos volcados distintos del mismo estado, y el
+ * sintoma no aparece hasta que alguien compara savestates o los versiona. */
+static int check_savestate_roundtrip(const struct core_api *api,
+                                     size_t state_size)
+{
+  uint8_t *first = (uint8_t *)malloc(state_size);
+  uint8_t *second = (uint8_t *)malloc(state_size);
+  int ok = 1;
+
+  if (!first || !second)
+  {
+    free(first); free(second);
+    fprintf(stderr, "savestate: out of memory\n");
+    return 0;
+  }
+
+  /* Primero: cuanto escribe realmente el core de lo que declara.
+     `retro_serialize_size` devuelve una COTA, no el tamano exacto, asi que el
+     resto del buffer queda como lo dejo quien lo asigno. Se mide llenando con
+     dos patrones distintos y viendo hasta donde el core los piso. No es un
+     fallo -es la semantica de libretro- pero significa que el archivo que el
+     frontend guarda lleva una cola no inicializada, y por lo tanto que dos
+     savestates del mismo estado no son iguales byte a byte. Vale la pena verlo
+     escrito en vez de descubrirlo comparando archivos. */
+  {
+    size_t written_a = 0, written_b = 0, at;
+    memset(first, 0x00, state_size);
+    memset(second, 0xFF, state_size);
+    if (api->serialize(first, state_size) && api->serialize(second, state_size))
+    {
+      for (at = state_size; at > 0; --at)
+        if (first[at - 1] != 0x00) { written_a = at; break; }
+      for (at = state_size; at > 0; --at)
+        if (second[at - 1] != 0xFF) { written_b = at; break; }
+      if (written_a > state_size || written_b > state_size)
+      {
+        fprintf(stderr, "savestate: the core wrote past the declared size\n");
+        ok = 0;
+      }
+      fprintf(stderr,
+              "savestate: %u of %u declared bytes are written (%.1f%%)\n",
+              (unsigned)(written_a > written_b ? written_a : written_b),
+              (unsigned)state_size,
+              100.0 * (double)(written_a > written_b ? written_a : written_b) /
+                (double)state_size);
+    }
+  }
+
+  /* Ahora si, la propiedad que importa: los bytes que el core SI escribe tienen
+     que ser los mismos para el mismo estado. Ambos buffers arrancan iguales,
+     asi que cualquier diferencia viene del core y no de la cola sin tocar. */
+  memset(first, 0x00, state_size);
+  memset(second, 0x00, state_size);
+
+  if (!api->serialize(first, state_size) ||
+      !api->unserialize(first, state_size) ||
+      !api->serialize(second, state_size))
+  {
+    fprintf(stderr, "savestate: serialize/unserialize round trip failed\n");
+    ok = 0;
+  }
+  else if (memcmp(first, second, state_size) != 0)
+  {
+    /* El rango y la cantidad, no solo el primer byte: un puntero suelto son 8
+       bytes contiguos y una estructura con padding son islas dispersas, y la
+       diferencia entre esos dos casos es la mitad del diagnostico. */
+    size_t at, lo = state_size, hi = 0, count = 0;
+    for (at = 0; at < state_size; ++at)
+    {
+      if (first[at] != second[at])
+      {
+        if (at < lo) lo = at;
+        hi = at;
+        ++count;
+      }
+    }
+    fprintf(stderr,
+            "savestate: save->load->save differs in %u bytes, "
+            "offsets %u..%u of %u\n",
+            (unsigned)count, (unsigned)lo, (unsigned)hi,
+            (unsigned)state_size);
+    for (at = lo; at <= hi && at < lo + 32; ++at)
+      fprintf(stderr, "  [%u] %02x -> %02x%s\n", (unsigned)at,
+              first[at], second[at],
+              first[at] == second[at] ? " (igual)" : "");
+    ok = 0;
+  }
+
+  if (api->serialize_size() != state_size)
+  {
+    fprintf(stderr, "savestate: serialize_size changed between frames\n");
+    ok = 0;
+  }
+  /* Un buffer mas chico tiene que ser rechazado, no truncado en silencio. */
+  if (state_size > 1 && api->serialize(first, state_size - 1))
+  {
+    fprintf(stderr, "savestate: serialize accepted an undersized buffer\n");
+    ok = 0;
+  }
+  if (state_size > 1 && api->unserialize(first, state_size - 1))
+  {
+    fprintf(stderr, "savestate: unserialize accepted a truncated state\n");
+    ok = 0;
+  }
+  /* Y un estado con la cabecera rota tampoco puede pasar por bueno. */
+  {
+    uint8_t saved = first[0];
+    first[0] = (uint8_t)~saved;
+    if (api->unserialize(first, state_size))
+    {
+      fprintf(stderr, "savestate: unserialize accepted a corrupted header\n");
+      ok = 0;
+    }
+    first[0] = saved;
+    if (!api->unserialize(first, state_size))
+    {
+      fprintf(stderr, "savestate: could not restore after the corruption probe\n");
+      ok = 0;
+    }
+  }
+
+  free(first);
+  free(second);
+  return ok;
+}
+
+/* #41: el buffer de atribucion contra el oraculo que existia antes.
+ *
+ * Hasta ahora, para saber que capa pinto un pixel, el frontend recomponia el
+ * frame una vez por capa y diffeaba: N pasadas de render para algo que el VDP ya
+ * sabe mientras dibuja. Ese metodo es justamente el oraculo con el que se puede
+ * validar el buffer, asi que el test lo usa: recompone SOLO el Plano B, SOLO el
+ * A y SOLO el Window, y exige que cada pixel no-backdrop de cada recomposicion
+ * este atribuido a esa capa.
+ *
+ * La direccion de la comprobacion importa: se afirma "si la capa X sola pinto
+ * algo aqui, la atribucion dice X", que es la propiedad que el consumidor usa.
+ * Al reves no vale, porque una capa puede pintar y perder por prioridad. */
+/* Los flags de recomposicion son contrato publico pero viven en
+   core/vdp_render.h, que un consumidor no incluye. Se replican aca como lo
+   haria el frontend; moverlos a ayther_api.h es deuda anotada aparte. */
+#define RC_LAYER_A 0x01u
+#define RC_LAYER_B 0x02u
+#define RC_LAYER_OBJ 0x08u
+#define RC_LAYER_MASK(m) (((unsigned int)(m) & 0xFFu) << 24)
+
+static int check_attribution(const struct core_api *api)
+{
+  static uint8_t attrib[320 * 240];
+  static uint16_t isolated[2][MAX_RECOMPOSE_PIXELS];
+  static uint16_t composite[MAX_RECOMPOSE_PIXELS];
+  static uint16_t backdrop[MAX_RECOMPOSE_PIXELS];
+  static const struct { uint8_t mask; uint8_t layer; const char *name; } cases[] = {
+    { RC_LAYER_B, AYTHER_ATTRIB_LAYER_PLANE_B, "Plane B" },
+    { RC_LAYER_A, AYTHER_ATTRIB_LAYER_PLANE_A, "Plane A" }
+  };
+  ayther_region_info_v1 info;
+  uint32_t width = 0, height = 0, w0 = 0, h0 = 0;
+  size_t c;
+  int ok = 1;
+  int checked = 0;
+
+  memset(&info, 0, sizeof(info));
+  if (api->ayther->query_region(AYTHER_REGION_ATTRIBUTION, &info,
+        sizeof(info)) != AYTHER_STATUS_OK)
+    return 1;   /* core sin la capability: nada que verificar */
+
+  if (info.data_version != AYTHER_LAYOUT_ATTRIBUTION_V1 || !info.byte_size ||
+      info.byte_size > sizeof(attrib))
+  {
+    fprintf(stderr, "attribution: unexpected region layout (%u bytes)\n",
+            info.byte_size);
+    return 0;
+  }
+  if (api->ayther->read_region(AYTHER_REGION_ATTRIBUTION, 0, attrib,
+        info.byte_size, AYTHER_GENERATION_ANY, NULL) != AYTHER_STATUS_OK)
+  {
+    fprintf(stderr, "attribution: region is not readable\n");
+    return 0;
+  }
+
+  /* El composite da las dimensiones y sirve de control: si la recomposicion no
+     esta disponible en este frame no hay oraculo, y no se afirma nada. */
+  if (api->ayther->recompose_frame(composite, MAX_RECOMPOSE_PIXELS, 0,
+        &width, &height) != AYTHER_STATUS_OK || !width || !height)
+    return 1;
+  if (info.byte_size != width * height)
+  {
+    fprintf(stderr,
+            "attribution: the region is %u bytes but the frame is %ux%u\n",
+            info.byte_size, width, height);
+    return 0;
+  }
+
+  /* Oraculo exacto: el frame con TODAS las capas apagadas es el backdrop. Un
+     pixel esta "pintado por la capa L" cuando la recomposicion de L sola
+     difiere del backdrop ahi, y es el que se VE cuando ademas coincide con el
+     composite. Tomar el pixel (0,0) como referencia de backdrop -que es lo
+     primero que uno escribe- falla apenas ese pixel este pintado, y ademas
+     hace que casi todo el frame cuente como "pintado" por las dos capas. */
+  if (api->ayther->recompose_frame(backdrop, MAX_RECOMPOSE_PIXELS,
+        RC_LAYER_MASK(0xF0), &w0, &h0) != AYTHER_STATUS_OK ||
+      w0 != width || h0 != height)
+  {
+    /* 0xF0 son bits que no corresponden a ninguna capa real: la mascara queda
+       en "ninguna", que es exactamente solo-backdrop. */
+    fprintf(stderr, "attribution: cannot isolate the backdrop (%ux%u vs %ux%u)\n",
+            w0, h0, width, height);
+    return 0;
+  }
+
+  /* La ROM sintetica dibuja el MISMO contenido en los dos planos, asi que
+     "aislar A" y "aislar B" dan la misma imagen y el oraculo por capa no puede
+     distinguirlos: 2560 de 2560 pixeles resultan ambiguos. Distinguirlos exige
+     una escena con planos distintos (#35).
+     Lo que si se puede afirmar con este fixture son dos IMPLICACIONES exactas,
+     que cubren el grueso del mecanismo: el reconocimiento del backdrop y el bit
+     de sprite. Se afirman en la direccion segura -de la imagen a la
+     atribucion-, porque la inversa admite que una capa pinte justo el color del
+     backdrop. */
+  {
+    uint32_t x, y;
+    uint32_t bad_backdrop = 0, bad_sprite = 0, ambiguous = 0;
+    uint32_t w2 = 0, h2 = 0;
+
+    /* Solo sprites sobre el backdrop. */
+    if (api->ayther->recompose_frame(isolated[0], MAX_RECOMPOSE_PIXELS,
+          RC_LAYER_MASK(RC_LAYER_OBJ), &w2, &h2) != AYTHER_STATUS_OK ||
+        w2 != width || h2 != height)
+    {
+      fprintf(stderr, "attribution: cannot isolate the sprites\n");
+      return 0;
+    }
+
+    for (y = 0; y < height; ++y)
+    {
+      for (x = 0; x < width; ++x)
+      {
+        const size_t i = (size_t)y * width + x;
+        const uint8_t layer = (uint8_t)((attrib[i] & AYTHER_ATTRIB_LAYER_MASK) >>
+                                        AYTHER_ATTRIB_LAYER_SHIFT);
+        const int is_sprite = (attrib[i] & AYTHER_ATTRIB_SPRITE) != 0;
+
+        /* 1. Si el frame difiere del backdrop, algo lo pinto: no puede estar
+              etiquetado como backdrop sin sprite encima. */
+        if (composite[i] != backdrop[i])
+        {
+          ++checked;
+          if (layer == AYTHER_ATTRIB_LAYER_BACKDROP && !is_sprite)
+          {
+            if (bad_backdrop < 4)
+              fprintf(stderr,
+                      "attribution: (%u,%u) differs from the backdrop but is "
+                      "tagged backdrop\n", x, y);
+            ++bad_backdrop;
+          }
+        }
+        else
+        {
+          ++ambiguous;   /* igual al backdrop: pudo pintarlo una capa */
+        }
+
+        /* 2. Si el render de solo-sprites coincide con el frame y difiere del
+              backdrop, el pixel visible lo puso un sprite. */
+        if (isolated[0][i] != backdrop[i] && composite[i] == isolated[0][i])
+        {
+          ++checked;
+          if (!is_sprite)
+          {
+            if (bad_sprite < 4)
+              fprintf(stderr,
+                      "attribution: (%u,%u) shows a sprite but the sprite bit "
+                      "is clear\n", x, y);
+            ++bad_sprite;
+          }
+        }
+      }
+    }
+
+    if (bad_backdrop || bad_sprite)
+    {
+      fprintf(stderr,
+              "attribution: %u backdrop and %u sprite mismatches of %d checks\n",
+              bad_backdrop, bad_sprite, checked);
+      ok = 0;
+    }
+    fprintf(stderr,
+            "attribution: %d implications checked, %u pixels equal the "
+            "backdrop and carry no information\n", checked, ambiguous);
+  }
+
+  if (!checked)
+  {
+    fprintf(stderr, "attribution: the oracle produced nothing to compare\n");
+    return 0;
+  }
+  return ok;
+}
+
 static uint64_t frame_digest(const struct frame_record *record)
 {
   uint64_t hash = FNV_OFFSET;
@@ -585,12 +1333,12 @@ static void write_frame_report(FILE *report, const char *pass,
   if (!report) return;
   fprintf(report,
     "{\"pass\":\"%s\",\"frame\":%u,\"input\":%u,"
-    "\"video\":\"%016" PRIx64 "\",\"audio\":\"%016" PRIx64
-    "\",\"state\":\"%016" PRIx64 "\",\"telemetry\":\"%016" PRIx64
-    "\",\"width\":%u,\"height\":%u,\"audio_frames\":%u,"
-    "\"fallback_reasons\":%u,\"sprites\":%u,\"audio_writes\":%u,"
-    "\"events\":%u,\"different_pixels\":%u,\"false_clean\":%s,"
-    "\"recompose_unavailable\":%s}\n",
+"\"video\":\"%016" PRIx64 "\",\"audio\":\"%016" PRIx64
+"\",\"state\":\"%016" PRIx64 "\",\"telemetry\":\"%016" PRIx64
+"\",\"width\":%u,\"height\":%u,\"audio_frames\":%u,"
+"\"fallback_reasons\":%u,\"sprites\":%u,\"audio_writes\":%u,"
+"\"events\":%u,\"different_pixels\":%u,\"false_clean\":%s,"
+"\"recompose_unavailable\":%s}\n",
     pass, frame, record->input_mask, record->video_hash, record->audio_hash,
     record->state_hash, record->telemetry_hash, record->width, record->height,
     record->audio_frames, record->fallback_reasons, record->sprite_count,
@@ -714,7 +1462,7 @@ static int run_pass(const struct core_api *api, const void *checkpoint,
     {
       fprintf(stderr,
         "replay mismatch at frame %u: expected=%016" PRIx64
-        " actual=%016" PRIx64 "\n",
+" actual=%016" PRIx64 "\n",
         frame, expected[frame].digest, record->digest);
       if (summary) ++summary->replay_mismatches;
     }
@@ -738,8 +1486,8 @@ static int emulation_records_equal(const struct frame_record *idle,
     {
       fprintf(stderr,
         "idle/observed emulation mismatch at frame %u: "
-        "video=%016" PRIx64 "/%016" PRIx64 " state=%016" PRIx64
-        "/%016" PRIx64 "\n",
+"video=%016" PRIx64 "/%016" PRIx64 " state=%016" PRIx64
+"/%016" PRIx64 "\n",
         frame, idle[frame].video_hash, observed[frame].video_hash,
         idle[frame].state_hash, observed[frame].state_hash);
       return 0;
@@ -944,8 +1692,8 @@ static int compare_profiles(const char *off_core, const char *idle_core,
       if (!round_identical)
         fprintf(stderr,
           "profile round %u mismatch: off=%016" PRIx64 "/%016" PRIx64
-          "/%016" PRIx64 " idle=%016" PRIx64 "/%016" PRIx64
-          "/%016" PRIx64 "\n",
+"/%016" PRIx64 " idle=%016" PRIx64 "/%016" PRIx64
+"/%016" PRIx64 "\n",
           round, off[round].video_hash, off[round].audio_hash,
           off[round].state_hash, idle[round].video_hash,
           idle[round].audio_hash, idle[round].state_hash);
@@ -967,17 +1715,17 @@ static int compare_profiles(const char *off_core, const char *idle_core,
   }
   fprintf(output,
     "{\"schema\":1,\"fixture\":\"generated-v1\",\"frames\":%u,"
-    "\"rounds\":%u,"
-    "\"bit_identical\":%s,\"state_hash_cross_process_compared\":false,"
-    "\"idle_overhead_percent_p50\":%.3f,"
-    "\"target_percent\":1.0,\"within_target\":%s,"
-    "\"extensions_off\":{\"p50_ns\":%.3f,\"p95_ns\":%.3f,"
-    "\"binary_bytes\":%" PRIu64 "},"
-    "\"compiled_idle\":{\"p50_ns\":%.3f,\"p95_ns\":%.3f,"
-    "\"binary_bytes\":%" PRIu64 "},"
-    "\"video_hash\":\"%016" PRIx64 "\","
-    "\"audio_hash\":\"%016" PRIx64 "\","
-    "\"state_hash\":\"%016" PRIx64 "\"}\n",
+"\"rounds\":%u,"
+"\"bit_identical\":%s,\"state_hash_cross_process_compared\":false,"
+"\"idle_overhead_percent_p50\":%.3f,"
+"\"target_percent\":1.0,\"within_target\":%s,"
+"\"extensions_off\":{\"p50_ns\":%.3f,\"p95_ns\":%.3f,"
+"\"binary_bytes\":%" PRIu64 "},"
+"\"compiled_idle\":{\"p50_ns\":%.3f,\"p95_ns\":%.3f,"
+"\"binary_bytes\":%" PRIu64 "},"
+"\"video_hash\":\"%016" PRIx64 "\","
+"\"audio_hash\":\"%016" PRIx64 "\","
+"\"state_hash\":\"%016" PRIx64 "\"}\n",
     REPLAY_FRAMES, PROFILE_ROUNDS, identical ? "true" : "false", overhead,
     overhead < 1.0 ? "true" : "false",
     off_p50[PROFILE_ROUNDS / 2u], off_p95[PROFILE_ROUNDS / 2u],
@@ -1027,14 +1775,14 @@ static int read_golden(const char *path, struct golden *golden)
   fclose(file);
   if (sscanf(buffer,
       "{\"schema\":%u,\"fixture\":\"generated-v1\",\"frames\":%u,"
-      "\"video_hash\":\"%16[0-9a-fA-F]\","
-      "\"audio_hash\":\"%16[0-9a-fA-F]\","
-      "\"state_hash\":\"%16[0-9a-fA-F]\","
-      "\"telemetry_hash\":\"%16[0-9a-fA-F]\","
-      "\"input_hash\":\"%16[0-9a-fA-F]\","
-      "\"configuration_hash\":\"%16[0-9a-fA-F]\","
-      "\"replay_hash\":\"%16[0-9a-fA-F]\","
-      "\"fallback_frames\":%u,\"false_clean_frames\":%u}",
+"\"video_hash\":\"%16[0-9a-fA-F]\","
+"\"audio_hash\":\"%16[0-9a-fA-F]\","
+"\"state_hash\":\"%16[0-9a-fA-F]\","
+"\"telemetry_hash\":\"%16[0-9a-fA-F]\","
+"\"input_hash\":\"%16[0-9a-fA-F]\","
+"\"configuration_hash\":\"%16[0-9a-fA-F]\","
+"\"replay_hash\":\"%16[0-9a-fA-F]\","
+"\"fallback_frames\":%u,\"false_clean_frames\":%u}",
       &golden->schema, &golden->frames, video, audio, state, telemetry,
       input, config, replay, &golden->fallback_frames,
       &golden->false_clean_frames) != 11)
@@ -1056,14 +1804,14 @@ static void write_summary(FILE *file, const struct replay_summary *summary)
 {
   fprintf(file,
     "{\"schema\":1,\"fixture\":\"generated-v1\",\"frames\":%u,"
-    "\"video_hash\":\"%016" PRIx64 "\","
-    "\"audio_hash\":\"%016" PRIx64 "\","
-    "\"state_hash\":\"%016" PRIx64 "\","
-    "\"telemetry_hash\":\"%016" PRIx64 "\","
-    "\"input_hash\":\"%016" PRIx64 "\","
-    "\"configuration_hash\":\"%016" PRIx64 "\","
-    "\"replay_hash\":\"%016" PRIx64 "\","
-    "\"fallback_frames\":%u,\"false_clean_frames\":%u}\n",
+"\"video_hash\":\"%016" PRIx64 "\","
+"\"audio_hash\":\"%016" PRIx64 "\","
+"\"state_hash\":\"%016" PRIx64 "\","
+"\"telemetry_hash\":\"%016" PRIx64 "\","
+"\"input_hash\":\"%016" PRIx64 "\","
+"\"configuration_hash\":\"%016" PRIx64 "\","
+"\"replay_hash\":\"%016" PRIx64 "\","
+"\"fallback_frames\":%u,\"false_clean_frames\":%u}\n",
     REPLAY_FRAMES, summary->video_hash, summary->audio_hash,
     summary->state_hash, summary->telemetry_hash, summary->input_hash,
     summary->configuration_hash, summary->replay_hash,
@@ -1101,20 +1849,20 @@ static int write_benchmark(const char *path,
   }
   fprintf(file,
     "{\"schema\":1,\"fixture\":\"generated-v1\","
-    "\"target\":\"%s\",\"compiler\":\"%s\","
-    "\"unit\":\"ns/frame\",\"warmup_frames\":%u,"
-    "\"samples\":%u,\"frame_time\":{\"min\":%.3f,\"p50\":%.3f,"
-    "\"p95\":%.3f,\"p99\":%.3f,\"max\":%.3f},"
-    "\"idle_frame_time\":{\"min\":%.3f,\"p50\":%.3f,"
-    "\"p95\":%.3f,\"p99\":%.3f,\"max\":%.3f},"
-    "\"observed_overhead_percent_p50\":%.3f,"
-    "\"memory\":{\"rom_bytes\":%u,\"serialized_state_bytes\":%zu,"
-    "\"framebuffer_peak_bytes\":%zu,\"recompose_buffer_bytes\":%zu},"
-    "\"core_binary_bytes\":%" PRIu64 ",\"events\":%" PRIu64
-    ",\"events_per_frame\":%.3f,\"fallback_frames\":%u,"
-    "\"false_clean_frames\":%u,\"replay_mismatches\":%u,"
-    "\"max_sprites\":%u,\"max_audio_writes\":%u,"
-    "\"max_audio_frames\":%u}\n",
+"\"target\":\"%s\",\"compiler\":\"%s\","
+"\"unit\":\"ns/frame\",\"warmup_frames\":%u,"
+"\"samples\":%u,\"frame_time\":{\"min\":%.3f,\"p50\":%.3f,"
+"\"p95\":%.3f,\"p99\":%.3f,\"max\":%.3f},"
+"\"idle_frame_time\":{\"min\":%.3f,\"p50\":%.3f,"
+"\"p95\":%.3f,\"p99\":%.3f,\"max\":%.3f},"
+"\"observed_overhead_percent_p50\":%.3f,"
+"\"memory\":{\"rom_bytes\":%u,\"serialized_state_bytes\":%zu,"
+"\"framebuffer_peak_bytes\":%zu,\"recompose_buffer_bytes\":%zu},"
+"\"core_binary_bytes\":%" PRIu64 ",\"events\":%" PRIu64
+",\"events_per_frame\":%.3f,\"fallback_frames\":%u,"
+"\"false_clean_frames\":%u,\"replay_mismatches\":%u,"
+"\"max_sprites\":%u,\"max_audio_writes\":%u,"
+"\"max_audio_frames\":%u}\n",
     target_name(), compiler_name(),
     BOOTSTRAP_FRAMES + (2u * REPLAY_FRAMES), REPLAY_FRAMES,
     observed_stats->minimum, observed_stats->p50,
@@ -1138,8 +1886,8 @@ static void usage(const char *program)
 {
   fprintf(stderr,
     "usage: %s CORE GOLDEN_JSON ACTUAL_JSON FRAME_REPORT_JSONL "
-    "BENCHMARK_JSON\n"
-    "       %s --compare-profiles OFF_CORE IDLE_CORE OUTPUT_JSON\n",
+"BENCHMARK_JSON\n"
+"       %s --compare-profiles OFF_CORE IDLE_CORE OUTPUT_JSON\n",
     program, program);
 }
 
@@ -1345,6 +2093,17 @@ int main(int argc, char **argv)
       !run_pass(&api, checkpoint, state_size, state_buffer, recomposed,
                 replay, reference, observed_timings, report, "replay-2",
                 &summary, 1))
+    goto cleanup;
+
+  /* Va DESPUES de los pases hasheados: escribe regiones de control, y aunque
+     las deja neutras, cualquier efecto suyo sobre los hashes seria un falso
+     positivo dificil de leer. Aca no puede contaminar nada. */
+  if (!check_recompose_control_cache(&api) ||
+      !check_raster_replay_isolation(&api, recomposed) ||
+      !check_raster_journal_accounting(&api) ||
+      !check_attribution(&api) ||
+      !check_savestate_roundtrip(&api, state_size) ||
+      !check_memory_regions(&api, checkpoint, state_size))
     goto cleanup;
 
   actual = fopen(argv[3], "wb");

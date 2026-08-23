@@ -1,3 +1,8 @@
 * text=auto
 *.c text eol=lf
 *.h text eol=lf
+
+# #32: los scripts de shell tienen que quedar en LF tambien en un checkout de
+# Windows. Git Bash aborta un .sh con CRLF ("$'\r': command not found"), y el job
+# de Windows corre check_exports.sh igual que el de Linux.
+*.sh text eol=lf

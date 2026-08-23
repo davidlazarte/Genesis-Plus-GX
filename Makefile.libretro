@@ -804,6 +804,14 @@ endif
 ifeq (,$(findstring msvc,$(platform)))
    CFLAGS   += -fno-strict-aliasing -fwrapv
    CXXFLAGS += -fno-strict-aliasing -fwrapv
+   # AYTHER (#38): sin contraccion de multiplicacion-suma. El mixer, el
+   # ecualizador y blip_buf trabajan en double, y si el compilador puede fusionar
+   # a FMA el resultado depende de que decida cada compilador en cada plataforma
+   # -que es exactamente la clase de libertad que hace divergir un golden-.
+   # Medido en win64/clang: los hashes no cambian, asi que no es la causa de la
+   # divergencia Linux/Windows, pero deja una variable menos suelta y no cuesta.
+   CFLAGS   += -ffp-contract=off
+   CXXFLAGS += -ffp-contract=off
 endif
 
 ifeq ($(SHARED_LIBVORBIS),)

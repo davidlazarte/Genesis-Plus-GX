@@ -543,10 +543,46 @@ scoop install mingw-mstorsjo-llvm-msvcrt   # en el PATH
 make -f Makefile.libretro platform=win64 -j8
 ```
 
-> Un build **UCRT** crashea en `retro_load_game`
-> (`STATUS_STACK_BUFFER_OVERRUN`); el **MSVCRT** es bit-idéntico al DLL stock en
-> emulación. La salida se despliega en AYTHER como
+> Un build **UCRT** aborta en `retro_load_game` (`STATUS_STACK_BUFFER_OVERRUN`);
+> el **MSVCRT** es bit-idéntico al DLL stock en emulación. La salida se
+> despliega en AYTHER como
 > `third_party/cores/genesis_plus_gx_libretro_vram.dll`.
+
+#### Sobre el fallo con UCRT (#38)
+
+El nombre del código de estado despista y conviene dejarlo escrito, porque
+orientó mal la búsqueda durante bastante tiempo:
+
+**`STATUS_STACK_BUFFER_OVERRUN` (0xC0000409) no es agotamiento de pila.** El
+agotamiento de pila es `STATUS_STACK_OVERFLOW` (0xC00000FD). 0xC0000409 es lo
+que produce `__fastfail`, y en UCRT `abort()` está implementado justamente sobre
+`__fastfail(FAST_FAIL_FATAL_APP_EXIT)`. También lo produce el *invalid parameter
+handler* de UCRT, que MSVCRT no tiene: MSVCRT es tolerante donde UCRT termina el
+proceso.
+
+Es decir: la hipótesis con más respaldo es que el build UCRT **llama a `abort()`
+o al manejador de parámetro inválido**, no que se le acabe la pila. Eso también
+explica por qué MSVCRT "funciona": no es que no haya un problema, es que no
+reacciona igual ante uno.
+
+Evidencia que apoya descartar la pila, medida con
+`clang -Wframe-larger-than` sobre el build win64:
+
+| Función | Frame |
+|---|---:|
+| `load_rom` | 16.504 B |
+| `check_variables` | 4.392 B |
+| `ayther_core_recompose_multilayer` | 2.840 B |
+| `ayther_recompose_frame` | 1.480 B |
+| `vdp_reg_w` | 1.112 B |
+
+El mayor es `load_rom` con ~16 KB, tres órdenes de magnitud por debajo del 1 MB
+de pila por defecto en Windows, y no hay recursión en esa ruta.
+
+Lo que falta para cerrarlo es un toolchain llvm-mingw **UCRT** instalado para
+reproducirlo y capturar el `__fastfail` en el depurador; la CI lo previene
+prohibiendo imports de `ucrtbase.dll`, que es una contención, no un
+diagnóstico.
 
 Otros targets: `Makefile.gc`/`Makefile.gc.low-mem` (GameCube), `Makefile.wii`
 (Wii), y los proyectos en `libretro/` para Android (`jni/`), MSVC (`msvc/`,
@@ -573,3 +609,44 @@ implementado `RETRO_MEMORY_VIDEO_RAM` (colisionaría con el delta `7fcf9bc`).
 | [core/sound/](../core/sound/) | Chips de sonido y mezcla. |
 | [core/cart_hw/](../core/cart_hw/) · [core/cd_hw/](../core/cd_hw/) | Hardware de cartridge y Sega/Mega CD. |
 | [core/m68k/](../core/m68k/) · [core/z80/](../core/z80/) | CPUs. |
+
+
+## Qué control soporta cada renderer (#28)
+
+Los gates de capa viven **dentro** de cada renderer de fondo Mode 5, y hay
+cinco. Cuando se agregaron, tres se quedaron sin ellos, y el modo de fallar era
+el peor posible: escribir la máscara no hacía nada — ni efecto, ni error, ni
+motivo de fallback. El frontend creía haber ocultado un plano.
+
+| Renderer | Cuándo corre | Máscara de capas (`0x102`) | Supresión de tiles de plano (`0x105`) | Peel por celda (`0x104`) |
+|---|---|:--:|:--:|:--:|
+| `render_bg_m5` | Mode 5, vscroll global | sí | sí | sí |
+| `render_bg_m5_vs` | Mode 5, vscroll por columna | sí | sí | sí |
+| `render_bg_m5_vs_enhanced` | opción *enhanced vscroll* | sí | **no** → `UNSUPPORTED_CONTROLS` | sí |
+| `render_bg_m5_im2` | interlace mode 2 | sí | sí | sí |
+| `render_bg_m5_im2_vs` | interlace mode 2 + vscroll | sí | sí | sí |
+
+`render_bg_m5_vs_enhanced` dibuja cada media columna con su propio `v_line` —
+para eso existe— y no pasa por el camino de columna donde vive el filtro de
+patrón+paleta. En vez de aplicarlo a medias, el core enciende
+`AYTHER_RASTER_REASON_UNSUPPORTED_CONTROLS` (bit 8) en `0x10E`: un control que
+se ignora en silencio es peor que uno que declara que no puede.
+
+**ALT_RENDERER es incompatible con `AYTHER_EXTENSIONS`** y da error de
+compilación. Trae su propio juego de renderers Mode 5 sin ninguno de los gates,
+y solo lo activan GameCube, Wii, GCW0, Vita y PSP2 — plataformas que este fork
+no compila. Un `#error` es mejor que un fallback en tiempo de ejecución: la
+alternativa era que alguien portara el fork a una de esas plataformas y
+descubriera que todas las máscaras son no-op.
+
+El peel por celda usa coordenadas del frame **emitido**. Con salida entrelazada
+(`interlaced && config.render`) `remap_line` duplica la fila de salida, y ese
+ajuste ahora se replica al calcular la fila de celda; sin él la máscara caía en
+la mitad de la fila marcada, es decir ocultaba la celda equivocada. En interlace
+mode 2 *sin* `config.render` la salida no se dobla y la fila ya era correcta.
+
+Verificación: `tests/ci/check_render_gates.sh` (en el job *Source quality*)
+exige que los cinco renderers consulten `hide_a/hide_b/hide_w` y limpien ambos
+buffers de línea. Es una guarda estructural, no de píxeles: los asserts
+pixel-perfect por modo necesitan escenas de interlace y window en el ROM
+sintético (#35).

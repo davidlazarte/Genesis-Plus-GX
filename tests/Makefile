@@ -18,25 +18,22 @@ SPRITE_CAPTURE_SRC := $(CORE_DIR)/core/ayther/ayther_sprite_capture.c
 SPRITE_CAPTURE_HEADERS := $(CORE_DIR)/core/ayther/ayther_sprite_capture.h \
 	$(CORE_DIR)/core/ayther/ayther_api.h
 
+# El nombre del binario depende del SISTEMA; las recetas, del SHELL. NO ES LA
+# MISMA PREGUNTA, y confundirlas es lo que rompia `make check` en el runner de
+# Windows: en Windows, si hay un `sh` en el PATH —Git for Windows lo instala y
+# los runners de GitHub lo traen— GNU make lo elige como SHELL, y entonces cada
+# receta escrita en sintaxis de cmd muere con «syntax error near unexpected
+# token». Decidir ambas cosas por $(OS) hacia que el Makefile hablara cmd a un
+# shell POSIX.
 ifeq ($(OS),Windows_NT)
 EXE_EXT := .exe
 THREAD_FLAGS :=
-define make_dir
-	@if not exist "$(subst /,\,$1)" mkdir "$(subst /,\,$1)"
-endef
-define remove_build_dir
-	@if exist "$(subst /,\,$1)" rmdir /S /Q "$(subst /,\,$1)"
-endef
-define require_core
-	@if "$(CORE)"=="" (echo CORE=path-to-libretro-core is required 1>&2 & exit /B 2)
-endef
-define require_profile_cores
-	@if "$(PROFILE_OFF_CORE)"=="" (echo PROFILE_OFF_CORE is required 1>&2 & exit /B 2)
-	@if "$(PROFILE_IDLE_CORE)"=="" (echo PROFILE_IDLE_CORE is required 1>&2 & exit /B 2)
-endef
 else
 EXE_EXT :=
 THREAD_FLAGS := -pthread
+endif
+
+ifeq ($(findstring sh,$(notdir $(SHELL))),sh)
 define make_dir
 	@mkdir -p "$1"
 endef
@@ -50,6 +47,20 @@ define require_profile_cores
 	@test -n "$(PROFILE_OFF_CORE)" || (echo "PROFILE_OFF_CORE is required" >&2; exit 2)
 	@test -n "$(PROFILE_IDLE_CORE)" || (echo "PROFILE_IDLE_CORE is required" >&2; exit 2)
 endef
+else
+define make_dir
+	@if not exist "$(subst /,\,$1)" mkdir "$(subst /,\,$1)"
+endef
+define remove_build_dir
+	@if exist "$(subst /,\,$1)" rmdir /S /Q "$(subst /,\,$1)"
+endef
+define require_core
+	@if "$(CORE)"=="" (echo CORE=path-to-libretro-core is required 1>&2 & exit /B 2)
+endef
+define require_profile_cores
+	@if "$(PROFILE_OFF_CORE)"=="" (echo PROFILE_OFF_CORE is required 1>&2 & exit /B 2)
+	@if "$(PROFILE_IDLE_CORE)"=="" (echo PROFILE_IDLE_CORE is required 1>&2 & exit /B 2)
+endef
 endif
 
 UNIT_BIN  := $(BUILD_DIR)/test_audio_probe$(EXE_EXT)
@@ -62,7 +73,21 @@ FULL_CORE_BIN := $(BUILD_DIR)/full_core_replay$(EXE_EXT)
 TRACE_BIN := $(BUILD_DIR)/audio_probe_trace$(EXE_EXT)
 TRACE_GOLDEN := ayther/golden/audio_probe_trace.json
 TRACE_ACTUAL := $(ARTIFACT_DIR)/audio_probe_trace.actual.json
-FULL_CORE_GOLDEN := ayther/golden/full_core_replay-x64.json
+# UN GOLDEN POR PLATAFORMA, y no uno solo llamado "-x64". Linux y Windows corren
+# los DOS este mismo check, y con el mismo core dan hashes DISTINTOS de video,
+# audio y estado — medido: video 4d39e98f (Linux) contra dd112c2b (Windows). Con
+# un archivo unico era imposible que ambos jobs pasaran, y por eso este check
+# estuvo rojo sin que la causa se viera: parecia un golden desactualizado.
+#
+# La telemetria SI coincide entre plataformas, asi que la divergencia esta en la
+# emulacion misma (compiladores distintos sobre el mismo codigo), no en lo que el
+# probe reporta. Que cada plataforma tenga su golden lo deja EXPLICITO en vez de
+# esconderlo detras de un rojo permanente.
+ifeq ($(OS),Windows_NT)
+FULL_CORE_GOLDEN := ayther/golden/full_core_replay-windows-x64.json
+else
+FULL_CORE_GOLDEN := ayther/golden/full_core_replay-linux-x64.json
+endif
 FULL_CORE_ACTUAL := $(ARTIFACT_DIR)/full_core_replay.actual.json
 FULL_CORE_REPORT := $(ARTIFACT_DIR)/full_core_replay.frames.jsonl
 FULL_CORE_BENCHMARK := $(ARTIFACT_DIR)/full_core_benchmark.json

@@ -1,0 +1,34 @@
+# UB conocido y aceptado, con dueño y fecha (#38).
+#
+# Cada linea es una subcadena; un reporte de UBSan que la contenga no falla el
+# job. Todo lo demas si. La lista existe para que el job pueda ser una PUERTA
+# DURA sobre UB NUEVO: sin ella habria que elegir entre apagar el chequeo entero
+# (y perder los hallazgos futuros) o dejar el job en rojo permanente (que en la
+# practica es lo mismo que no tenerlo).
+#
+# Para sacar una entrada de aca hay que arreglar la causa, no ampliar la lista.
+
+# --- upstream Genesis Plus GX, no del fork ---
+# El renderer escribe el linebuf de a 32 bits para cubrir 4 pixeles por store, y
+# con scroll horizontal fino el destino arranca en `0x10 + shift` (shift 0..7),
+# que solo esta alineado a 4 cuando shift es multiplo de 4. En x86 el store
+# desalineado funciona; en arm64 puede ser mas lento o directamente fallar segun
+# como este configurado el kernel.
+#
+# Se deja documentado en vez de arreglado porque el fix toca el bucle interno de
+# un renderer upstream -sube el delta de rebase y hay que medir el costo-, y
+# porque hoy no rompe ninguna plataforma soportada. Se vuelve un problema real
+# cuando entre macOS arm64 al matrix: ver #35.
+# Granularidad: ARCHIVO + CLASE de UB, no archivo:linea:columna.
+#
+# Empece fijando los ocho sitios exactos, que es mas preciso, y duro hasta el
+# primer commit que edito vdp_render.c: las lineas se corren y el gate se pone
+# rojo sin que haya UB nuevo. Un gate que hay que reeditar cada vez que se toca
+# el archivo termina desactivado.
+#
+# Lo que se pierde: un store desalineado NUEVO dentro de vdp_render.c pasaria.
+# Lo que se conserva: cualquier otra clase de UB en este archivo, y cualquier
+# clase en cualquier otro archivo. Es el equilibrio correcto mientras todos los
+# casos conocidos sean el MISMO patron upstream; si aparece uno de otra
+# naturaleza en este archivo, hay que partir la entrada.
+vdp_render.c|store to misaligned address

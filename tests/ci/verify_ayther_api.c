@@ -152,8 +152,28 @@ int main(int argc, char **argv)
       AYTHER_CAP_FRAME_SNAPSHOT | AYTHER_CAP_PARSED_SPRITES_V1 |
       AYTHER_CAP_AUDIO_WRITES_V1 | AYTHER_CAP_RASTER_FALLBACK_V1 |
       AYTHER_CAP_RECOMPOSE_V1 | AYTHER_CAP_SUBSCRIPTIONS_V1;
-  CHECK(api->abi_version == AYTHER_ABI_VERSION_1_0,
-        "descriptor reports ABI v1.0");
+  /* La regla es "mismo major, minor suficiente", no "version igual a la mia":
+     un core que crece en minor le sigue sirviendo a este cliente porque los
+     campos que conoce no se movieron y `struct_size` marca hasta donde leer.
+     Comprobar igualdad exacta convertiria cada bump aditivo en una rotura
+     ficticia. */
+  CHECK(AYTHER_ABI_VERSION_MAJOR(api->abi_version) ==
+        AYTHER_ABI_VERSION_MAJOR(AYTHER_ABI_VERSION_1_0),
+        "descriptor reports the ABI major this client was built against");
+  /* No se compara el minor contra el de 1.0 -que es 0, y daria una tautologia
+     que gcc marca con -Wtype-limits-. Lo que hay que exigir es que el
+     descriptor cubra los campos que este cliente conoce, y eso lo dice
+     `struct_size`, no la version. */
+  CHECK(api->struct_size >= offsetof(ayther_interface_v1, poll_frame_delta) +
+        sizeof(api->poll_frame_delta),
+        "the descriptor covers every field this client knows");
+  /* Un cliente 1.0 pide 1.0 y tiene que recibir un descriptor usable, aunque el
+     core ya sea 1.1: esto es el test de compatibilidad hacia atras. */
+  CHECK(get_interface(AYTHER_ABI_VERSION_1_0) != NULL &&
+        get_interface(AYTHER_ABI_VERSION_1_0)->query_region != NULL,
+        "a 1.0 client still negotiates successfully against this core");
+  CHECK(get_interface(UINT32_C(0x0001FFFF)) == NULL,
+        "a minor newer than the core provides is refused");
   CHECK(api->struct_size >= offsetof(ayther_interface_v1,
         set_subscriptions) + sizeof(api->set_subscriptions),
         "descriptor exposes every v1 function");
@@ -242,11 +262,24 @@ int main(int argc, char **argv)
       continue;
     CHECK(info.struct_size == sizeof(info), "region descriptor size is explicit");
     CHECK(info.region_id == region_id, "region descriptor echoes its ID");
-    CHECK(info.element_size > 0 && info.capacity > 0 &&
+    CHECK(info.element_size > 0 &&
           info.byte_size == info.element_size * info.capacity,
           "region dimensions are self-consistent");
-    CHECK(info.legacy_memory_id != AYTHER_LEGACY_MEMORY_NONE,
-          "every v1 region maps to a transition-era legacy ID");
+    /* #41: una region de frame puede estar VACIA antes del primer frame -sus
+       dimensiones son las del frame emitido, que todavia no existe-. Exigir
+       capacity > 0 para todas era una regla de las regiones de v1, que son de
+       tamano fijo. */
+    if (!(info.access_flags & AYTHER_REGION_FRAME_SCOPED))
+      CHECK(info.capacity > 0, "a fixed-size region is never empty");
+
+    /* Sin id legacy no hay nada que comparar contra el adaptador viejo, y es lo
+       correcto para lo que se agregue de ahora en mas: los punteros mutables
+       legacy estan deprecados y no se le da uno a cada region nueva. */
+    if (info.legacy_memory_id == AYTHER_LEGACY_MEMORY_NONE)
+    {
+      ++passed;   /* region moderna: no participa del adaptador legacy */
+      continue;
+    }
     if (get_memory_size(info.legacy_memory_id) != info.byte_size)
       fprintf(stderr, "region %lu: ABI size=%lu legacy 0x%lX size=%lu\n",
               (unsigned long)region_id, (unsigned long)info.byte_size,
@@ -319,6 +352,63 @@ int main(int argc, char **argv)
   CHECK(api->recompose_frame(NULL, 0, 0, NULL, NULL) ==
         AYTHER_STATUS_INVALID_ARGUMENT,
         "recomposition validates output dimensions before use");
+
+  /* ABI 1.1 (#26). Se consulta por `struct_size` y no por la version: es la
+     comprobacion que un cliente real tiene que hacer, asi que el verificador la
+     ejerce igual que la haria el frontend. */
+  if (AYTHER_IFACE_HAS(api, get_recompose_stats))
+  {
+    ayther_recompose_stats_v1 stats;
+    CHECK((api->capabilities & AYTHER_CAP_RECOMPOSE_STATS_V1) != 0,
+          "a core exposing recompose stats advertises the capability");
+    CHECK(api->recompose_stats_size == sizeof(ayther_recompose_stats_v1),
+          "recompose stats size matches the header");
+    memset(&stats, 0, sizeof(stats));
+    CHECK(api->get_recompose_stats(&stats, sizeof(stats)) ==
+          AYTHER_STATUS_OK && stats.struct_size == sizeof(stats),
+          "recompose stats are readable and self-describing");
+    CHECK(api->get_recompose_stats(NULL, sizeof(stats)) ==
+          AYTHER_STATUS_INVALID_ARGUMENT,
+          "recompose stats reject a null destination");
+    CHECK(api->get_recompose_stats(&stats, 1) ==
+          AYTHER_STATUS_BUFFER_TOO_SMALL,
+          "recompose stats reject an undersized destination");
+  }
+
+  /* ABI 1.2 (#32): la recomposicion multicapa se negocia por el descriptor. El
+     simbolo suelto era la unica superficie AYTHER fuera de
+     `ayther_get_interface`, y por eso el closure de exports decia una cosa en
+     Windows y otra en Linux. */
+  if (AYTHER_IFACE_HAS(api, recompose_multilayer))
+  {
+    uint32_t width = 0;
+    uint32_t height = 0;
+    CHECK(api->recompose_multilayer != NULL,
+          "the descriptor exposes multilayer recomposition");
+    CHECK(api->recompose_multilayer(NULL, NULL, NULL, NULL, NULL, 0, 0,
+          NULL, NULL) == AYTHER_STATUS_INVALID_ARGUMENT,
+          "multilayer recomposition validates its output dimensions");
+    CHECK(api->recompose_multilayer(NULL, NULL, NULL, NULL, NULL,
+          UINT32_MAX, 0, &width, &height) == AYTHER_STATUS_OUT_OF_BOUNDS,
+          "multilayer recomposition rejects an out-of-range capacity");
+  }
+
+  /* #32: la VRAM se entrega word-swapped en hosts little-endian y hasta ahora
+     eso solo vivia en la documentacion en prosa. Un consumidor que lee el
+     descriptor tiene que poder enterarse por el descriptor. */
+  {
+    ayther_region_info_v1 vram_info;
+    memset(&vram_info, 0, sizeof(vram_info));
+    if (api->query_region(AYTHER_REGION_VRAM, &vram_info,
+          sizeof(vram_info)) == AYTHER_STATUS_OK)
+    {
+      CHECK(vram_info.byte_size == UINT32_C(0x10000),
+            "VRAM is exposed as 64 KiB");
+      if (api->host_endianness == AYTHER_ENDIAN_LITTLE)
+        CHECK((vram_info.access_flags & AYTHER_REGION_WORD_SWAPPED_LE) != 0,
+              "VRAM declares its word-swapped layout on little-endian hosts");
+    }
+  }
 
   printf("AYTHER ABI dynamic tests: %d passed, %d failed; build=%.*s\n",
          passed, failed, (int)api->build_id_size, api->build_id);

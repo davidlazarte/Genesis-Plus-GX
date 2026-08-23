@@ -50,7 +50,53 @@ int main(void)
         "subscription activation frame offset is frozen");
   CHECK(AYTHER_ABI_VERSION_1_0 == UINT32_C(0x00010000),
         "ABI version uses major/minor encoding");
-  CHECK(AYTHER_REGION_COUNT == 17, "all sixteen v1 regions are inventoried");
+  CHECK(AYTHER_ABI_VERSION_1_1 == UINT32_C(0x00010001),
+        "ABI 1.1 is a minor bump over 1.0");
+  CHECK(AYTHER_ABI_VERSION_1_2 == UINT32_C(0x00010002),
+        "ABI 1.2 is a minor bump over 1.1");
+  CHECK(AYTHER_ABI_VERSION_1_3 == UINT32_C(0x00010003),
+        "ABI 1.3 is a minor bump over 1.2");
+  CHECK(AYTHER_ABI_VERSION_LATEST == AYTHER_ABI_VERSION_1_3,
+        "latest ABI is 1.3");
+  CHECK(AYTHER_ABI_VERSION_MAJOR(AYTHER_ABI_VERSION_1_1) == 1 &&
+        AYTHER_ABI_VERSION_MINOR(AYTHER_ABI_VERSION_1_1) == 1,
+        "major/minor accessors split the version");
+  CHECK(sizeof(ayther_recompose_stats_v1) == 48,
+        "recompose stats v1 is exactly 48 bytes");
+  CHECK(offsetof(ayther_recompose_stats_v1, controls_fingerprint) == 40,
+        "controls fingerprint offset is frozen");
+  /* Lo que hace que 1.1 sea compatible con un cliente 1.0 no es la version que
+     el core reporta, sino que los campos de 1.0 no se hayan movido. Congelarlo
+     acá convierte un reordenamiento accidental en un test rojo y no en un
+     frontend que lee punteros corridos. */
+  CHECK(offsetof(ayther_interface_v1, recompose_stats_size) ==
+        offsetof(ayther_interface_v1, poll_frame_delta) +
+        sizeof(ayther_poll_frame_delta_v1_fn),
+        "1.1 fields are appended right after the 1.0 block");
+  CHECK(offsetof(ayther_interface_v1, query_region) <
+        offsetof(ayther_interface_v1, poll_frame_delta) &&
+        offsetof(ayther_interface_v1, poll_frame_delta) <
+        offsetof(ayther_interface_v1, get_recompose_stats) &&
+        offsetof(ayther_interface_v1, get_recompose_stats) <
+        offsetof(ayther_interface_v1, recompose_multilayer),
+        "interface fields are append-only");
+  CHECK(offsetof(ayther_interface_v1, recompose_multilayer) ==
+        offsetof(ayther_interface_v1, get_recompose_stats) +
+        sizeof(ayther_get_recompose_stats_v1_fn),
+        "1.2 appends right after the 1.1 block");
+  /* El flag de word-swap ocupa el bit 5; los cinco anteriores no se mueven. */
+  CHECK(AYTHER_REGION_WORD_SWAPPED_LE == (UINT32_C(1) << 5) &&
+        AYTHER_REGION_DEPRECATED_LEGACY == (UINT32_C(1) << 4),
+        "region access flags are append-only");
+  CHECK(AYTHER_STATUS_RC_JOURNAL_OVERFLOW == -24 &&
+        AYTHER_RC_ERR_JOURNAL_OVERFLOW == -5,
+        "the journal-overflow status codes are stable");
+  CHECK(AYTHER_REGION_COUNT == 18, "every region is inventoried");
+  /* #41: la region nueva va al FINAL del enum. Meterla en el medio correria
+     los ids de todas las siguientes, y los ids viajan por la ABI. */
+  CHECK(AYTHER_REGION_ATTRIBUTION == AYTHER_REGION_COUNT - 1 &&
+        AYTHER_REGION_RASTER_FALLBACK_REASONS == AYTHER_REGION_ATTRIBUTION - 1,
+        "region ids are append-only");
   CHECK(AYTHER_LEGACY_MEMORY_CRAM == 0x100,
         "legacy memory IDs remain stable");
   CHECK(AYTHER_LEGACY_MEMORY_RASTER_DIRTY == 0x10E,
@@ -63,8 +109,27 @@ int main(void)
              AYTHER_CAP_RASTER_FALLBACK_V1 | AYTHER_CAP_RECOMPOSE_V1 |
              AYTHER_CAP_AUDIO_PROBE_V1 | AYTHER_CAP_SUBSCRIPTIONS_V1;
   CHECK(required == UINT64_C(0x7FF), "v1 capability bits are stable");
-  CHECK(AYTHER_SUB_ALL == UINT32_C(0x7F),
-        "all v1 subscription bits are stable");
+  CHECK(AYTHER_CAP_FRAME_DELTA_V1 == (UINT64_C(1) << 11) &&
+        AYTHER_CAP_RECOMPOSE_STATS_V1 == (UINT64_C(1) << 12),
+        "capability bits added after v1 keep their positions");
+  CHECK(AYTHER_SUB_ALL == UINT32_C(0xFF),
+        "all subscription bits are accounted for");
+  CHECK((AYTHER_SUB_ALL & UINT32_C(0x7F)) == UINT32_C(0x7F) &&
+        AYTHER_SUB_ATTRIBUTION == (UINT32_C(1) << 7),
+        "the v1 subscription bits keep their positions");
+  CHECK(AYTHER_CAP_ATTRIBUTION_V1 == (UINT64_C(1) << 13),
+        "the attribution capability bit is stable");
+  /* Layout del byte de atribucion: los campos no se pisan y cubren el byte. */
+  CHECK((AYTHER_ATTRIB_LAYER_MASK | AYTHER_ATTRIB_PRIORITY |
+         AYTHER_ATTRIB_PALETTE_MASK | AYTHER_ATTRIB_SH_MASK |
+         AYTHER_ATTRIB_SPRITE) == UINT8_C(0xFF),
+        "the attribution byte fields cover it exactly");
+  CHECK((AYTHER_ATTRIB_LAYER_MASK & AYTHER_ATTRIB_PALETTE_MASK) == 0 &&
+        (AYTHER_ATTRIB_PALETTE_MASK & AYTHER_ATTRIB_SH_MASK) == 0 &&
+        (AYTHER_ATTRIB_SH_MASK & AYTHER_ATTRIB_SPRITE) == 0,
+        "the attribution byte fields do not overlap");
+  CHECK(AYTHER_ATTRIB_LAYER_WINDOW == 3 && AYTHER_ATTRIB_LAYER_BACKDROP == 0,
+        "attribution layer codes are stable");
   CHECK(AYTHER_AUDIO_TRANSPORT_OBSERVATION_ACTIVE == UINT32_C(2),
         "observation-active transport flag is stable");
 

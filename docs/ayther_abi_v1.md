@@ -26,6 +26,43 @@ ABI versions use `0xMMMMmmmm` (`major`, `minor`). A future descriptor may append
 fields; consumers must only read fields covered by `struct_size` and ignore
 unknown capability bits.
 
+### The version check a consumer must actually perform
+
+The rule is **same major, minor at least what you need** — never
+`abi_version == mine`. The core returns a single descriptor and answers every
+request whose major matches and whose minor it can satisfy, so a consumer built
+against 1.0 keeps working against a 1.1 core: the 1.0 fields are at the same
+offsets, and `struct_size` says where its knowledge ends. A request for a minor
+the core does not implement returns `NULL`, because serving it would mean
+promising fields that are not there.
+
+Guard every optional field with the header's helper, which asks `struct_size`
+rather than the version:
+
+```c
+if (AYTHER_IFACE_HAS(api, get_recompose_stats))
+  api->get_recompose_stats(&stats, sizeof(stats));
+```
+
+### Version history
+
+| Version | Change |
+|---|---|
+| 1.0 | Initial contract: regions, snapshots, subscriptions, recomposition, audio transport, frame delta. |
+| 1.1 | **Additive.** Appends `recompose_stats_size` + `get_recompose_stats` and the `AYTHER_CAP_RECOMPOSE_STATS_V1` capability bit (#26). No existing field moved or changed meaning. |
+| 1.3 | **Additive.** Adds the `ATTRIBUTION` region, the `AYTHER_SUB_ATTRIBUTION` subscription and the `AYTHER_CAP_ATTRIBUTION_V1` capability (#41). |
+| 1.2 | **Additive.** Appends `recompose_multilayer` to the descriptor and adds the `AYTHER_REGION_WORD_SWAPPED_LE` region flag (#32). The standalone `ayther_recompose_multilayer` export is now **deprecated** and is emitted only in the legacy profile. |
+
+Two earlier changes were shipped inside 1.0 without a bump, which is what this
+table exists to prevent from recurring:
+
+- `AYTHER_LAYOUT_AUDIO_EVENT_V1` went from `1` to `2` when PCM events moved off
+  the `voice` arm. Every event carries the layout in its `schema` byte, so a
+  consumer can tell the two apart at runtime — but it should have been a minor
+  bump, not a silent redefinition.
+- `AUDIO_MUTE` widened from `uint16_t` to `uint32_t` (bit 18 onwards reserved)
+  when the Mega CD PCM channels were added.
+
 ## Descriptor and capabilities
 
 The immutable descriptor is owned by the DLL/so and remains valid until the
@@ -53,8 +90,16 @@ This is an in-process ABI, not a serialized wire format. Fixed-width scalar
 fields use the host endianness reported by `host_endianness`. CRAM, VSRAM,
 sprites, audio writes, counters and raster reasons are marked
 `AYTHER_REGION_NATIVE_ENDIAN`; VRAM and VDP register regions retain the core's
-raw byte representation. In particular, existing word-swapped VRAM/CRAM
-semantics are unchanged.
+raw byte representation.
+
+**VRAM is word-swapped on little-endian hosts**: the logical byte at offset
+`off` lives at `off ^ 1`, the emulator's internal layout. Since 1.2 the region
+declares this with `AYTHER_REGION_WORD_SWAPPED_LE` in `access_flags`, so a
+consumer can discover it from the descriptor instead of from prose — reading it
+straight gives an image with the bytes of every tile crossed, which looks like a
+frontend bug. This is a different axis from `AYTHER_REGION_NATIVE_ENDIAN`: that
+one is about the byte order of multi-byte *fields*, this one about the order of
+*bytes within the emulated memory*.
 
 `read_region` copies bytes into frontend-owned memory. It never exposes a new
 mutable core pointer. `build_id` and the interface descriptor are core-owned and
@@ -93,7 +138,7 @@ size, access flags and the transition-era legacy ID.
 
 | v1 region | Layout | Capacity / bytes | Public access | Legacy ID |
 |---|---:|---:|---|---:|
-| `VRAM` | raw bytes | 65,536 / 65,536 | read | standard `0x003` |
+| `VRAM` | raw bytes, **word-swapped on LE** | 65,536 / 65,536 | read | standard `0x003` |
 | `CRAM` | `uint16_t` | 64 / 128 | read | `0x100` |
 | `VDP_REGS` | `uint8_t` | 32 / 32 | read | `0x101` |
 | `VSRAM` | `uint16_t` | 64 / 128 | read | `0x107` |
@@ -107,7 +152,7 @@ size, access flags and the transition-era legacy ID.
 | `AUDIO_WRITE_COUNT` | `uint32_t` | 1 / 4 | frame read | `0x10A` |
 | `PARSED_SPRITES` | `ayther_sprite_v1` | 128 / 1,280 | frame read | `0x10B` |
 | `PARSED_SPRITE_COUNT` | `uint8_t` | 1 / 1 | frame read | `0x10C` |
-| `AUDIO_MUTE` | `uint16_t` | 1 / 2 | read/control | `0x10D` |
+| `AUDIO_MUTE` | `uint32_t` | 1 / 4 | read/control | `0x10D` |
 | `RASTER_FALLBACK_REASONS` | `uint32_t` | 1 / 4 | frame read | `0x10E` |
 
 The public ABI treats emulated memory and frame counters as read-only. The
@@ -116,6 +161,41 @@ legacy pointers preserve their historical mutability for the transition.
 ## Recomposition and Delta Stream
 
 Recomposition capabilities (`ayther_recompose_frame` and `ayther_core_recompose_multilayer`) are exposed via function pointers in the interface. They allow rendering specific layers or frames with custom parameters (like ignoring sprite limits or layer masks) without mutating the core's deterministic state. This effectively acts as an oracle for the Delta Stream implementation, which uses these capabilities to isolate and stream partial frame updates (such as only sprites or a single plane) to the frontend, significantly accelerating network replication and state sync.
+
+### Recomposition cache key (#26)
+
+Both recompositors cache their last result. The key is:
+
+```
+(core frame generation, flags, effective layer mask, controls fingerprint,
+ output width, output height)
+```
+
+`controls fingerprint` is an FNV-1a hash over the **contents** of every control
+region — layer mask, layer dim, sprite suppression, cell suppression, plane-tile
+suppression and its active flag — plus whether `AYTHER_SUB_RENDER_CONTROLS` is
+active, since the controls only take effect while subscribed.
+
+It hashes contents rather than counting writes because the legacy ids
+`0x102`–`0x108` still hand out mutable pointers through
+`retro_get_memory_data`: a legacy consumer writes a mask without ever calling
+`write_control`, so there is no hook where a counter could be bumped, and
+`snapshot_generation` does not move. Content is the only thing both paths share.
+
+The practical guarantee for a frontend: **the pixels you get always match the
+control state you set**, no matter the order or number of calls on a given
+frame. Before this key existed, writing a mask between two recompositions of the
+same frame returned the previous image — silently, which in the Lab reads as an
+unresponsive UI rather than as an error.
+
+Hashing ~3.6 KB costs less than the ~150 KB copy a cache hit performs, so the
+correctness fix does not change the case for keeping the cache.
+
+`get_recompose_stats` (ABI 1.1) reports `single_calls`/`single_hits`,
+`multilayer_calls`/`multilayer_hits` and the current `controls_fingerprint`. Use
+it to answer "why did my recomposition not hit the cache?": if the fingerprint
+moved and you did not call `write_control`, something wrote through a legacy
+mutable pointer.
 
 
 ## Consistent frame snapshots
@@ -178,7 +258,10 @@ snapshot generation, and advances the generation on success.
 
 - layer mask: only A/B/Window/Sprite bits (`0x0F`);
 - layer dim: boolean `0` or `1`;
-- audio mute: only FM/PSG channel bits `0x03FF`;
+- audio mute: 18 valid channel bits (FM 0-5, PSG 6-9, Mega CD PCM 10-17);
+  anything at bit 18 or above is rejected. It widened from `uint16_t`/`0x03FF`
+  when the PCM chip was added, so a legacy reader of `0x10D` that still assumes
+  two bytes reads half the mask — and on a big-endian host, the wrong half;
 - suppression bitmaps: bounded full or partial writes;
 - plane suppression activity: derived automatically from the plane bitmap.
 
@@ -207,3 +290,58 @@ combinations and runs
 The legacy adapter is retained for at least the complete ABI v1 migration
 window. Its eventual removal requires a new major ABI decision and a separate
 migration notice.
+
+
+## Per-pixel attribution (#41)
+
+`AYTHER_REGION_ATTRIBUTION` is one byte per pixel of the **emitted** frame, in
+framebuffer order, saying who painted it:
+
+```
+bits 7-6  layer: 0 backdrop, 1 Plane B, 2 Plane A, 3 Window
+bit  5    priority of the winning background cell
+bits 4-3  palette line (0-3)
+bits 2-1  shadow/highlight: 0 normal, 1 shadow, 2 highlight
+bit  0    the visible pixel was put there by a sprite
+```
+
+It exists because the frontend was answering this question by recomposing the
+frame once per layer and diffing — N render passes for something the VDP already
+knows while it draws. With this, "which asset replaces this pixel" is one byte.
+
+### Why the layer is decided by rule, not by comparison
+
+The obvious implementation — render the layers, then compare each output pixel
+against each source — is wrong in exactly the pixels that matter. Two layers can
+produce the same byte, and there the comparison answers arbitrarily. The core
+instead replicates the priority rule of the merge LUT: A wins if it has priority
+and is opaque; otherwise B wins if it has priority and is opaque; otherwise A
+wins if it is opaque. No ambiguity.
+
+This is not hypothetical. On the synthetic fixture both planes draw the same
+content, so **2,560 of 2,560** non-backdrop background pixels are ambiguous to
+the comparison method. The core has no such trouble.
+
+Plane A and Window share a line buffer but occupy disjoint x ranges (`clip[0]`
+and `clip[1]`), so telling them apart is exact and free.
+
+### Cost and gating
+
+Captured inside `merge()`, the one point every Mode 5 renderer passes through —
+putting stores in each renderer's inner loop would have meant touching the
+hottest code in the emulator five times, and the information needed (which layer
+won) only exists at the merge. Nothing is captured without
+`AYTHER_SUB_ATTRIBUTION`, which is a bit of its own rather than part of
+`RENDER_CONTROLS`: a byte per pixel per frame is a different order of cost, and
+a consumer that only hides layers should not pay it.
+
+### Known limitation: the sprite bit
+
+Bit 0 comes from comparing the line buffer before and after `render_obj`. A
+sprite pixel whose byte happens to equal the background byte is therefore **not**
+marked. The bit is conservative: it never marks a pixel that is not a sprite.
+
+Marking those exactly requires `render_obj` to write the sprite id in its inner
+loop. That change also delivers `sat_idx` per pixel, fixes the same flaw in
+`layer_dim` (#31), and lets multilayer recomposition run in one pass (#37) — so
+it belongs with them rather than here.

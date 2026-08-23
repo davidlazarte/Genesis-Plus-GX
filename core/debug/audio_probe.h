@@ -155,7 +155,11 @@ void audio_probe_fm_raw(unsigned int reg, unsigned int data);
 void audio_probe_fm_key(int ch, unsigned int slot_mask);
 void audio_probe_fm_dac(int enabled);
 void audio_probe_psg_raw(unsigned int clocks, unsigned int data);
-void audio_probe_pcm_key(int ch, int on, unsigned int env, unsigned int pan, unsigned int fd);
+/* `st` is the ST register byte (Wave RAM start >> 19) and `ls` the 16-bit loop
+   address — the pair identifies the SAMPLE, which env (volume) and fd (rate)
+   do not. Pass them on key-off too. */
+void audio_probe_pcm_key(int ch, int on, unsigned int env, unsigned int pan,
+                         unsigned int fd, unsigned int st, unsigned int ls);
 void audio_probe_pcm_volume(int ch, unsigned int env, unsigned int pan);
 void audio_probe_pcm_pitch(int ch, unsigned int fd);
 

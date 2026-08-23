@@ -1,0 +1,38 @@
+# Superficie AYTHER exportada por el core, por perfil de compilacion (#32).
+#
+# Fuente unica: la consumen el job de Linux (ayther-ci.yml) y el de Windows
+# (verify-windows-core.ps1). Antes cada uno llevaba su propia lista y decian
+# cosas distintas -Windows permitia ayther_recompose_multilayer y Linux no-, asi
+# que un simbolo de mas podia entrar por una plataforma sin que la otra lo
+# notara. Una lista que vive en dos lugares no es una lista, son dos.
+#
+# Formato: <perfil> <simbolo>
+#   base    -> siempre, con AYTHER_EXTENSIONS=1
+#   legacy  -> ademas, solo con AYTHER_LEGACY_PROFILE=1
+#   probe   -> ademas, solo con SOUND_PROBE=1
+#
+# Lo que NO este aca y empiece con ayther_ o audio_probe_ es un fallo del
+# closure: la ABI se negocia por ayther_get_interface, y cada simbolo suelto es
+# una segunda superficie publica que habria que versionar aparte.
+
+base    ayther_get_interface
+
+# Deprecado. Desde ABI 1.2 vive en el descriptor como `recompose_multilayer`;
+# el simbolo suelto queda para los consumidores que todavia lo resuelven con
+# GetProcAddress mientras migran.
+legacy  ayther_recompose_multilayer
+#   En Linux hay que listarlo ademas en libretro/link.T (el version script
+#   restringe los exports). Windows no usa version script y el simbolo salia
+#   solo, asi que el hueco se veia en una sola plataforma: el perfil legacy de
+#   Linux no lo exportaba nunca. Listarlo cuando no esta compilado es inocuo,
+#   el linker simplemente no lo exporta.
+#   Sin comentarios dentro de link.T: no verifique que el parser de version
+#   scripts los acepte, y equivocarse ahi rompe el build entero.
+
+probe   audio_probe_poll
+probe   audio_probe_set_callback
+probe   audio_probe_get_transport_stats
+probe   audio_probe_reset_transport_stats
+probe   audio_probe_get_context
+probe   audio_probe_set_channel_gain
+probe   audio_probe_get_channel_gain

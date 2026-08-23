@@ -3850,6 +3850,13 @@ static int32_t ayther_map_region(uint32_t region_id,
          mapping->capacity = sizeof(vram);
          mapping->byte_size = sizeof(vram);
          mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_VRAM;
+#ifdef LSB_FIRST
+         /* #32: la VRAM sale en el layout interno del emulador, no en orden
+            logico: el byte `off` esta en `off ^ 1`. Declararlo en el descriptor
+            es lo unico que le permite a un consumidor saberlo sin leer la
+            documentacion en prosa. */
+         mapping->access_flags |= AYTHER_REGION_WORD_SWAPPED_LE;
+#endif
          break;
       case AYTHER_REGION_CRAM:
          mapping->data = cram;
@@ -3962,6 +3969,20 @@ static int32_t ayther_map_region(uint32_t region_id,
          mapping->access_flags |= AYTHER_REGION_ACCESS_CONTROL_WRITE;
          mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_AUDIO_MUTE;
          break;
+      case AYTHER_REGION_ATTRIBUTION:
+         /* #41: se expone del tamano REAL del frame emitido, no del maximo del
+            buffer: leer 320x240 cuando el viewport es 256x224 devolveria filas
+            de otro frame. Fuera de suscripcion la region existe pero
+            read_region la rechaza con NOT_SUBSCRIBED. */
+         mapping->data = ayther_attrib;
+         mapping->element_size = 1;
+         mapping->capacity = ayther_attrib_width * ayther_attrib_height;
+         mapping->byte_size = ayther_attrib_width * ayther_attrib_height;
+         mapping->data_version = AYTHER_LAYOUT_ATTRIBUTION_V1;
+         mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_NONE;
+         mapping->access_flags = AYTHER_REGION_ACCESS_READ |
+            AYTHER_REGION_FRAME_SCOPED | AYTHER_REGION_NATIVE_ENDIAN;
+         break;
       case AYTHER_REGION_RASTER_FALLBACK_REASONS:
          mapping->data = &ayther_raster_dirty;
          mapping->element_size = sizeof(ayther_raster_dirty);
@@ -3997,6 +4018,8 @@ static uint32_t ayther_region_subscription(uint32_t region_id)
          return AYTHER_SUB_SPRITE_CAPTURE;
       case AYTHER_REGION_RASTER_FALLBACK_REASONS:
          return AYTHER_SUB_RASTER_TRACKING;
+      case AYTHER_REGION_ATTRIBUTION:
+         return AYTHER_SUB_ATTRIBUTION;
       default:
          return 0;
    }
@@ -4124,12 +4147,18 @@ static int32_t AYTHER_CALL ayther_write_control_v1(uint32_t region_id,
    if ((region_id == AYTHER_REGION_LAYER_DIM) &&
        (*(const uint8_t *)data > 1))
       return AYTHER_STATUS_INVALID_ARGUMENT;
+   /* Bits reservados de la máscara de mute. Ahora son 4 bytes (FM 0-5, PSG 6-9,
+      PCM 10-17) y lo que sobra —18 en adelante— sigue rechazándose: un bit puesto
+      ahí es un frontend que cree tener canales que este core no tiene, y decirlo
+      es mejor que ignorarlo en silencio. La comparación va contra el byte_size
+      de la región y no contra un sizeof escrito a mano, para que ensanchar la
+      máscara otra vez no deje este chequeo muerto sin que nadie lo note. */
    if ((region_id == AYTHER_REGION_AUDIO_MUTE) &&
-       byte_count == sizeof(uint16_t))
+       (byte_count == mapping.byte_size))
    {
-      uint16_t mute;
+      uint32_t mute = 0;
       memcpy(&mute, data, sizeof(mute));
-      if ((mute & UINT16_C(0xFC00)) != 0)
+      if ((mute & UINT32_C(0xFFFC0000)) != 0)
          return AYTHER_STATUS_INVALID_ARGUMENT;
    }
 
@@ -4191,6 +4220,8 @@ static int32_t ayther_rc_status(int rc)
       case AYTHER_RC_ERR_INTERLACE2:     return AYTHER_STATUS_RC_INTERLACE2;
       case AYTHER_RC_ERR_NTSC_FILTER:    return AYTHER_STATUS_RC_NTSC_FILTER;
       case AYTHER_RC_ERR_INVALID_PARAMS: return AYTHER_STATUS_RC_INVALID_PARAMS;
+      case AYTHER_RC_ERR_JOURNAL_OVERFLOW:
+         return AYTHER_STATUS_RC_JOURNAL_OVERFLOW;
       default:                           return AYTHER_STATUS_UNSUPPORTED;
    }
 }
@@ -4232,7 +4263,7 @@ static int32_t AYTHER_CALL ayther_recompose_frame_v1(uint16_t *out_pixels,
    return AYTHER_STATUS_OK;
 }
 
-AYTHER_API int32_t AYTHER_CALL ayther_recompose_multilayer(
+static int32_t AYTHER_CALL ayther_recompose_multilayer_v1(
     uint16_t *out_bg_a, uint16_t *out_bg_b, uint16_t *out_window,
     uint16_t *out_sprites, uint16_t *out_composite,
     uint32_t pixel_capacity, uint32_t flags,
@@ -4271,6 +4302,23 @@ AYTHER_API int32_t AYTHER_CALL ayther_recompose_multilayer(
    *out_height = (uint32_t)height;
    return AYTHER_STATUS_OK;
 }
+
+#ifdef AYTHER_LEGACY_PROFILE
+/* #32: el simbolo suelto sobrevive SOLO en el perfil legacy. Desde ABI 1.2 la
+   funcion vive en el descriptor; mantener las dos formas en el perfil estandar
+   dejaba dos superficies publicas que versionar, y era la razon por la que el
+   closure de exports decia una cosa en Windows y otra en Linux. */
+AYTHER_API int32_t AYTHER_CALL ayther_recompose_multilayer(
+    uint16_t *out_bg_a, uint16_t *out_bg_b, uint16_t *out_window,
+    uint16_t *out_sprites, uint16_t *out_composite,
+    uint32_t pixel_capacity, uint32_t flags,
+    uint32_t *out_width, uint32_t *out_height)
+{
+   return ayther_recompose_multilayer_v1(out_bg_a, out_bg_b, out_window,
+         out_sprites, out_composite, pixel_capacity, flags,
+         out_width, out_height);
+}
+#endif
 
 static int32_t AYTHER_CALL ayther_poll_audio_events_v1(
       ayther_audio_event_v1 *out, uint32_t event_capacity,
@@ -4346,7 +4394,7 @@ static int32_t AYTHER_CALL ayther_set_subscriptions_v1(
 }
 
 static const char ayther_build_id[] =
-   "Genesis Plus GX AYTHER ABI 1.0; core v1.7.4" GIT_VERSION;
+   "Genesis Plus GX AYTHER ABI 1.3; core v1.7.4" GIT_VERSION;
 
 #if defined(LSB_FIRST) || defined(_WIN32) || defined(__LITTLE_ENDIAN__)
 #define AYTHER_HOST_ENDIANNESS AYTHER_ENDIAN_LITTLE
@@ -4375,6 +4423,7 @@ static int32_t AYTHER_CALL ayther_poll_frame_delta_v1(
    out->delta_version = 1;
    out->frame_generation = ayther_frame_generation;
    out->raster_event_count = ayther_raster_journal_count;
+   out->raster_events_dropped = (uint32_t)ayther_raster_journal_dropped;
    out->parsed_sprite_count = ayther_sprite_n;
    out->audio_write_count = ayther_audio_write_n;
    /* AYTHER (#405): del espejo ACUMULATIVO, no de `bg_name_dirty`. Al original
@@ -4393,16 +4442,36 @@ static int32_t AYTHER_CALL ayther_poll_frame_delta_v1(
    return AYTHER_STATUS_OK;
 }
 
+static int32_t AYTHER_CALL ayther_get_recompose_stats_v1(
+      ayther_recompose_stats_v1 *out, uint32_t out_size)
+{
+   if (!out)
+      return AYTHER_STATUS_INVALID_ARGUMENT;
+   if (out_size < sizeof(*out))
+      return AYTHER_STATUS_BUFFER_TOO_SMALL;
+
+   memset(out, 0, sizeof(*out));
+   out->struct_size = sizeof(*out);
+   out->single_calls = ayther_rc_stat_single_calls;
+   out->single_hits = ayther_rc_stat_single_hits;
+   out->multilayer_calls = ayther_rc_stat_multi_calls;
+   out->multilayer_hits = ayther_rc_stat_multi_hits;
+   out->controls_fingerprint = ayther_controls_fingerprint();
+   return AYTHER_STATUS_OK;
+}
+
 static const ayther_interface_v1 ayther_interface_1 =
 {
-   AYTHER_ABI_VERSION_1_0,
+   AYTHER_ABI_VERSION_1_3,
    sizeof(ayther_interface_v1),
    AYTHER_CAP_LEGACY_MEMORY | AYTHER_CAP_REGION_QUERY |
       AYTHER_CAP_REGION_READ | AYTHER_CAP_CONTROL_WRITE |
       AYTHER_CAP_FRAME_SNAPSHOT | AYTHER_CAP_PARSED_SPRITES_V1 |
       AYTHER_CAP_AUDIO_WRITES_V1 | AYTHER_CAP_RASTER_FALLBACK_V1 |
       AYTHER_CAP_RECOMPOSE_V1 | AYTHER_CAP_SUBSCRIPTIONS_V1 |
-      AYTHER_CAP_FRAME_DELTA_V1 | AYTHER_AUDIO_PROBE_CAPABILITY,
+      AYTHER_CAP_FRAME_DELTA_V1 | AYTHER_CAP_RECOMPOSE_STATS_V1 |
+      AYTHER_CAP_ATTRIBUTION_V1 |
+      AYTHER_AUDIO_PROBE_CAPABILITY,
    AYTHER_HOST_ENDIANNESS,
    sizeof(void *),
    sizeof(ayther_region_info_v1),
@@ -4426,14 +4495,28 @@ static const ayther_interface_v1 ayther_interface_1 =
    ayther_get_subscriptions_v1,
    ayther_set_subscriptions_v1,
    sizeof(ayther_frame_delta_v1),
-   ayther_poll_frame_delta_v1
+   ayther_poll_frame_delta_v1,
+   sizeof(ayther_recompose_stats_v1),
+   0,
+   ayther_get_recompose_stats_v1,
+   ayther_recompose_multilayer_v1
 };
 
 AYTHER_API const ayther_interface_v1 *AYTHER_CALL ayther_get_interface(
       uint32_t requested_version)
 {
-   if ((requested_version == 0) ||
-       (requested_version == AYTHER_ABI_VERSION_1_0))
+   /* Un pedido de 1.0 recibe este mismo descriptor 1.1: los campos de 1.0 están
+      en las mismas posiciones y `struct_size` le dice al cliente viejo dónde
+      termina lo que él conoce. Rechazar el pedido de 1.0 rompería a los
+      consumidores existentes sin ninguna ganancia. Lo que NO se acepta es un
+      minor mayor al que este core implementa: ahí el cliente pide campos que no
+      existen y devolver algo sería mentir. */
+   if (requested_version == 0)
+      return &ayther_interface_1;
+   if ((AYTHER_ABI_VERSION_MAJOR(requested_version) ==
+        AYTHER_ABI_VERSION_MAJOR(AYTHER_ABI_VERSION_LATEST)) &&
+       (AYTHER_ABI_VERSION_MINOR(requested_version) <=
+        AYTHER_ABI_VERSION_MINOR(AYTHER_ABI_VERSION_LATEST)))
       return &ayther_interface_1;
    return NULL;
 }

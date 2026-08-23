@@ -49,6 +49,14 @@ jobs:
             exit 1
           fi
 
+      # #28: los gates de capa viven DENTRO de cada renderer Mode 5, y hay
+      # cinco. Cuando se agregaron, tres se quedaron sin ellos y el sintoma fue
+      # el peor posible: escribir la mascara no hacia nada, sin error ni motivo
+      # de fallback. Un test de pixeles necesita una escena por modo (#35);
+      # esto ataca la reincidencia, que es un renderer NUEVO sin gates.
+      - name: Every Mode 5 renderer consults the layer gates
+        run: bash tests/ci/check_render_gates.sh
+
   linux-core:
     name: Linux core (${{ matrix.compiler }}, extensions=${{ matrix.ayther_extensions }}, probe=${{ matrix.sound_probe }}, legacy=${{ matrix.legacy_profile }})
     runs-on: ubuntu-latest
@@ -86,6 +94,16 @@ jobs:
             ayther_extensions: 1
             sound_probe: 1
             legacy_profile: 1
+          # #33: HOOK_CPU nunca se compilaba en CI, y por eso llevaba tiempo
+          # roto: cpuhook.h definia `cpu_hook` en vez de declararlo, lo cual
+          # solo linkeaba con -fcommon (default hasta gcc 9 / clang 10).
+          - compiler: clang
+            cc: clang
+            cxx: clang++
+            ayther_extensions: 1
+            sound_probe: 1
+            legacy_profile: 0
+            hook_cpu: 1
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -100,7 +118,8 @@ jobs:
           make -f Makefile.libretro platform=unix
           AYTHER_EXTENSIONS=${{ matrix.ayther_extensions }}
           AYTHER_LEGACY_PROFILE=${{ matrix.legacy_profile }}
-          SOUND_PROBE=${{ matrix.sound_probe }} -j2
+          SOUND_PROBE=${{ matrix.sound_probe }}
+          HOOK_CPU=${{ matrix.hook_cpu || 0 }} -j2
 
       - name: Verify shared-library exports
         shell: bash
@@ -115,43 +134,27 @@ jobs:
           nm -D --defined-only genesis_plus_gx_libretro.so > ayther-artifacts/exports.txt
           grep -Eq '[[:space:]]retro_init$' ayther-artifacts/exports.txt
           grep -Eq '[[:space:]]retro_run$' ayther-artifacts/exports.txt
-          if [[ "$AYTHER_EXTENSIONS" == "1" ]]; then
-            grep -Eq '[[:space:]]ayther_get_interface$' ayther-artifacts/exports.txt
-            if grep -E '[[:space:]]ayther_' ayther-artifacts/exports.txt | \
-               grep -Ev '[[:space:]]ayther_get_interface$'; then
-              echo "unexpected additional AYTHER export" >&2
-              exit 1
-            fi
-          else
+          # #32: el closure lo decide tests/ci/check_exports.sh contra
+          # allowed_exports.txt, la MISMA lista que usa el job de Windows.
+          # Cuando la regla estaba escrita aca y en el .ps1, divergieron sin que
+          # nada lo notara: cada job solo corre en su plataforma.
+          awk '{print $NF}' ayther-artifacts/exports.txt | sort -u > ayther-artifacts/export_names.txt
+          bash tests/ci/check_exports.sh ayther-artifacts/export_names.txt "$AYTHER_EXTENSIONS" "$LEGACY_PROFILE" "$SOUND_PROBE" | tee ayther-artifacts/export_closure.txt
+          if [[ "$AYTHER_EXTENSIONS" != "1" ]]; then
+            # Sin extensiones no puede quedar ni la implementacion interna.
             nm --defined-only genesis_plus_gx_libretro.so > ayther-artifacts/symbols.txt
             if grep -Eq '[[:space:]](ayther_|audio_probe_)' ayther-artifacts/symbols.txt; then
               echo "AYTHER implementation leaked from extensions-off build" >&2
               exit 1
             fi
           fi
-          if [[ "$AYTHER_EXTENSIONS" == "1" && "$SOUND_PROBE" == "1" ]]; then
-            grep -Eq '[[:space:]]audio_probe_poll$' ayther-artifacts/exports.txt
-            grep -Eq '[[:space:]]audio_probe_set_callback$' ayther-artifacts/exports.txt
-          elif grep -Eq '[[:space:]]audio_probe_' ayther-artifacts/exports.txt; then
-            echo "audio_probe symbols leaked from the feature-off build" >&2
-            exit 1
-          fi
           "$CC" -O2 -Wall -Wextra -o ayther-artifacts/load_core tests/ci/load_core.c -ldl
+          # Lo que tiene que RESOLVER dinamicamente sale de la misma lista, para
+          # no volver a mantener dos copias de la superficie publica.
           required=(retro_init retro_run)
-          if [[ "$AYTHER_EXTENSIONS" == "1" ]]; then
-            required+=(ayther_get_interface)
-          fi
-          if [[ "$AYTHER_EXTENSIONS" == "1" && "$SOUND_PROBE" == "1" ]]; then
-            required+=(
-              audio_probe_poll
-              audio_probe_set_callback
-              audio_probe_get_transport_stats
-              audio_probe_reset_transport_stats
-              audio_probe_get_context
-              audio_probe_set_channel_gain
-              audio_probe_get_channel_gain
-            )
-          fi
+          for symbol in $(sed -n 's/^export closure OK ([^)]*): //p' ayther-artifacts/export_closure.txt); do
+            required+=("$symbol")
+          done
           ayther-artifacts/load_core "$(pwd)/genesis_plus_gx_libretro.so" "${required[@]}"
           "$CC" -O2 -Wall -Wextra -Icore -o ayther-artifacts/verify_ayther_api \
             tests/ci/verify_ayther_api.c -ldl
@@ -164,6 +167,13 @@ jobs:
           else
             ayther-artifacts/verify_ayther_api \
               "$(pwd)/genesis_plus_gx_libretro.so"
+          fi
+          # #33: un cliente compilado contra 1.0, que no conoce 1.1 ni 1.2.
+          # Congelar offsets contra el header actual detecta un reordenamiento
+          # pero no contesta si un frontend ya compilado sigue funcionando.
+          if [[ "$AYTHER_EXTENSIONS" == "1" ]]; then
+            "$CC" -O2 -Wall -Wextra -o ayther-artifacts/abi_compat_1_0 tests/ci/abi_compat_1_0.c -ldl
+            ayther-artifacts/abi_compat_1_0 "$(pwd)/genesis_plus_gx_libretro.so"
           fi
           "$CC" -shared -fPIC -o ayther-artifacts/mock_stock_core.so \
             tests/ci/mock_stock_core.c
@@ -217,7 +227,14 @@ jobs:
           CC=clang
           CORE=../genesis_plus_gx_libretro.so
 
-      - name: Enforce compiled-idle overhead target
+      # El numero se publica pero NO bloquea. Evidencia: dos corridas PARALELAS
+      # del mismo commit midieron 1,023% y 1,708% -0,7 puntos de spread sobre
+      # binarios identicos-, o sea que el ruido del runner compartido es mayor
+      # que el propio umbral de 1%. Un gate asi no mide el codigo, mide en que
+      # maquina toco correr, y su unico efecto es ensenar a ignorar el rojo.
+      # La medicion sigue siendo util como serie temporal. Ver #35.
+      - name: Measure compiled-idle overhead (informative)
+        continue-on-error: true
         run: >-
           make -C tests check-profile-comparison
           CC=clang
@@ -265,6 +282,69 @@ jobs:
         with:
           name: ayther-sanitizer-diagnostics
           path: tests/artifacts-sanitize/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  full-core-sanitize:
+    name: Full core under UBSan (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # #38: hasta aca los sanitizers solo cubrian los binarios construidos
+      # contra tests/stub, o sea todo menos vdp_render.c, vdp_ctrl.c, ym2612.c y
+      # libretro.c, que es donde vive el fork. El unico test que los ejercita
+      # -full_core_replay- nunca corria instrumentado.
+      # UBSan y no ASan: el core se construye como .so con -Wl,--no-undefined, y
+      # el runtime de ASan no se linkea en una biblioteca compartida -se espera
+      # en el ejecutable que la carga-, asi que quedan undefined references a
+      # __asan_report_*. Hacerlo andar exigiria construir tambien el harness con
+      # ASan y precargar el runtime. UBSan si se puede linkear adentro con
+      # -static-libsan, y es el que encontro los hallazgos de #38.
+      # ASan sobre el core completo queda pendiente en #45.
+      # -shared-libsan y no -static-libsan: clang NO linkea el runtime del
+      # sanitizer dentro de una biblioteca compartida -da por sentado que lo
+      # aporta el ejecutable-, asi que con el estatico quedan undefined
+      # references a __ubsan_handle_*. Con el compartido la .so queda con un
+      # DT_NEEDED al runtime y resuelve.
+      - name: Build the core with UBSan
+        env:
+          CC: clang
+          CXX: clang++
+        run: >-
+          make -B -f Makefile.libretro platform=unix
+          SOUND_PROBE=1
+          CC="clang -fsanitize=undefined -shared-libsan -fno-omit-frame-pointer -g"
+          -j2
+
+      # El harness tambien: es quien hace dlopen del core, y asi el runtime ya
+      # esta cargado e inicializado cuando entra la biblioteca.
+      - name: Build the replay harness with UBSan
+        run: >-
+          make -C tests full-core-replay CC=clang
+          CFLAGS="-O1 -g -Wall -Wextra -fsanitize=undefined -shared-libsan -fno-omit-frame-pointer"
+          LDFLAGS="-fsanitize=undefined -shared-libsan"
+
+      # El veredicto lo da tests/ci/run_sanitizers.sh contra known_ub.txt: es
+      # una puerta dura sobre UB NUEVO, con el conocido listado por sitio exacto
+      # y con dueno. Apagar -fsanitize=alignment para tapar el conocido taparia
+      # tambien los futuros.
+      - name: Run the full-core replay under UBSan
+        run: |
+          # El runtime compartido vive en el directorio de clang, que no esta en
+          # el path del loader por defecto.
+          export LD_LIBRARY_PATH="$(clang -print-runtime-dir):${LD_LIBRARY_PATH:-}"
+          bash tests/ci/run_sanitizers.sh "$(pwd)/genesis_plus_gx_libretro.so"
+
+      - name: Upload sanitizer diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ayther-full-core-sanitize
+          path: tests/artifacts/
           if-no-files-found: ignore
           retention-days: 14
 
@@ -350,6 +430,7 @@ jobs:
           CORE=../genesis_plus_gx_libretro.dll
 
       - name: Compare extensions-off and compiled-idle profiles
+        continue-on-error: true
         if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
         shell: pwsh
         run: |

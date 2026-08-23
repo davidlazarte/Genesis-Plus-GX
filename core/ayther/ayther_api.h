@@ -9,6 +9,7 @@
 #define AYTHER_API_H
 
 #include <stdint.h>
+#include <stddef.h>   /* offsetof, para AYTHER_IFACE_HAS */
 
 #ifdef __cplusplus
 extern "C" {
@@ -37,7 +38,25 @@ extern "C" {
 #endif
 
 #define AYTHER_ABI_VERSION_1_0 UINT32_C(0x00010000)
-#define AYTHER_ABI_VERSION_LATEST AYTHER_ABI_VERSION_1_0
+/* 1.1 (#26): agrega `recompose_stats_size` + `get_recompose_stats` al final del
+ * descriptor. Es un cambio ADITIVO: el descriptor es uno solo y `struct_size`
+ * dice hasta dónde llega, así que un cliente compilado contra 1.0 lo sigue
+ * usando sin cambios — pide 1.0, recibe este mismo puntero y nunca lee más allá
+ * de su propio sizeof. La regla para el cliente es "major igual, minor >= el que
+ * necesito", no "version == la mía". */
+#define AYTHER_ABI_VERSION_1_1 UINT32_C(0x00010001)
+/* 1.2 (#32): `recompose_multilayer` entra al descriptor. Era el unico simbolo
+ * AYTHER exportado ademas de `ayther_get_interface`, y contradecia el principio
+ * de un solo punto de entrada versionado: un consumidor tenia que resolverlo
+ * por nombre, sin `struct_size` ni capability que le dijeran si estaba. El
+ * export directo sobrevive solo en el perfil legacy. */
+#define AYTHER_ABI_VERSION_1_2 UINT32_C(0x00010002)
+/* 1.3 (#41): region ATTRIBUTION + suscripcion propia + capability. Aditiva. */
+#define AYTHER_ABI_VERSION_1_3 UINT32_C(0x00010003)
+#define AYTHER_ABI_VERSION_LATEST AYTHER_ABI_VERSION_1_3
+
+#define AYTHER_ABI_VERSION_MAJOR(v) ((uint32_t)(v) >> 16)
+#define AYTHER_ABI_VERSION_MINOR(v) ((uint32_t)(v) & UINT32_C(0xFFFF))
 
 #define AYTHER_GENERATION_ANY UINT64_MAX
 #define AYTHER_LEGACY_MEMORY_NONE UINT32_MAX
@@ -68,7 +87,11 @@ enum ayther_recompose_error
   AYTHER_RC_ERR_NOT_MODE5 = -1,
   AYTHER_RC_ERR_INTERLACE2 = -2,
   AYTHER_RC_ERR_NTSC_FILTER = -3,
-  AYTHER_RC_ERR_INVALID_PARAMS = -4
+  AYTHER_RC_ERR_INVALID_PARAMS = -4,
+  /* #27: el journal raster del frame desbordo. Reproducir el prefijo que si
+     entro daria una imagen plausible y equivocada, asi que la recomposicion se
+     declara incapaz en vez de devolver un exito parcial. */
+  AYTHER_RC_ERR_JOURNAL_OVERFLOW = -5
 };
 
 /* Por que una recomposicion no se pudo hacer, con nombre propio.
@@ -87,7 +110,8 @@ enum ayther_recompose_status
   AYTHER_STATUS_RC_NOT_MODE5      = -20,
   AYTHER_STATUS_RC_INTERLACE2     = -21,
   AYTHER_STATUS_RC_NTSC_FILTER    = -22,
-  AYTHER_STATUS_RC_INVALID_PARAMS = -23
+  AYTHER_STATUS_RC_INVALID_PARAMS = -23,
+  AYTHER_STATUS_RC_JOURNAL_OVERFLOW = -24
 };
 
 enum ayther_endianness
@@ -109,6 +133,8 @@ enum ayther_endianness
 #define AYTHER_CAP_AUDIO_PROBE_V1      (UINT64_C(1) << 9)
 #define AYTHER_CAP_SUBSCRIPTIONS_V1    (UINT64_C(1) << 10)
 #define AYTHER_CAP_FRAME_DELTA_V1      (UINT64_C(1) << 11)
+#define AYTHER_CAP_RECOMPOSE_STATS_V1  (UINT64_C(1) << 12)
+#define AYTHER_CAP_ATTRIBUTION_V1      (UINT64_C(1) << 13)
 
 /* Observation and control work is opt-in. A requested mask becomes active at
  * the beginning of the next frame; unknown bits are rejected. */
@@ -119,7 +145,11 @@ enum ayther_endianness
 #define AYTHER_SUB_AUDIO_WRITES     (UINT32_C(1) << 4)
 #define AYTHER_SUB_RECOMPOSITION    (UINT32_C(1) << 5)
 #define AYTHER_SUB_AUDIO_EVENTS     (UINT32_C(1) << 6)
-#define AYTHER_SUB_ALL              UINT32_C(0x7F)
+/* #41: buffer de atribucion por pixel. Bit propio y no parte de RENDER_CONTROLS
+ * porque su costo es de otro orden -un byte por pixel por frame- y un consumidor
+ * que solo oculta capas no tiene por que pagarlo. */
+#define AYTHER_SUB_ATTRIBUTION      (UINT32_C(1) << 7)
+#define AYTHER_SUB_ALL              UINT32_C(0xFF)
 
 enum ayther_region_id
 {
@@ -139,6 +169,8 @@ enum ayther_region_id
   AYTHER_REGION_PARSED_SPRITE_COUNT,
   AYTHER_REGION_AUDIO_MUTE,
   AYTHER_REGION_RASTER_FALLBACK_REASONS,
+  /* #41: un byte por pixel del frame emitido, con quien pinto cada uno. */
+  AYTHER_REGION_ATTRIBUTION,
   AYTHER_REGION_COUNT
 };
 
@@ -169,12 +201,59 @@ enum ayther_legacy_memory_id
 #define AYTHER_REGION_FRAME_SCOPED         (UINT32_C(1) << 2)
 #define AYTHER_REGION_NATIVE_ENDIAN        (UINT32_C(1) << 3)
 #define AYTHER_REGION_DEPRECATED_LEGACY    (UINT32_C(1) << 4)
+/* #32: la region se entrega en el layout INTERNO word-swapped del emulador en
+ * hosts little-endian: el byte logico `off` vive en `off ^ 1`. Aplica a VRAM y
+ * a la Work RAM legacy. Estaba documentado en prosa y en ningun lado del
+ * contrato, asi que un consumidor que solo leyera el descriptor no tenia como
+ * enterarse — y el sintoma es una imagen con los bytes de cada tile cruzados,
+ * que se lee como un bug del frontend. No es lo mismo que la ausencia de
+ * NATIVE_ENDIAN: eso habla del orden de los campos multi-byte, esto del orden
+ * de los BYTES dentro de la memoria emulada. */
+#define AYTHER_REGION_WORD_SWAPPED_LE      (UINT32_C(1) << 5)
 
 #define AYTHER_LAYOUT_RAW_V1         UINT32_C(1)
 #define AYTHER_LAYOUT_SPRITE_V1      UINT32_C(1)
 #define AYTHER_LAYOUT_AUDIO_WRITE_V1 UINT32_C(1)
-#define AYTHER_LAYOUT_AUDIO_EVENT_V1 UINT32_C(1)
+/* Bumped to 2: PCM events moved off the `voice` arm and gained st/ls (see the
+ * union comment on ayther_audio_event_v1). Every event carries this in its
+ * `schema` byte, so a consumer can tell the two apart at runtime. */
+#define AYTHER_LAYOUT_AUDIO_EVENT_V1 UINT32_C(2)
 #define AYTHER_LAYOUT_FRAME_DELTA_V1 UINT32_C(1)
+
+/* #41: atribucion por pixel. Un byte por pixel del frame EMITIDO, en el mismo
+ * orden que el framebuffer (fila 0 primero, `width` bytes por fila).
+ *
+ * Existe porque hoy el frontend deduce esto recomponiendo el frame varias veces
+ * con distintas mascaras y diffeando: N pasadas de render para una respuesta que
+ * el VDP ya conoce mientras dibuja. Con esto, "que asset reemplaza este pixel"
+ * se contesta leyendo un byte.
+ *
+ *   bits 7-6  capa: 0 = backdrop, 1 = Plano B, 2 = Plano A, 3 = Window
+ *   bit  5    prioridad de la celda de fondo que gano
+ *   bits 4-3  linea de paleta (0-3) del pixel de fondo
+ *   bits 2-1  shadow/highlight: 0 = normal, 1 = shadow, 2 = highlight
+ *   bit  0    el pixel visible lo puso un sprite
+ *
+ * La capa se decide con la MISMA regla de prioridad que la LUT de merge, no
+ * comparando valores: dos capas pueden producir el mismo byte y ahi comparar da
+ * una respuesta arbitraria. */
+#define AYTHER_LAYOUT_ATTRIBUTION_V1 UINT32_C(1)
+
+#define AYTHER_ATTRIB_LAYER_MASK     UINT8_C(0xC0)
+#define AYTHER_ATTRIB_LAYER_SHIFT    6
+#define AYTHER_ATTRIB_LAYER_BACKDROP 0
+#define AYTHER_ATTRIB_LAYER_PLANE_B  1
+#define AYTHER_ATTRIB_LAYER_PLANE_A  2
+#define AYTHER_ATTRIB_LAYER_WINDOW   3
+#define AYTHER_ATTRIB_PRIORITY       UINT8_C(0x20)
+#define AYTHER_ATTRIB_PALETTE_MASK   UINT8_C(0x18)
+#define AYTHER_ATTRIB_PALETTE_SHIFT  3
+#define AYTHER_ATTRIB_SH_MASK        UINT8_C(0x06)
+#define AYTHER_ATTRIB_SH_SHIFT       1
+#define AYTHER_ATTRIB_SH_NORMAL      0
+#define AYTHER_ATTRIB_SH_SHADOW      1
+#define AYTHER_ATTRIB_SH_HIGHLIGHT   2
+#define AYTHER_ATTRIB_SPRITE         UINT8_C(0x01)
 
 /* Native-endian in-process layout. Multi-byte fields use host endianness as
  * reported by ayther_interface_v1.host_endianness. Pointers are never stored
@@ -240,7 +319,33 @@ typedef struct ayther_audio_voice_v1
 
 /* `group` is non-zero only for logical trigger anchors (NOTE_ON and
  * DAC_START). A fixed coincidence window is measured from the first anchor in
- * a group; raw writes, frame markers and release events always use group 0. */
+ * a group; raw writes, frame markers and release events always use group 0.
+ *
+ * WHICH ARM OF THE UNION APPLIES IS DECIDED BY `source`, NOT BY `type`:
+ *
+ *   FM  -> the `voice` arm on NOTE_ON (resolved snapshot + canonical hashes);
+ *          every other FM event uses {reg, data}.
+ *   PSG -> {reg, data}.
+ *   PCM -> {reg, data}, ALWAYS. The RF5C164 has no operators, so the `voice`
+ *          arm never applied to it; up to schema 1 the PCM path wrote `data`
+ *          (one arm) and `voice.pan` (the other) into the same event, which
+ *          only worked because those two fields happen not to overlap.
+ *          Schema 2 packs every PCM field into {reg, data}:
+ *
+ *            NOTE_ON   reg  = st | (ls << 8)
+ *                      data = fd | (env << 16) | (pan << 24)
+ *            NOTE_OFF  reg  = st | (ls << 8),  data = 0
+ *            VOLUME    data = env | (pan << 8)
+ *            PITCH     data = fd
+ *
+ *          `st` is the ST register byte (Wave RAM start address >> 19) and
+ *          `ls` the 16-bit loop address: TOGETHER THEY SAY WHICH SAMPLE PLAYS.
+ *          `fd` is the 5.11 address increment — playback rate RELATIVE to that
+ *          sample, not an absolute note. `env` is the envelope multiplier.
+ *
+ *          A consumer that has to identify sounds needs st/ls. Schema 1 shipped
+ *          only env/pan/fd — volume and rate — so two SFX playing different
+ *          samples at the same rate and level were indistinguishable. */
 typedef struct ayther_audio_event_v1
 {
   uint64_t t_global;
@@ -365,12 +470,45 @@ typedef struct ayther_frame_delta_v1
   uint32_t raster_event_count;
   uint32_t parsed_sprite_count;
   uint32_t audio_write_count;
-  uint32_t reserved0;
+  /* #27: eventos raster que no entraron en el journal. Ocupa el `reserved0`
+     que siempre valio 0 y que el contrato mandaba ignorar, asi que un lector
+     de 1.0 no cambia de comportamiento. Distinto de cero significa que la
+     recomposicion multicapa de este frame devuelve
+     AYTHER_STATUS_RC_JOURNAL_OVERFLOW: solo se podria reproducir un prefijo. */
+  uint32_t raster_events_dropped;
   uint8_t dirty_patterns[2048];
 } ayther_frame_delta_v1;
 
 typedef int32_t (AYTHER_CALL *ayther_poll_frame_delta_v1_fn)(
     ayther_frame_delta_v1 *out, uint32_t out_size);
+
+/* #26: estado observable de los caches de recomposición.
+ *
+ * Existe para que "el cache sigue sirviendo" sea afirmable sin cronometrar:
+ * un test que mide tiempo en un runner compartido mide ruido. `controls_
+ * fingerprint` es además la respuesta a "¿por qué no acertó?" cuando el
+ * frontend cree no haber tocado nada: si la huella cambió, algo escribió una
+ * máscara — posiblemente por el puntero mutable legacy, que no pasa por
+ * `write_control` y por eso no mueve `snapshot_generation`. */
+typedef struct ayther_recompose_stats_v1
+{
+  uint32_t struct_size;
+  uint32_t reserved0;
+  uint64_t single_calls;
+  uint64_t single_hits;
+  uint64_t multilayer_calls;
+  uint64_t multilayer_hits;
+  uint64_t controls_fingerprint;
+} ayther_recompose_stats_v1;
+
+typedef int32_t (AYTHER_CALL *ayther_get_recompose_stats_v1_fn)(
+    ayther_recompose_stats_v1 *out, uint32_t out_size);
+
+typedef int32_t (AYTHER_CALL *ayther_recompose_multilayer_v1_fn)(
+    uint16_t *out_bg_a, uint16_t *out_bg_b, uint16_t *out_window,
+    uint16_t *out_sprites, uint16_t *out_composite,
+    uint32_t pixel_capacity, uint32_t flags,
+    uint32_t *out_width, uint32_t *out_height);
 
 typedef struct ayther_interface_v1
 {
@@ -401,7 +539,20 @@ typedef struct ayther_interface_v1
   ayther_set_subscriptions_v1_fn set_subscriptions;
   uint32_t frame_delta_size;
   ayther_poll_frame_delta_v1_fn poll_frame_delta;
+  /* --- ABI 1.1 (#26). Todo lo de acá abajo sólo se puede leer si
+     `struct_size` llega hasta el campo. --- */
+  uint32_t recompose_stats_size;
+  uint32_t reserved2;
+  ayther_get_recompose_stats_v1_fn get_recompose_stats;
+  /* --- ABI 1.2 (#32) --- */
+  ayther_recompose_multilayer_v1_fn recompose_multilayer;
 } ayther_interface_v1;
+
+/* Un campo opcional es legible sólo si el descriptor llega hasta él. Esta es la
+ * comprobación que reemplaza a `abi_version == la mía`. */
+#define AYTHER_IFACE_HAS(iface, field) \
+  ((iface)->struct_size >= (offsetof(ayther_interface_v1, field) + \
+                            sizeof(((const ayther_interface_v1 *)0)->field)))
 
 typedef const ayther_interface_v1 *(AYTHER_CALL *ayther_get_interface_fn)(
     uint32_t requested_version);
@@ -409,11 +560,18 @@ typedef const ayther_interface_v1 *(AYTHER_CALL *ayther_get_interface_fn)(
 AYTHER_API const ayther_interface_v1 *AYTHER_CALL ayther_get_interface(
     uint32_t requested_version);
 
+/* DEPRECADO (#32). Desde ABI 1.2 esta funcion vive en el descriptor como
+ * `recompose_multilayer` y hay que resolverla por ahi, con `AYTHER_IFACE_HAS`.
+ * El simbolo suelto solo se exporta si el core se compilo con
+ * AYTHER_LEGACY_PROFILE=1, para no romper a los consumidores que ya lo
+ * resuelven con GetProcAddress mientras migran. */
+#ifdef AYTHER_LEGACY_PROFILE
 AYTHER_API int32_t AYTHER_CALL ayther_recompose_multilayer(
     uint16_t *out_bg_a, uint16_t *out_bg_b, uint16_t *out_window,
     uint16_t *out_sprites, uint16_t *out_composite,
     uint32_t pixel_capacity, uint32_t flags,
     uint32_t *out_width, uint32_t *out_height);
+#endif
 
 #ifdef __cplusplus
 }

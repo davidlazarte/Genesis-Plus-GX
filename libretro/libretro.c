@@ -4197,6 +4197,8 @@ static int32_t ayther_rc_status(int rc)
       case AYTHER_RC_ERR_INTERLACE2:     return AYTHER_STATUS_RC_INTERLACE2;
       case AYTHER_RC_ERR_NTSC_FILTER:    return AYTHER_STATUS_RC_NTSC_FILTER;
       case AYTHER_RC_ERR_INVALID_PARAMS: return AYTHER_STATUS_RC_INVALID_PARAMS;
+      case AYTHER_RC_ERR_JOURNAL_OVERFLOW:
+         return AYTHER_STATUS_RC_JOURNAL_OVERFLOW;
       default:                           return AYTHER_STATUS_UNSUPPORTED;
    }
 }
@@ -4381,6 +4383,7 @@ static int32_t AYTHER_CALL ayther_poll_frame_delta_v1(
    out->delta_version = 1;
    out->frame_generation = ayther_frame_generation;
    out->raster_event_count = ayther_raster_journal_count;
+   out->raster_events_dropped = (uint32_t)ayther_raster_journal_dropped;
    out->parsed_sprite_count = ayther_sprite_n;
    out->audio_write_count = ayther_audio_write_n;
    /* AYTHER (#405): del espejo ACUMULATIVO, no de `bg_name_dirty`. Al original

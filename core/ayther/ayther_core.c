@@ -58,6 +58,67 @@ static int ayther_ml_cache_w = 0;
 static int ayther_ml_cache_h = 0;
 static uint16 ayther_ml_cache_px[5][320 * 300];
 
+/* #27: aplicar un cambio de registro durante el raster replay.
+ *
+ * Escribir `reg[r] = d` no alcanza: el renderer no lee los registros, lee el
+ * estado DERIVADO que `vdp_reg_w` calcula al escribirlos (bases de plano,
+ * mascara de hscroll, tamano del playfield, recorte del window...). Un replay
+ * que solo copiara el byte cambiaria el registro y dibujaria igual que antes,
+ * que es la peor de las dos opciones: silencioso y equivocado.
+ *
+ * Es un espejo de las partes VISUALES de `vdp_reg_w`, sin sus efectos de
+ * emulacion (IRQ, redecodificacion de VRAM, `render_line` inmediato,
+ * `viewport.changed`): aca no se esta emulando, se esta reconstruyendo una
+ * imagen a partir de un estado ya conocido. */
+static void ayther_replay_reg(unsigned int r, unsigned int d)
+{
+  if (r >= 0x20) return;
+  reg[r] = (uint8)d;
+
+  switch (r)
+  {
+    case 2:  ntab = (d << 10) & 0xE000; break;
+    case 3:
+      ntwb = (d << 10) & ((reg[12] & 1) ? 0xF000 : 0xF800);
+      break;
+    case 4:  ntbb = (d << 13) & 0xE000; break;
+    case 5:
+      satb = (d << 9) & ((reg[12] & 1) ? 0xFC00 : 0xFE00);
+      break;
+    case 7:
+    {
+      /* El indice de borde y su color; `border` es global justamente para que
+         el replay pueda distinguir "cambio un color cualquiera" de "cambio EL
+         color del backdrop", que se actualiza por otro camino. */
+      int i;
+      border = (uint8)(d & 0x3F);
+      color_update_m5(0x00, *(uint16 *)&cram[border << 1]);
+      (void)i;
+      break;
+    }
+    case 11: hscroll_mask = hscroll_mask_table[d & 0x03]; break;
+    case 12:
+    {
+      /* Solo shadow/highlight. El cambio de H40/H32 no llega hasta aca: se
+         declara modo no soportado en el write (mueve el ancho del viewport). */
+      int i;
+      color_update_m5(0x00, *(uint16 *)&cram[border << 1]);
+      for (i = 1; i < 0x40; i++)
+        color_update_m5(i, *(uint16 *)&cram[i << 1]);
+      window_clip(reg[17], reg[12] & 1);
+      break;
+    }
+    case 13: hscb = (d << 10) & 0xFC00; break;
+    case 16:
+      playfield_shift    = shift_table[d & 3];
+      playfield_col_mask = col_mask_table[d & 3];
+      playfield_row_mask = row_mask_table[(d >> 4) & 3];
+      break;
+    case 17: window_clip(d, reg[12] & 1); break;
+    default: break;   /* 0, 1, 6, 8, 9, 18: el renderer los lee de reg[] */
+  }
+}
+
 int ayther_recompose_frame(uint16 *out, int cap, unsigned int flags,
                            int *out_w, int *out_h)
 {
@@ -295,7 +356,20 @@ int ayther_core_recompose_multilayer(
   uint16 s_cram[64];
   uint8 s_regs[0x20];
   uint8 s_vsram[0x80];
-  uint8 s_hscroll_table[1024];
+  /* #27: undo-log EXACTO de las words de VRAM que toca el replay, en vez de
+     salvar la ventana de 1 KB de la tabla de hscroll. Si un evento de reg 13
+     mueve `hscb` a mitad de frame, la ventana salvada y la ventana escrita ya
+     no son la misma, y restaurar la primera dejaba el frame con VRAM sucia en
+     dos lugares. Un log por escritura no depende de donde este la base. */
+  uint16 s_vram_undo_addr[AYTHER_RASTER_JOURNAL_MAX];
+  uint16 s_vram_undo_val[AYTHER_RASTER_JOURNAL_MAX];
+  int    s_vram_undo_n = 0;
+  /* #27: el replay de registros toca el estado DERIVADO del VDP, no solo
+     `reg[]`. Todo lo que `ayther_replay_reg` puede mover se salva aca; que la
+     recomposicion no perturbe la emulacion es la propiedad de la que dependen
+     los tres pases del replay determinista. */
+  uint16 s_ntab, s_ntbb, s_ntwb, s_satb, s_hscb, s_pf_row;
+  uint8  s_pf_shift, s_pf_col, s_border;
 
   w = bitmap.viewport.w;
   h = bitmap.viewport.h;
@@ -305,6 +379,11 @@ int ayther_core_recompose_multilayer(
   if (interlaced && config.render) return AYTHER_RC_ERR_INTERLACE2;
   if (config.ntsc) return AYTHER_RC_ERR_NTSC_FILTER;
   if (w <= 0 || h <= 0 || cap < w * h) return AYTHER_RC_ERR_INVALID_PARAMS;
+  /* #27: con el journal desbordado solo se puede reproducir un prefijo del
+     frame. Un prefijo produce una imagen que parece correcta, que es
+     exactamente lo que un frontend no puede detectar por su cuenta. */
+  if (ayther_raster_journal_dropped > 0)
+    return AYTHER_RC_ERR_JOURNAL_OVERFLOW;
 
   /* ---- cache (#406): mismo frame, misma configuracion ---- */
   {
@@ -392,7 +471,9 @@ int ayther_core_recompose_multilayer(
   memcpy(s_cram, cram, sizeof(cram));
   memcpy(s_regs, reg, sizeof(reg));
   memcpy(s_vsram, vsram, sizeof(vsram));
-  memcpy(s_hscroll_table, &vram[hscb], 1024);
+  s_ntab = ntab; s_ntbb = ntbb; s_ntwb = ntwb; s_satb = satb; s_hscb = hscb;
+  s_pf_shift = playfield_shift; s_pf_col = playfield_col_mask;
+  s_pf_row = playfield_row_mask; s_border = border;
 
   for (l = 0; l < h; l++)
   {
@@ -407,8 +488,8 @@ int ayther_core_recompose_multilayer(
           if (ev->reason == AYTHER_RASTER_REASON_CRAM)
           {
             uint16 *p = (uint16 *)&cram[ev->address & 0x7E];
-            *p = ev->data;
             int index = (ev->address >> 1) & 0x3F;
+            *p = ev->data;
             if (index & 0x0F) color_update_m5(index, ev->data);
             if (index == border) color_update_m5(0x00, ev->data);
           }
@@ -419,17 +500,28 @@ int ayther_core_recompose_multilayer(
           }
           else if (ev->reason == AYTHER_RASTER_REASON_REG)
           {
-            reg[ev->address] = (uint8)ev->data;
-            if (ev->address == 13) hscb = (reg[13] & 0x3F) << 10;
+            ayther_replay_reg(ev->address, ev->data);
           }
           else if (ev->reason == AYTHER_RASTER_REASON_HSCROLL)
           {
-            vram[ev->address] = (uint8)ev->data;
+            /* #27: la tabla de hscroll se escribe por WORDS (el evento guarda
+               los 16 bits que el bus puso), y esto aplicaba solo el byte bajo.
+               El byte alto se perdia, asi que el scroll reproducido no era el
+               que el juego habia programado. Se usa la misma expresion que el
+               emulador para respetar el layout interno word-swapped de vram. */
+            uint16 *p = (uint16 *)&vram[ev->address & 0xFFFE];
+            if (s_vram_undo_n < AYTHER_RASTER_JOURNAL_MAX)
+            {
+              s_vram_undo_addr[s_vram_undo_n] = (uint16)(ev->address & 0xFFFE);
+              s_vram_undo_val[s_vram_undo_n] = *p;
+              s_vram_undo_n++;
+            }
+            *p = ev->data;
           }
-          else
-          {
-            ayther_raster_dirty |= ev->reason;
-          }
+          /* Un motivo que el replay no sabe reproducir NO se anota aca: esta
+             funcion es de solo lectura por contrato y `ayther_raster_dirty` es
+             el estado publico del frame. Lo que no es reproducible ya se
+             rechazo antes de entrar (AYTHER_RASTER_REASON_REPLAYABLE). */
         }
       }
     }
@@ -500,11 +592,21 @@ int ayther_core_recompose_multilayer(
     int i;
     if (ayther_raster_journal_count > 0)
     {
+      /* En orden inverso: si el frame escribio dos veces la misma word, el
+         valor bueno es el que habia antes de la PRIMERA. */
+      while (s_vram_undo_n > 0)
+      {
+        --s_vram_undo_n;
+        *(uint16 *)&vram[s_vram_undo_addr[s_vram_undo_n]] =
+          s_vram_undo_val[s_vram_undo_n];
+      }
       memcpy(cram, s_cram, sizeof(cram));
       memcpy(reg, s_regs, sizeof(reg));
       memcpy(vsram, s_vsram, sizeof(vsram));
-      memcpy(&vram[hscb], s_hscroll_table, 1024);
-      hscb = (reg[13] & 0x3F) << 10;
+      ntab = s_ntab; ntbb = s_ntbb; ntwb = s_ntwb; satb = s_satb;
+      hscb = s_hscb;
+      playfield_shift = s_pf_shift; playfield_col_mask = s_pf_col;
+      playfield_row_mask = s_pf_row; border = s_border;
     }
     reg[12] = s_reg12;
     color_update_m5(0x00, *(uint16 *)&cram[(reg[7] & 0x3F) << 1]);

@@ -13,6 +13,7 @@ replace the original frame.
 | 4 | `AYTHER_RASTER_REASON_DMA` | the associated memory reason originated in DMA |
 | 5 | `AYTHER_RASTER_REASON_UNSUPPORTED_MODE` | current output mode is outside recompositor support |
 | 6 | `AYTHER_RASTER_REASON_VRAM` | effective non-hscroll VRAM change during active display |
+| 7 | `AYTHER_RASTER_REASON_JOURNAL_OVERFLOW` | the frame produced more replayable events than the journal holds (#27) |
 
 `DMA` is an origin bit, not a standalone destination. For example, a CRAM DMA
 produces `CRAM | DMA`; DMA copy/fill into the hscroll block produces
@@ -71,3 +72,62 @@ The versioned public ABI and capability discovery remain tracked by issue #6.
 The reusable libretro probe and the 14-ROM, 25,200-frame result are documented
 in [`validation/raster-roms-2026-08-09.md`](validation/raster-roms-2026-08-09.md).
 The final run produced zero recomposition mismatches with mask zero.
+
+## The raster journal and what replay reproduces (#27)
+
+The bitmask above says *whether* the frame has mid-screen changes. The **journal**
+(`ayther_raster_journal`, 256 entries) records the individual events so
+`ayther_recompose_multilayer` can replay them line by line instead of rendering
+from the VDP's end-of-frame state alone.
+
+### Only replayable reasons are journaled
+
+`AYTHER_RASTER_REASON_REPLAYABLE` = `REG | CRAM | VSRAM | HSCROLL`.
+
+A mid-screen write to pattern VRAM is a legitimate fallback reason, but the
+replay does not apply it, so spending a journal slot on it only displaces the
+CRAM or hscroll event that *would* have been reproduced. Measured on the
+synthetic fixture before this filter existed: the journal saturated at 256 in
+all 120 frames and dropped useful events to store ones nothing reads. After the
+filter: 113 of 256 slots used, nothing dropped. The bitmask still records every
+reason, replayable or not.
+
+### Register events
+
+A visual register change is now an event, not just a bit. Before, only the `REG`
+bit was set and nothing was recorded, so the replay's register branch was dead
+code: no mid-frame change of plane base, scroll size, window clipping or
+backdrop colour was ever reproduced, and the frame stayed in fallback for a
+reason the recompositor already knew how to handle.
+
+Replaying a register means recomputing the **derived** state the renderer
+actually reads (`ntab`, `ntbb`, `ntwb`, `satb`, `hscb`, `hscroll_mask`, the
+playfield masks, the window clip, the backdrop colour) — assigning `reg[r]`
+alone would change the register and draw exactly as before. The replay uses the
+same layout tables as `vdp_reg_w` rather than a private copy.
+
+Registers 10, 14, 15 and 19–23 do not affect rendering and are excluded by
+design. A mid-frame change of H40/H32 (`reg 12` bit 0) is **not** replayed: it
+moves the viewport width, which a fixed-size output buffer cannot represent, so
+it is reported as `UNSUPPORTED_MODE`.
+
+### Overflow
+
+When more replayable events occur than the journal holds, the surplus is counted
+(`raster_events_dropped`, also exposed in `ayther_frame_delta_v1`) and
+`JOURNAL_OVERFLOW` is set. `ayther_recompose_multilayer` then returns
+`AYTHER_STATUS_RC_JOURNAL_OVERFLOW` instead of replaying a prefix: a partial
+replay yields a plausible, wrong image, which is precisely what a frontend
+cannot detect on its own.
+
+### Replay leaves no trace
+
+The replay mutates real VDP state and restores it: CRAM, VSRAM, registers and
+derived state are snapshotted, and VRAM writes are undone through an exact
+per-write undo log rather than by restoring a fixed 1 KiB window — a `reg 13`
+event can move the hscroll base mid-frame, in which case the saved window and
+the written window are not the same memory.
+
+It also no longer writes to `ayther_raster_dirty`. Merging reasons from inside
+the replay mutated the frame's public fallback mask from a call the ABI defines
+as read-only.

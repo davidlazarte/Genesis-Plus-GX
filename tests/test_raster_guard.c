@@ -17,7 +17,22 @@ int main(void)
   unsigned int mask;
   unsigned int reason;
 
-  CHECK(AYTHER_RASTER_REASON_ALL == 0x7Fu, "seven stable reason bits");
+  /* #27 agrego JOURNAL_OVERFLOW en el bit 7. Los siete originales conservan su
+     posicion: un consumidor que solo mira `> 0` o bits concretos no cambia. */
+  CHECK(AYTHER_RASTER_REASON_ALL == 0xFFu, "eight stable reason bits");
+  CHECK(AYTHER_RASTER_REASON_JOURNAL_OVERFLOW == (1u << 7),
+        "journal overflow is the eighth bit");
+  CHECK((AYTHER_RASTER_REASON_ALL & 0x7Fu) == 0x7Fu,
+        "the seven original reason bits keep their positions");
+  /* Lo reproducible es un SUBCONJUNTO estricto: VRAM, DMA, modo no soportado y
+     el propio overflow quedan afuera a proposito. */
+  CHECK((AYTHER_RASTER_REASON_REPLAYABLE & AYTHER_RASTER_REASON_ALL) ==
+        AYTHER_RASTER_REASON_REPLAYABLE &&
+        AYTHER_RASTER_REASON_REPLAYABLE != AYTHER_RASTER_REASON_ALL,
+        "replayable reasons are a strict subset of all reasons");
+  CHECK((AYTHER_RASTER_REASON_REPLAYABLE &
+         AYTHER_RASTER_REASON_JOURNAL_OVERFLOW) == 0,
+        "an overflowed journal is never replayable");
 
   mask = 0;
   mask = AYTHER_RASTER_MERGE(mask, AYTHER_RASTER_REASON_REG, 1, 1, 0);

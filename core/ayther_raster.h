@@ -15,12 +15,23 @@
 #define AYTHER_RASTER_REASON_DMA              (1u << 4)
 #define AYTHER_RASTER_REASON_UNSUPPORTED_MODE (1u << 5)
 #define AYTHER_RASTER_REASON_VRAM             (1u << 6)
+/* #27: el journal se lleno y hubo eventos que no se registraron. Reproducir
+   solo un prefijo produce un frame que parece bueno y no lo es, asi que este
+   bit obliga al fallback en vez de dejar pasar un exito parcial. */
+#define AYTHER_RASTER_REASON_JOURNAL_OVERFLOW (1u << 7)
 
 #define AYTHER_RASTER_REASON_ALL \
   (AYTHER_RASTER_REASON_REG | AYTHER_RASTER_REASON_CRAM | \
    AYTHER_RASTER_REASON_VSRAM | AYTHER_RASTER_REASON_HSCROLL | \
    AYTHER_RASTER_REASON_DMA | AYTHER_RASTER_REASON_UNSUPPORTED_MODE | \
-   AYTHER_RASTER_REASON_VRAM)
+   AYTHER_RASTER_REASON_VRAM | AYTHER_RASTER_REASON_JOURNAL_OVERFLOW)
+
+/* Motivos que el raster replay SI sabe reproducir. Lo que quede fuera de esta
+   mascara mantiene el frame en fallback: reproducir la mitad de los eventos da
+   una imagen plausible y equivocada, que es peor que declararse incapaz. */
+#define AYTHER_RASTER_REASON_REPLAYABLE \
+  (AYTHER_RASTER_REASON_REG | AYTHER_RASTER_REASON_CRAM | \
+   AYTHER_RASTER_REASON_VSRAM | AYTHER_RASTER_REASON_HSCROLL)
 
 /* The current recompositor treats the complete aligned 1 KiB hscroll block as
    temporal state. This is deliberately conservative and matches its fetch
@@ -51,6 +62,10 @@ typedef struct {
 #define AYTHER_RASTER_JOURNAL_MAX 256
 extern ayther_raster_event_t ayther_raster_journal[AYTHER_RASTER_JOURNAL_MAX];
 extern int ayther_raster_journal_count;
+/* #27: eventos que no entraron por falta de espacio. Se cuenta en vez de
+   guardarse solo un bit para que el frontend pueda distinguir "se paso por uno"
+   de "este frame es un festival de splits" al dimensionar el journal. */
+extern int ayther_raster_journal_dropped;
 #endif
 
 #endif /* _AYTHER_RASTER_H_ */

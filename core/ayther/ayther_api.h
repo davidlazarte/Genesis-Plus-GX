@@ -79,7 +79,11 @@ enum ayther_recompose_error
   AYTHER_RC_ERR_NOT_MODE5 = -1,
   AYTHER_RC_ERR_INTERLACE2 = -2,
   AYTHER_RC_ERR_NTSC_FILTER = -3,
-  AYTHER_RC_ERR_INVALID_PARAMS = -4
+  AYTHER_RC_ERR_INVALID_PARAMS = -4,
+  /* #27: el journal raster del frame desbordo. Reproducir el prefijo que si
+     entro daria una imagen plausible y equivocada, asi que la recomposicion se
+     declara incapaz en vez de devolver un exito parcial. */
+  AYTHER_RC_ERR_JOURNAL_OVERFLOW = -5
 };
 
 /* Por que una recomposicion no se pudo hacer, con nombre propio.
@@ -98,7 +102,8 @@ enum ayther_recompose_status
   AYTHER_STATUS_RC_NOT_MODE5      = -20,
   AYTHER_STATUS_RC_INTERLACE2     = -21,
   AYTHER_STATUS_RC_NTSC_FILTER    = -22,
-  AYTHER_STATUS_RC_INVALID_PARAMS = -23
+  AYTHER_STATUS_RC_INVALID_PARAMS = -23,
+  AYTHER_STATUS_RC_JOURNAL_OVERFLOW = -24
 };
 
 enum ayther_endianness
@@ -406,7 +411,12 @@ typedef struct ayther_frame_delta_v1
   uint32_t raster_event_count;
   uint32_t parsed_sprite_count;
   uint32_t audio_write_count;
-  uint32_t reserved0;
+  /* #27: eventos raster que no entraron en el journal. Ocupa el `reserved0`
+     que siempre valio 0 y que el contrato mandaba ignorar, asi que un lector
+     de 1.0 no cambia de comportamiento. Distinto de cero significa que la
+     recomposicion multicapa de este frame devuelve
+     AYTHER_STATUS_RC_JOURNAL_OVERFLOW: solo se podria reproducir un prefijo. */
+  uint32_t raster_events_dropped;
   uint8_t dirty_patterns[2048];
 } ayther_frame_delta_v1;
 

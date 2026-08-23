@@ -24,6 +24,7 @@ typedef void *library_t;
 
 #include "libretro.h"
 #include "ayther/ayther_api.h"
+#include "ayther_raster.h"   /* #27: capacidad del journal raster */
 #include "generated_rom.h"
 
 #define REPLAY_FRAMES 120u
@@ -56,6 +57,12 @@ struct core_api
   bool (*unserialize)(const void *data, size_t size);
   ayther_get_interface_fn get_ayther_interface;
   const ayther_interface_v1 *ayther;
+  /* Export directo, fuera del descriptor. Es opcional a proposito: el perfil
+     legacy lo tiene y el estandar puede no tenerlo, y el test no debe fallar
+     por eso. (#32 lo mueve al descriptor.) */
+  int32_t (AYTHER_CALL *recompose_multilayer)(
+      uint16_t *, uint16_t *, uint16_t *, uint16_t *, uint16_t *,
+      uint32_t, uint32_t, uint32_t *, uint32_t *);
 };
 
 struct frame_record
@@ -428,6 +435,15 @@ static int load_api(library_t library, struct core_api *api,
     return 1;
   if (!LOAD_API(api, library, get_ayther_interface, "ayther_get_interface"))
     return 0;
+  /* Opcional: su ausencia no es un fallo, solo deja sin verificar el
+     aislamiento del raster replay. Se resuelve sin LOAD_API porque ese macro
+     trata la ausencia como error. */
+  {
+    void *symbol = library_symbol(library, "ayther_recompose_multilayer");
+    if (symbol)
+      memcpy(&api->recompose_multilayer, &symbol,
+             sizeof(api->recompose_multilayer));
+  }
 
   api->ayther = api->get_ayther_interface(AYTHER_ABI_VERSION_1_0);
   if (!api->ayther ||
@@ -720,6 +736,153 @@ static int check_recompose_control_cache(const struct core_api *api)
     if (!ok)
       return 0;
   }
+  return 1;
+}
+
+/* #27: el raster replay no puede dejar rastro.
+ *
+ * `ayther_core_recompose_multilayer` reproduce los eventos del frame sobre el
+ * estado real del VDP (CRAM, VSRAM, la tabla de hscroll en VRAM, los registros
+ * y todo el estado DERIVADO que se calcula al escribirlos) y despues lo
+ * devuelve a su lugar. Es una funcion declarada de solo lectura, y de eso
+ * dependen los tres pases del replay determinista: si dejara una sola word
+ * movida, el frame siguiente divergiria y el sintoma apareceria lejos de la
+ * causa.
+ *
+ * Se verifican las tres cosas que el replay toca: la memoria del VDP, los
+ * registros, y el bitmask publico de motivos de fallback -que el replay
+ * anotaba desde adentro, mutando estado publico desde una lectura-. */
+static int check_raster_replay_isolation(const struct core_api *api,
+                                         uint16_t *scratch)
+{
+#define ISOLATION_SNAPSHOT_BYTES 0x10000u
+  static uint8_t before[4][ISOLATION_SNAPSHOT_BYTES];
+  static uint8_t after[ISOLATION_SNAPSHOT_BYTES];
+  static uint16_t layer_a[MAX_RECOMPOSE_PIXELS];
+  static uint16_t layer_b[MAX_RECOMPOSE_PIXELS];
+  static const struct { uint32_t id; uint32_t size; const char *name; } regions[] = {
+    { AYTHER_REGION_VRAM,     0x10000, "vram" },
+    { AYTHER_REGION_CRAM,     0x80,    "cram" },
+    { AYTHER_REGION_VSRAM,    0x80,    "vsram" },
+    { AYTHER_REGION_VDP_REGS, 0x20,    "vdp regs" }
+  };
+  ayther_recompose_stats_v1 stats_before, stats_after;
+  uint32_t fallback_before = 0;
+  uint32_t fallback_after = 0;
+  uint32_t width = 0;
+  uint32_t height = 0;
+  size_t r;
+  int ok = 1;
+
+  if (!api->recompose_multilayer)
+    return 1;   /* perfil sin el símbolo: nada que verificar */
+
+  /* TODO se fotografia antes de UNA sola recomposicion. Con una llamada por
+     region, la primera hacia el replay y las siguientes se servian del cache
+     multicapa: el test pasaba sin haber ejecutado nunca el codigo que dice
+     vigilar. */
+  for (r = 0; r < sizeof(regions) / sizeof(regions[0]); ++r)
+  {
+    if (api->ayther->read_region(regions[r].id, 0, before[r], regions[r].size,
+          AYTHER_GENERATION_ANY, NULL) != AYTHER_STATUS_OK)
+    {
+      fprintf(stderr, "raster isolation: cannot read %s\n", regions[r].name);
+      return 0;
+    }
+  }
+  if (api->ayther->read_region(AYTHER_REGION_RASTER_FALLBACK_REASONS, 0,
+        &fallback_before, sizeof(fallback_before), AYTHER_GENERATION_ANY,
+        NULL) != AYTHER_STATUS_OK ||
+      !recompose_stats(api, &stats_before))
+    return 0;
+
+  /* Dos capas y el composite: el camino que ejercita el replay completo,
+     incluido el bucle por linea que aplica los eventos. */
+  {
+    int32_t status = api->recompose_multilayer(layer_a, layer_b, NULL, NULL,
+          scratch, MAX_RECOMPOSE_PIXELS, 0, &width, &height);
+    if (status != AYTHER_STATUS_OK)
+    {
+      /* Un error temprano tambien deja el replay sin ejecutar. Sin este
+         chequeo el test daria verde sin haber mirado nunca lo que vigila. */
+      fprintf(stderr,
+              "raster isolation: multilayer recomposition failed (%d)\n",
+              (int)status);
+      return 0;
+    }
+  }
+
+  if (!recompose_stats(api, &stats_after))
+    return 0;
+  if (stats_after.multilayer_hits != stats_before.multilayer_hits)
+  {
+    /* Si la llamada se sirvio del cache no se ejecuto el replay, y entonces
+       este test no verifico nada. Decirlo es mejor que dar un verde vacio. */
+    fprintf(stderr,
+            "raster isolation: the probe hit the cache and never replayed\n");
+    return 0;
+  }
+
+  for (r = 0; r < sizeof(regions) / sizeof(regions[0]); ++r)
+  {
+    if (api->ayther->read_region(regions[r].id, 0, after, regions[r].size,
+          AYTHER_GENERATION_ANY, NULL) != AYTHER_STATUS_OK)
+      return 0;
+    if (memcmp(before[r], after, regions[r].size) != 0)
+    {
+      fprintf(stderr, "raster isolation: recomposition modified %s\n",
+              regions[r].name);
+      ok = 0;
+    }
+  }
+  if (api->ayther->read_region(AYTHER_REGION_RASTER_FALLBACK_REASONS, 0,
+        &fallback_after, sizeof(fallback_after), AYTHER_GENERATION_ANY,
+        NULL) != AYTHER_STATUS_OK)
+    return 0;
+  if (fallback_after != fallback_before)
+  {
+    fprintf(stderr,
+            "raster isolation: recomposition changed fallback reasons "
+            "(%u -> %u)\n", fallback_before, fallback_after);
+    ok = 0;
+  }
+  return ok;
+#undef ISOLATION_SNAPSHOT_BYTES
+}
+
+/* #27: contabilidad del journal. Un desborde silencioso dejaba que la
+ * recomposicion reprodujera un prefijo del frame y devolviera exito, que es
+ * justo lo que un frontend no puede detectar solo. */
+static int check_raster_journal_accounting(const struct core_api *api)
+{
+  ayther_frame_delta_v1 delta;
+  memset(&delta, 0, sizeof(delta));
+  delta.struct_size = sizeof(delta);
+  if (api->ayther->poll_frame_delta(&delta, sizeof(delta)) != AYTHER_STATUS_OK)
+  {
+    fprintf(stderr, "journal accounting: frame delta unavailable\n");
+    return 0;
+  }
+  if (delta.raster_event_count > AYTHER_RASTER_JOURNAL_MAX)
+  {
+    fprintf(stderr, "journal accounting: count %u exceeds capacity\n",
+            delta.raster_event_count);
+    return 0;
+  }
+  /* El journal solo guarda lo REPRODUCIBLE, asi que en esta ROM -que escribe
+     VRAM durante el display activo todo el tiempo- tiene que quedar lejos del
+     tope. Cuando se llenaba con eventos que el replay ni mira, desbordaba en
+     los 120 frames y perdia los que si importaban. */
+  if (delta.raster_events_dropped != 0)
+  {
+    fprintf(stderr,
+            "journal accounting: %u events dropped on the fixture\n",
+            delta.raster_events_dropped);
+    return 0;
+  }
+  fprintf(stderr, "raster journal: %u/%u events, %u dropped\n",
+          delta.raster_event_count, (unsigned)AYTHER_RASTER_JOURNAL_MAX,
+          delta.raster_events_dropped);
   return 1;
 }
 
@@ -1512,7 +1675,9 @@ int main(int argc, char **argv)
   /* Va DESPUES de los pases hasheados: escribe regiones de control, y aunque
      las deja neutras, cualquier efecto suyo sobre los hashes seria un falso
      positivo dificil de leer. Aca no puede contaminar nada. */
-  if (!check_recompose_control_cache(&api))
+  if (!check_recompose_control_cache(&api) ||
+      !check_raster_replay_isolation(&api, recomposed) ||
+      !check_raster_journal_accounting(&api))
     goto cleanup;
 
   actual = fopen(argv[3], "wb");

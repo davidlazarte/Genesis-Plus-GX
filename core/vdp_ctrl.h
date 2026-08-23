@@ -62,6 +62,15 @@ extern uint8 ALIGNED_(4) vram[0x10000];
 extern uint8 ALIGNED_(4) cram[0x80];
 extern uint8 ALIGNED_(4) vsram[0x80];
 extern uint8 border;   /* AYTHER (#12C): indice de color del borde */
+#ifdef AYTHER_EXTENSIONS
+/* AYTHER (#27): tablas de layout del playfield/hscroll. Las usa el raster
+   replay para recalcular el estado derivado de un cambio de registro con las
+   MISMAS constantes que `vdp_reg_w`, en vez de una copia que pueda desviarse. */
+extern const uint8 hscroll_mask_table[];
+extern const uint8 shift_table[];
+extern const uint8 col_mask_table[];
+extern const uint16 row_mask_table[];
+#endif
 extern uint8 hint_pending;
 extern uint8 vint_pending;
 extern uint16 status;

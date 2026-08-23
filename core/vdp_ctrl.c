@@ -141,6 +141,7 @@ uint32 ayther_raster_dirty = 0;
    vez de tomar solo el estado final del VDP. */
 ayther_raster_event_t ayther_raster_journal[AYTHER_RASTER_JOURNAL_MAX];
 int ayther_raster_journal_count = 0;
+int ayther_raster_journal_dropped = 0;
 #endif
 uint32 hvc_latch;                 /* latched HV counter */
 uint32 vint_cycle;                /* VINT occurence cycle */
@@ -173,10 +174,15 @@ static void vdp_dma_copy(unsigned int length);
 static void vdp_dma_fill(unsigned int length);
 
 /* Tables that define the playfield layout */
-static const uint8 hscroll_mask_table[] = { 0x00, 0x07, 0xF8, 0xFF };
-static const uint8 shift_table[]        = { 6, 7, 0, 8 };
-static const uint8 col_mask_table[]     = { 0x0F, 0x1F, 0x0F, 0x3F };
-static const uint16 row_mask_table[]    = { 0x0FF, 0x1FF, 0x2FF, 0x3FF };
+/* #27: dejan de ser static. El raster replay (core/ayther/ayther_core.c) tiene
+   que derivar el mismo estado que `vdp_reg_w` al reproducir un cambio de
+   registro, y la alternativa era copiar las cuatro tablas alla: dos juegos de
+   constantes que deben coincidir y que nada obliga a hacerlo. Mismo criterio
+   que `border`, expuesto antes por la misma razon. */
+const uint8 hscroll_mask_table[] = { 0x00, 0x07, 0xF8, 0xFF };
+const uint8 shift_table[]        = { 6, 7, 0, 8 };
+const uint8 col_mask_table[]     = { 0x0F, 0x1F, 0x0F, 0x3F };
+const uint16 row_mask_table[]    = { 0x0FF, 0x1FF, 0x2FF, 0x3FF };
 
 /* AYTHER (#12C): deja de ser static — el raster replay de ayther_core.c
    necesita saber si el color que cambio a mitad de frame es el del BORDE
@@ -227,14 +233,55 @@ INLINE void ayther_raster_mark_visible(unsigned int reason, uint16_t address,
                                             active, changed, from_dma);
   /* Solo los cambios ACTIVOS entran al journal: uno fuera de la zona visible
      no altera lo que se ve, y llenarlo con esos desplazaria a los que si
-     importan (el tope es AYTHER_RASTER_JOURNAL_MAX). */
-  if (active && changed && ayther_raster_journal_count < AYTHER_RASTER_JOURNAL_MAX)
+     importan (el tope es AYTHER_RASTER_JOURNAL_MAX).
+     #27: y solo los REPRODUCIBLES. Una escritura a VRAM de patrones a mitad de
+     pantalla es un motivo de fallback legitimo, pero el replay no la aplica, asi
+     que ocupar una ranura con ella solo sirve para desplazar al CRAM o al
+     hscroll que si se iban a reproducir. Medido en la ROM sintetica: el journal
+     desbordaba en los 120 frames y perdia eventos utiles por guardar los que
+     nadie lee. El bitmask de motivos sigue registrandolos igual. */
+  if (active && changed && (reason & AYTHER_RASTER_REASON_REPLAYABLE))
+  {
+    if (ayther_raster_journal_count < AYTHER_RASTER_JOURNAL_MAX)
+    {
+      ayther_raster_event_t *ev = &ayther_raster_journal[ayther_raster_journal_count++];
+      ev->v_counter = ayther_raster_line_at(cycles);
+      ev->reason = reason;
+      ev->address = address;
+      ev->data = data;
+    }
+    else
+    {
+      /* #27: desbordar en silencio dejaba que la recomposicion reprodujera un
+         prefijo del frame y devolviera exito. El bit lo empuja al fallback. */
+      ayther_raster_journal_dropped++;
+      ayther_raster_dirty |= AYTHER_RASTER_REASON_JOURNAL_OVERFLOW;
+    }
+  }
+}
+
+/* #27: un cambio de registro visible tambien es un evento raster.
+ *
+ * Antes solo se prendia el bit REG del bitmask de fallback y el evento nunca
+ * se guardaba, asi que el brazo REG del replay era codigo muerto: ningun
+ * cambio de base de plano, de tamano de scroll, de window o del color de
+ * borde a mitad de frame se reproducia. El frame quedaba en fallback por un
+ * motivo que el recompositor ya sabia manejar. */
+INLINE void ayther_raster_mark_reg(unsigned int r, unsigned int d,
+                                   unsigned int cycles)
+{
+  if (ayther_raster_journal_count < AYTHER_RASTER_JOURNAL_MAX)
   {
     ayther_raster_event_t *ev = &ayther_raster_journal[ayther_raster_journal_count++];
     ev->v_counter = ayther_raster_line_at(cycles);
-    ev->reason = reason;
-    ev->address = address;
-    ev->data = data;
+    ev->reason = AYTHER_RASTER_REASON_REG;
+    ev->address = (uint16_t)r;
+    ev->data = (uint16_t)(d & 0xFF);
+  }
+  else
+  {
+    ayther_raster_journal_dropped++;
+    ayther_raster_dirty |= AYTHER_RASTER_REASON_JOURNAL_OVERFLOW;
   }
 }
 
@@ -392,6 +439,7 @@ void vdp_ayther_begin_frame(void)
      de #12C (ayther_core_recompose_multilayer) estaba, por lo tanto, aplicando
      eventos fósiles del arranque a cada línea que recomponía. */
   ayther_raster_journal_count = 0;
+  ayther_raster_journal_dropped = 0;
   if (AYTHER_SUBSCRIBED(AYTHER_SUB_RASTER_TRACKING))
     ayther_raster_dirty = ayther_recompose_mode_supported()
       ? 0u : AYTHER_RASTER_REASON_UNSUPPORTED_MODE;
@@ -1751,6 +1799,7 @@ static void vdp_reg_w(unsigned int r, unsigned int d, unsigned int cycles)
        ((r == 1) && ((reg[1] ^ d) & 0x40))))
   {
     ayther_raster_dirty |= AYTHER_RASTER_REASON_REG;
+    ayther_raster_mark_reg(r, d, cycles);
   }
 
   /* Unsupported final modes are a fallback reason even when selected during
@@ -1758,6 +1807,18 @@ static void vdp_reg_w(unsigned int r, unsigned int d, unsigned int cycles)
   if (AYTHER_SUBSCRIBED(AYTHER_SUB_RASTER_TRACKING) &&
       (((r == 1) && ((reg[1] ^ d) & 0x04) && !(d & 0x04)) ||
       ((r == 12) && ((reg[12] ^ d) & 0x06) && ((d & 0x06) == 0x06))))
+  {
+    ayther_raster_dirty |= AYTHER_RASTER_REASON_UNSUPPORTED_MODE;
+  }
+
+  /* #27: cambiar H40/H32 a mitad de pantalla mueve el ANCHO del viewport. El
+     replay reproduce estado del VDP dentro de un buffer de dimensiones fijas,
+     asi que esto no es algo que sepa reproducir: es un modo no soportado, no un
+     evento. Declararlo evita que el replay del resto de reg 12 (shadow/
+     highlight) haga pasar por bueno un frame con la geometria cambiada. */
+  if (AYTHER_SUBSCRIBED(AYTHER_SUB_RASTER_TRACKING) &&
+      (r == 12) && ((reg[12] ^ d) & 0x01) &&
+      ayther_raster_visible_at(cycles) && (reg[1] & 0x40))
   {
     ayther_raster_dirty |= AYTHER_RASTER_REASON_UNSUPPORTED_MODE;
   }

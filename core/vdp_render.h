@@ -171,6 +171,14 @@ extern uint64_t ayther_rc_stat_single_calls;
 extern uint64_t ayther_rc_stat_single_hits;
 extern uint64_t ayther_rc_stat_multi_calls;
 extern uint64_t ayther_rc_stat_multi_hits;
+
+/* #41: atribucion por pixel del frame emitido, un byte por pixel. Layout y
+   constantes en core/ayther/ayther_api.h (AYTHER_ATTRIB_*). Solo se llena con
+   la suscripcion AYTHER_SUB_ATTRIBUTION activa. */
+extern uint8 ayther_attrib[320 * 240];
+extern uint32 ayther_attrib_width;
+extern uint32 ayther_attrib_height;
+extern uint32 ayther_attrib_flags;
 #endif /* AYTHER_EXTENSIONS */
 
 /* Function prototypes */

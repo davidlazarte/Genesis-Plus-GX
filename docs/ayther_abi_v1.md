@@ -50,6 +50,7 @@ if (AYTHER_IFACE_HAS(api, get_recompose_stats))
 |---|---|
 | 1.0 | Initial contract: regions, snapshots, subscriptions, recomposition, audio transport, frame delta. |
 | 1.1 | **Additive.** Appends `recompose_stats_size` + `get_recompose_stats` and the `AYTHER_CAP_RECOMPOSE_STATS_V1` capability bit (#26). No existing field moved or changed meaning. |
+| 1.3 | **Additive.** Adds the `ATTRIBUTION` region, the `AYTHER_SUB_ATTRIBUTION` subscription and the `AYTHER_CAP_ATTRIBUTION_V1` capability (#41). |
 | 1.2 | **Additive.** Appends `recompose_multilayer` to the descriptor and adds the `AYTHER_REGION_WORD_SWAPPED_LE` region flag (#32). The standalone `ayther_recompose_multilayer` export is now **deprecated** and is emitted only in the legacy profile. |
 
 Two earlier changes were shipped inside 1.0 without a bump, which is what this
@@ -289,3 +290,58 @@ combinations and runs
 The legacy adapter is retained for at least the complete ABI v1 migration
 window. Its eventual removal requires a new major ABI decision and a separate
 migration notice.
+
+
+## Per-pixel attribution (#41)
+
+`AYTHER_REGION_ATTRIBUTION` is one byte per pixel of the **emitted** frame, in
+framebuffer order, saying who painted it:
+
+```
+bits 7-6  layer: 0 backdrop, 1 Plane B, 2 Plane A, 3 Window
+bit  5    priority of the winning background cell
+bits 4-3  palette line (0-3)
+bits 2-1  shadow/highlight: 0 normal, 1 shadow, 2 highlight
+bit  0    the visible pixel was put there by a sprite
+```
+
+It exists because the frontend was answering this question by recomposing the
+frame once per layer and diffing — N render passes for something the VDP already
+knows while it draws. With this, "which asset replaces this pixel" is one byte.
+
+### Why the layer is decided by rule, not by comparison
+
+The obvious implementation — render the layers, then compare each output pixel
+against each source — is wrong in exactly the pixels that matter. Two layers can
+produce the same byte, and there the comparison answers arbitrarily. The core
+instead replicates the priority rule of the merge LUT: A wins if it has priority
+and is opaque; otherwise B wins if it has priority and is opaque; otherwise A
+wins if it is opaque. No ambiguity.
+
+This is not hypothetical. On the synthetic fixture both planes draw the same
+content, so **2,560 of 2,560** non-backdrop background pixels are ambiguous to
+the comparison method. The core has no such trouble.
+
+Plane A and Window share a line buffer but occupy disjoint x ranges (`clip[0]`
+and `clip[1]`), so telling them apart is exact and free.
+
+### Cost and gating
+
+Captured inside `merge()`, the one point every Mode 5 renderer passes through —
+putting stores in each renderer's inner loop would have meant touching the
+hottest code in the emulator five times, and the information needed (which layer
+won) only exists at the merge. Nothing is captured without
+`AYTHER_SUB_ATTRIBUTION`, which is a bit of its own rather than part of
+`RENDER_CONTROLS`: a byte per pixel per frame is a different order of cost, and
+a consumer that only hides layers should not pay it.
+
+### Known limitation: the sprite bit
+
+Bit 0 comes from comparing the line buffer before and after `render_obj`. A
+sprite pixel whose byte happens to equal the background byte is therefore **not**
+marked. The bit is conservative: it never marks a pixel that is not a sprite.
+
+Marking those exactly requires `render_obj` to write the sprite id in its inner
+loop. That change also delivers `sat_idx` per pixel, fixes the same flaw in
+`layer_dim` (#31), and lets multilayer recomposition run in one pass (#37) — so
+it belongs with them rather than here.

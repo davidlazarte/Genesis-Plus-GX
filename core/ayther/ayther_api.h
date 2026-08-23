@@ -51,7 +51,9 @@ extern "C" {
  * por nombre, sin `struct_size` ni capability que le dijeran si estaba. El
  * export directo sobrevive solo en el perfil legacy. */
 #define AYTHER_ABI_VERSION_1_2 UINT32_C(0x00010002)
-#define AYTHER_ABI_VERSION_LATEST AYTHER_ABI_VERSION_1_2
+/* 1.3 (#41): region ATTRIBUTION + suscripcion propia + capability. Aditiva. */
+#define AYTHER_ABI_VERSION_1_3 UINT32_C(0x00010003)
+#define AYTHER_ABI_VERSION_LATEST AYTHER_ABI_VERSION_1_3
 
 #define AYTHER_ABI_VERSION_MAJOR(v) ((uint32_t)(v) >> 16)
 #define AYTHER_ABI_VERSION_MINOR(v) ((uint32_t)(v) & UINT32_C(0xFFFF))
@@ -132,6 +134,7 @@ enum ayther_endianness
 #define AYTHER_CAP_SUBSCRIPTIONS_V1    (UINT64_C(1) << 10)
 #define AYTHER_CAP_FRAME_DELTA_V1      (UINT64_C(1) << 11)
 #define AYTHER_CAP_RECOMPOSE_STATS_V1  (UINT64_C(1) << 12)
+#define AYTHER_CAP_ATTRIBUTION_V1      (UINT64_C(1) << 13)
 
 /* Observation and control work is opt-in. A requested mask becomes active at
  * the beginning of the next frame; unknown bits are rejected. */
@@ -142,7 +145,11 @@ enum ayther_endianness
 #define AYTHER_SUB_AUDIO_WRITES     (UINT32_C(1) << 4)
 #define AYTHER_SUB_RECOMPOSITION    (UINT32_C(1) << 5)
 #define AYTHER_SUB_AUDIO_EVENTS     (UINT32_C(1) << 6)
-#define AYTHER_SUB_ALL              UINT32_C(0x7F)
+/* #41: buffer de atribucion por pixel. Bit propio y no parte de RENDER_CONTROLS
+ * porque su costo es de otro orden -un byte por pixel por frame- y un consumidor
+ * que solo oculta capas no tiene por que pagarlo. */
+#define AYTHER_SUB_ATTRIBUTION      (UINT32_C(1) << 7)
+#define AYTHER_SUB_ALL              UINT32_C(0xFF)
 
 enum ayther_region_id
 {
@@ -162,6 +169,8 @@ enum ayther_region_id
   AYTHER_REGION_PARSED_SPRITE_COUNT,
   AYTHER_REGION_AUDIO_MUTE,
   AYTHER_REGION_RASTER_FALLBACK_REASONS,
+  /* #41: un byte por pixel del frame emitido, con quien pinto cada uno. */
+  AYTHER_REGION_ATTRIBUTION,
   AYTHER_REGION_COUNT
 };
 
@@ -210,6 +219,41 @@ enum ayther_legacy_memory_id
  * `schema` byte, so a consumer can tell the two apart at runtime. */
 #define AYTHER_LAYOUT_AUDIO_EVENT_V1 UINT32_C(2)
 #define AYTHER_LAYOUT_FRAME_DELTA_V1 UINT32_C(1)
+
+/* #41: atribucion por pixel. Un byte por pixel del frame EMITIDO, en el mismo
+ * orden que el framebuffer (fila 0 primero, `width` bytes por fila).
+ *
+ * Existe porque hoy el frontend deduce esto recomponiendo el frame varias veces
+ * con distintas mascaras y diffeando: N pasadas de render para una respuesta que
+ * el VDP ya conoce mientras dibuja. Con esto, "que asset reemplaza este pixel"
+ * se contesta leyendo un byte.
+ *
+ *   bits 7-6  capa: 0 = backdrop, 1 = Plano B, 2 = Plano A, 3 = Window
+ *   bit  5    prioridad de la celda de fondo que gano
+ *   bits 4-3  linea de paleta (0-3) del pixel de fondo
+ *   bits 2-1  shadow/highlight: 0 = normal, 1 = shadow, 2 = highlight
+ *   bit  0    el pixel visible lo puso un sprite
+ *
+ * La capa se decide con la MISMA regla de prioridad que la LUT de merge, no
+ * comparando valores: dos capas pueden producir el mismo byte y ahi comparar da
+ * una respuesta arbitraria. */
+#define AYTHER_LAYOUT_ATTRIBUTION_V1 UINT32_C(1)
+
+#define AYTHER_ATTRIB_LAYER_MASK     UINT8_C(0xC0)
+#define AYTHER_ATTRIB_LAYER_SHIFT    6
+#define AYTHER_ATTRIB_LAYER_BACKDROP 0
+#define AYTHER_ATTRIB_LAYER_PLANE_B  1
+#define AYTHER_ATTRIB_LAYER_PLANE_A  2
+#define AYTHER_ATTRIB_LAYER_WINDOW   3
+#define AYTHER_ATTRIB_PRIORITY       UINT8_C(0x20)
+#define AYTHER_ATTRIB_PALETTE_MASK   UINT8_C(0x18)
+#define AYTHER_ATTRIB_PALETTE_SHIFT  3
+#define AYTHER_ATTRIB_SH_MASK        UINT8_C(0x06)
+#define AYTHER_ATTRIB_SH_SHIFT       1
+#define AYTHER_ATTRIB_SH_NORMAL      0
+#define AYTHER_ATTRIB_SH_SHADOW      1
+#define AYTHER_ATTRIB_SH_HIGHLIGHT   2
+#define AYTHER_ATTRIB_SPRITE         UINT8_C(0x01)
 
 /* Native-endian in-process layout. Multi-byte fields use host endianness as
  * reported by ayther_interface_v1.host_endianness. Pointers are never stored

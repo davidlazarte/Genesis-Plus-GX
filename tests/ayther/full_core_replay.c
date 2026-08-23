@@ -1136,6 +1136,179 @@ static int check_savestate_roundtrip(const struct core_api *api,
   return ok;
 }
 
+/* #41: el buffer de atribucion contra el oraculo que existia antes.
+ *
+ * Hasta ahora, para saber que capa pinto un pixel, el frontend recomponia el
+ * frame una vez por capa y diffeaba: N pasadas de render para algo que el VDP ya
+ * sabe mientras dibuja. Ese metodo es justamente el oraculo con el que se puede
+ * validar el buffer, asi que el test lo usa: recompone SOLO el Plano B, SOLO el
+ * A y SOLO el Window, y exige que cada pixel no-backdrop de cada recomposicion
+ * este atribuido a esa capa.
+ *
+ * La direccion de la comprobacion importa: se afirma "si la capa X sola pinto
+ * algo aqui, la atribucion dice X", que es la propiedad que el consumidor usa.
+ * Al reves no vale, porque una capa puede pintar y perder por prioridad. */
+/* Los flags de recomposicion son contrato publico pero viven en
+   core/vdp_render.h, que un consumidor no incluye. Se replican aca como lo
+   haria el frontend; moverlos a ayther_api.h es deuda anotada aparte. */
+#define RC_LAYER_A 0x01u
+#define RC_LAYER_B 0x02u
+#define RC_LAYER_OBJ 0x08u
+#define RC_LAYER_MASK(m) (((unsigned int)(m) & 0xFFu) << 24)
+
+static int check_attribution(const struct core_api *api)
+{
+  static uint8_t attrib[320 * 240];
+  static uint16_t isolated[2][MAX_RECOMPOSE_PIXELS];
+  static uint16_t composite[MAX_RECOMPOSE_PIXELS];
+  static uint16_t backdrop[MAX_RECOMPOSE_PIXELS];
+  static const struct { uint8_t mask; uint8_t layer; const char *name; } cases[] = {
+    { RC_LAYER_B, AYTHER_ATTRIB_LAYER_PLANE_B, "Plane B" },
+    { RC_LAYER_A, AYTHER_ATTRIB_LAYER_PLANE_A, "Plane A" }
+  };
+  ayther_region_info_v1 info;
+  uint32_t width = 0, height = 0, w0 = 0, h0 = 0;
+  size_t c;
+  int ok = 1;
+  int checked = 0;
+
+  memset(&info, 0, sizeof(info));
+  if (api->ayther->query_region(AYTHER_REGION_ATTRIBUTION, &info,
+        sizeof(info)) != AYTHER_STATUS_OK)
+    return 1;   /* core sin la capability: nada que verificar */
+
+  if (info.data_version != AYTHER_LAYOUT_ATTRIBUTION_V1 || !info.byte_size ||
+      info.byte_size > sizeof(attrib))
+  {
+    fprintf(stderr, "attribution: unexpected region layout (%u bytes)\n",
+            info.byte_size);
+    return 0;
+  }
+  if (api->ayther->read_region(AYTHER_REGION_ATTRIBUTION, 0, attrib,
+        info.byte_size, AYTHER_GENERATION_ANY, NULL) != AYTHER_STATUS_OK)
+  {
+    fprintf(stderr, "attribution: region is not readable\n");
+    return 0;
+  }
+
+  /* El composite da las dimensiones y sirve de control: si la recomposicion no
+     esta disponible en este frame no hay oraculo, y no se afirma nada. */
+  if (api->ayther->recompose_frame(composite, MAX_RECOMPOSE_PIXELS, 0,
+        &width, &height) != AYTHER_STATUS_OK || !width || !height)
+    return 1;
+  if (info.byte_size != width * height)
+  {
+    fprintf(stderr,
+            "attribution: the region is %u bytes but the frame is %ux%u\n",
+            info.byte_size, width, height);
+    return 0;
+  }
+
+  /* Oraculo exacto: el frame con TODAS las capas apagadas es el backdrop. Un
+     pixel esta "pintado por la capa L" cuando la recomposicion de L sola
+     difiere del backdrop ahi, y es el que se VE cuando ademas coincide con el
+     composite. Tomar el pixel (0,0) como referencia de backdrop -que es lo
+     primero que uno escribe- falla apenas ese pixel este pintado, y ademas
+     hace que casi todo el frame cuente como "pintado" por las dos capas. */
+  if (api->ayther->recompose_frame(backdrop, MAX_RECOMPOSE_PIXELS,
+        RC_LAYER_MASK(0xF0), &w0, &h0) != AYTHER_STATUS_OK ||
+      w0 != width || h0 != height)
+  {
+    /* 0xF0 son bits que no corresponden a ninguna capa real: la mascara queda
+       en "ninguna", que es exactamente solo-backdrop. */
+    fprintf(stderr, "attribution: cannot isolate the backdrop (%ux%u vs %ux%u)\n",
+            w0, h0, width, height);
+    return 0;
+  }
+
+  /* La ROM sintetica dibuja el MISMO contenido en los dos planos, asi que
+     "aislar A" y "aislar B" dan la misma imagen y el oraculo por capa no puede
+     distinguirlos: 2560 de 2560 pixeles resultan ambiguos. Distinguirlos exige
+     una escena con planos distintos (#35).
+     Lo que si se puede afirmar con este fixture son dos IMPLICACIONES exactas,
+     que cubren el grueso del mecanismo: el reconocimiento del backdrop y el bit
+     de sprite. Se afirman en la direccion segura -de la imagen a la
+     atribucion-, porque la inversa admite que una capa pinte justo el color del
+     backdrop. */
+  {
+    uint32_t x, y;
+    uint32_t bad_backdrop = 0, bad_sprite = 0, ambiguous = 0;
+    uint32_t w2 = 0, h2 = 0;
+
+    /* Solo sprites sobre el backdrop. */
+    if (api->ayther->recompose_frame(isolated[0], MAX_RECOMPOSE_PIXELS,
+          RC_LAYER_MASK(RC_LAYER_OBJ), &w2, &h2) != AYTHER_STATUS_OK ||
+        w2 != width || h2 != height)
+    {
+      fprintf(stderr, "attribution: cannot isolate the sprites\n");
+      return 0;
+    }
+
+    for (y = 0; y < height; ++y)
+    {
+      for (x = 0; x < width; ++x)
+      {
+        const size_t i = (size_t)y * width + x;
+        const uint8_t layer = (uint8_t)((attrib[i] & AYTHER_ATTRIB_LAYER_MASK) >>
+                                        AYTHER_ATTRIB_LAYER_SHIFT);
+        const int is_sprite = (attrib[i] & AYTHER_ATTRIB_SPRITE) != 0;
+
+        /* 1. Si el frame difiere del backdrop, algo lo pinto: no puede estar
+              etiquetado como backdrop sin sprite encima. */
+        if (composite[i] != backdrop[i])
+        {
+          ++checked;
+          if (layer == AYTHER_ATTRIB_LAYER_BACKDROP && !is_sprite)
+          {
+            if (bad_backdrop < 4)
+              fprintf(stderr,
+                      "attribution: (%u,%u) differs from the backdrop but is "
+                      "tagged backdrop\n", x, y);
+            ++bad_backdrop;
+          }
+        }
+        else
+        {
+          ++ambiguous;   /* igual al backdrop: pudo pintarlo una capa */
+        }
+
+        /* 2. Si el render de solo-sprites coincide con el frame y difiere del
+              backdrop, el pixel visible lo puso un sprite. */
+        if (isolated[0][i] != backdrop[i] && composite[i] == isolated[0][i])
+        {
+          ++checked;
+          if (!is_sprite)
+          {
+            if (bad_sprite < 4)
+              fprintf(stderr,
+                      "attribution: (%u,%u) shows a sprite but the sprite bit "
+                      "is clear\n", x, y);
+            ++bad_sprite;
+          }
+        }
+      }
+    }
+
+    if (bad_backdrop || bad_sprite)
+    {
+      fprintf(stderr,
+              "attribution: %u backdrop and %u sprite mismatches of %d checks\n",
+              bad_backdrop, bad_sprite, checked);
+      ok = 0;
+    }
+    fprintf(stderr,
+            "attribution: %d implications checked, %u pixels equal the "
+            "backdrop and carry no information\n", checked, ambiguous);
+  }
+
+  if (!checked)
+  {
+    fprintf(stderr, "attribution: the oracle produced nothing to compare\n");
+    return 0;
+  }
+  return ok;
+}
+
 static uint64_t frame_digest(const struct frame_record *record)
 {
   uint64_t hash = FNV_OFFSET;
@@ -1928,6 +2101,7 @@ int main(int argc, char **argv)
   if (!check_recompose_control_cache(&api) ||
       !check_raster_replay_isolation(&api, recomposed) ||
       !check_raster_journal_accounting(&api) ||
+      !check_attribution(&api) ||
       !check_savestate_roundtrip(&api, state_size) ||
       !check_memory_regions(&api, checkpoint, state_size))
     goto cleanup;

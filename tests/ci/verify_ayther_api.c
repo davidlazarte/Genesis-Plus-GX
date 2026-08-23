@@ -258,11 +258,24 @@ int main(int argc, char **argv)
       continue;
     CHECK(info.struct_size == sizeof(info), "region descriptor size is explicit");
     CHECK(info.region_id == region_id, "region descriptor echoes its ID");
-    CHECK(info.element_size > 0 && info.capacity > 0 &&
+    CHECK(info.element_size > 0 &&
           info.byte_size == info.element_size * info.capacity,
           "region dimensions are self-consistent");
-    CHECK(info.legacy_memory_id != AYTHER_LEGACY_MEMORY_NONE,
-          "every v1 region maps to a transition-era legacy ID");
+    /* #41: una region de frame puede estar VACIA antes del primer frame -sus
+       dimensiones son las del frame emitido, que todavia no existe-. Exigir
+       capacity > 0 para todas era una regla de las regiones de v1, que son de
+       tamano fijo. */
+    if (!(info.access_flags & AYTHER_REGION_FRAME_SCOPED))
+      CHECK(info.capacity > 0, "a fixed-size region is never empty");
+
+    /* Sin id legacy no hay nada que comparar contra el adaptador viejo, y es lo
+       correcto para lo que se agregue de ahora en mas: los punteros mutables
+       legacy estan deprecados y no se le da uno a cada region nueva. */
+    if (info.legacy_memory_id == AYTHER_LEGACY_MEMORY_NONE)
+    {
+      ++passed;   /* region moderna: no participa del adaptador legacy */
+      continue;
+    }
     if (get_memory_size(info.legacy_memory_id) != info.byte_size)
       fprintf(stderr, "region %lu: ABI size=%lu legacy 0x%lX size=%lu\n",
               (unsigned long)region_id, (unsigned long)info.byte_size,

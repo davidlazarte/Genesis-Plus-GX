@@ -722,6 +722,37 @@ static int ayther_peel_active = 0;   /* la línea actual tiene celdas marcadas *
 static int ayther_peel_row    = 0;   /* fila de celda (frame, con borde) de la línea */
 static int ayther_peel_vx     = 0;   /* desplazamiento del borde izquierdo (viewport.x) */
 
+/* AYTHER (#41): atribución por píxel — quién pintó cada uno.
+ *
+ * El frontend deducía esto recomponiendo el frame varias veces con distintas
+ * máscaras y diffeando: N pasadas de render para una respuesta que el VDP ya
+ * conoce mientras dibuja. Y el atajo que existía —el diff de `layer_dim`— sólo
+ * contesta "sprite sí/no", y mal: un píxel de sprite cuyo byte coincide con el
+ * del fondo no aparece en el diff.
+ *
+ * Se captura dentro de `merge()`, que es el punto por el que pasan los CINCO
+ * renderers Mode 5. Poner los stores en el bucle interno de cada uno habría
+ * significado tocar el código más caliente del emulador cinco veces, y la
+ * información que hace falta —qué capa ganó— recién existe en el merge.
+ *
+ * La capa se decide replicando la regla de prioridad de la LUT, no comparando
+ * bytes: dos capas pueden producir el mismo valor y ahí comparar da una
+ * respuesta arbitraria justo en los píxeles donde importa. */
+uint8 ayther_attrib[320 * 240];
+uint32 ayther_attrib_width = 0;
+uint32 ayther_attrib_height = 0;
+uint32 ayther_attrib_flags = 0;
+/* Fila que se está dibujando y si hay que capturar. El flag lo enciende
+   `render_line` y NO la recomposición: recomponer es una lectura, y dejar que
+   pisara la atribución del frame haría que el resultado dependiera de si
+   alguien miró. */
+static int ayther_attrib_capture = 0;
+static int ayther_attrib_row = 0;
+static uint8 ayther_attrib_line[0x200];
+static uint8 ayther_attrib_bg_snap[0x200];
+
+#define AYTHER_ATTRIB_ACTIVE AYTHER_SUBSCRIBED(AYTHER_SUB_ATTRIBUTION)
+
 #define AYTHER_LAYER_DIM_ACTIVE \
   (AYTHER_CONTROLS_ACTIVE && ayther_layer_dim)
 #define AYTHER_RC_NOLIMIT_ACTIVE ayther_rc_nolimit
@@ -1180,9 +1211,78 @@ static void ayther_peel_merge(uint8 *srca, uint8 *srcb, uint8 *dst, uint8 *table
 }
 #endif
 
+#ifdef AYTHER_EXTENSIONS
+/* AYTHER (#41): atribución de una línea de fondo, con la MISMA regla que
+   `make_lut_bg`: gana A si A tiene prioridad y es opaco; si no, gana B si B
+   tiene prioridad y es opaco; si ninguno tiene prioridad, gana A si es opaco.
+   Se replica la regla en vez de comparar el resultado contra las fuentes porque
+   dos capas pueden dar el mismo byte, y ahí comparar responde cualquier cosa.
+
+   A y Window comparten `linebuf[1]`, pero ocupan rangos de x DISJUNTOS en la
+   línea (clip[0] para A, clip[1] para Window), así que distinguirlos es exacto
+   y gratis: alcanza con mirar en qué rango cae la columna. */
+static void ayther_attrib_bg(const uint8 *srca, const uint8 *srcb,
+                             const uint8 *dst, int width, int shadow_mode)
+{
+  const int w_left  = clip[1].enable ? (clip[1].left  << 4) : 0;
+  const int w_right = clip[1].enable ? (clip[1].right << 4) : 0;
+  int x;
+
+  for (x = 0; x < width; ++x)
+  {
+    const uint8 ax = srca[x], bx = srcb[x];
+    const int a = ax & 0x0F, b = bx & 0x0F;
+    const int ap = ax & 0x40, bp = bx & 0x40;
+    const int a_wins = ap ? (a != 0) : (bp ? (b == 0) : (a != 0));
+    const uint8 win = a_wins ? ax : bx;
+    uint8 attr;
+
+    if (!(win & 0x0F))
+    {
+      /* Ninguna capa puso color: se ve el backdrop. */
+      ayther_attrib_line[x] = AYTHER_ATTRIB_LAYER_BACKDROP << AYTHER_ATTRIB_LAYER_SHIFT;
+      continue;
+    }
+
+    if (a_wins)
+      attr = (uint8)(((x >= w_left && x < w_right) ? AYTHER_ATTRIB_LAYER_WINDOW
+                                                   : AYTHER_ATTRIB_LAYER_PLANE_A)
+                     << AYTHER_ATTRIB_LAYER_SHIFT);
+    else
+      attr = (uint8)(AYTHER_ATTRIB_LAYER_PLANE_B << AYTHER_ATTRIB_LAYER_SHIFT);
+
+    if (win & 0x40) attr |= AYTHER_ATTRIB_PRIORITY;
+    attr |= (uint8)((((win >> 4) & 3) << AYTHER_ATTRIB_PALETTE_SHIFT) &
+                    AYTHER_ATTRIB_PALETTE_MASK);
+    /* En modo shadow/highlight el bit 7 del byte fusionado es "intensidad
+       completa" (lo pone la LUT cuando alguna capa tenía prioridad); apagado
+       significa sombra. El highlight lo introducen los operadores de sprite, en
+       la etapa siguiente. */
+    if (shadow_mode && !(dst[x] & 0x80))
+      attr |= (uint8)(AYTHER_ATTRIB_SH_SHADOW << AYTHER_ATTRIB_SH_SHIFT);
+
+    ayther_attrib_line[x] = attr;
+  }
+}
+#endif
+
 INLINE void merge(uint8 *srca, uint8 *srcb, uint8 *dst, uint8 *table, int width)
 {
 #ifdef AYTHER_EXTENSIONS
+  if (ayther_attrib_capture)
+  {
+    /* La atribución necesita las DOS fuentes, y el merge las consume in-place
+       (dst == srcb en todos los renderers). Se calcula antes y sólo la sombra
+       se resuelve después, que es lo único que depende del resultado. */
+    static uint8 snap_a[0x200], snap_b[0x200];
+    const int shadow_mode = (reg[12] & 0x08) != 0;
+    memcpy(snap_a, srca, width);
+    memcpy(snap_b, srcb, width);
+    if (ayther_peel_active) ayther_peel_merge(srca, srcb, dst, table, width);
+    else { int i; for (i = 0; i < width; ++i) dst[i] = table[(snap_b[i] << 8) | snap_a[i]]; }
+    ayther_attrib_bg(snap_a, snap_b, dst, width, shadow_mode);
+    return;
+  }
   if (ayther_peel_active) { ayther_peel_merge(srca, srcb, dst, table, width); return; }
 #endif
   do
@@ -5520,9 +5620,16 @@ AYTHER_HOT_INLINE void render_line_impl(int line, int ayther_observed)
   const int ayther_dim_active = ayther_observed && ayther_layer_dim;
   const int ayther_show_obj = !ayther_observed ||
     (ayther_layer_mask & AYTHER_LAYER_OBJ);
+  /* #41: se decide una vez por línea. `ayther_attrib_capture` se apaga apenas
+     termina render_bg —para que la recomposición no pise la atribución— así que
+     la etapa de sprites necesita su propia copia del predicado. */
+  const int ayther_attrib_capture_pending = ayther_observed &&
+    AYTHER_ATTRIB_ACTIVE && bitmap.viewport.w <= 320 &&
+    bitmap.viewport.h <= 240;
 #else
   const int ayther_dim_active = 0;
   const int ayther_show_obj = 1;
+  const int ayther_attrib_capture_pending = 0;
 #endif
   /* Check display status */
   if (reg[1] & 0x40)
@@ -5569,10 +5676,29 @@ AYTHER_HOT_INLINE void render_line_impl(int line, int ayther_observed)
     }
 #endif
 
+#ifdef AYTHER_EXTENSIONS
+    /* AYTHER (#41): capturar la atribución de fondo dentro de este render_bg.
+       El flag envuelve SÓLO esta llamada: la recomposición usa los mismos
+       renderers y, si quedara encendido, una lectura pisaría la atribución del
+       frame — el resultado dependería de si alguien miró. */
+    ayther_attrib_capture = ayther_attrib_capture_pending;
+    ayther_attrib_row = line;
+    if (ayther_attrib_capture_pending)
+    {
+      /* Las dimensiones son las del frame emitido y se refrescan por línea: el
+         viewport puede cambiar entre frames y el consumidor tiene que poder
+         interpretar el buffer sin adivinarlas. */
+      ayther_attrib_width  = (uint32)bitmap.viewport.w;
+      ayther_attrib_height = (uint32)bitmap.viewport.h;
+      ayther_attrib_flags  = (interlaced && config.render) ? 1u : 0u;
+    }
+#endif
+
     /* Render BG layer(s) */
     render_bg(line);
 
 #ifdef AYTHER_EXTENSIONS
+    ayther_attrib_capture = 0;
     /* AYTHER: el peel sólo aplica a los merges de BG, no a los de sprites. */
     ayther_peel_active = 0;
 
@@ -5580,10 +5706,12 @@ AYTHER_HOT_INLINE void render_line_impl(int line, int ayther_observed)
        AYTHER dim (id 0x108): snapshot de linebuf[0] tras render_bg + diff tras
        render_obj → los píxeles que cambió render_obj son sprites (los demás son
        fondo, que remap_line atenúa). No toca las internas de render_obj. */
-    if (ayther_dim_active)
+    if (ayther_dim_active || ayther_attrib_capture_pending)
     {
       int i;
       memcpy(ayther_bg_snap, linebuf[0], sizeof(ayther_bg_snap));
+      if (ayther_attrib_capture_pending)
+        memcpy(ayther_attrib_bg_snap, linebuf[0], sizeof(ayther_attrib_bg_snap));
       if (ayther_show_obj)
         render_obj(line & 1);
       for (i = 0; i < 0x200; i++)
@@ -5591,6 +5719,34 @@ AYTHER_HOT_INLINE void render_line_impl(int line, int ayther_observed)
     }
     else if (ayther_show_obj)
       render_obj(line & 1);
+
+#ifdef AYTHER_EXTENSIONS
+    /* AYTHER (#41): volcar la fila al buffer del frame. El bit de sprite sale
+       de comparar contra el fondo previo a render_obj.
+       LIMITACIÓN CONOCIDA, deliberada: un píxel de sprite cuyo byte coincide
+       con el del fondo no se distingue por esta vía. Marcarlo exige que
+       render_obj escriba el id del sprite en su bucle interno —el código más
+       caliente del emulador—, y ese cambio va junto con #31 y #37, que lo
+       necesitan por el mismo motivo. Hasta entonces la capa de fondo es exacta
+       y el bit de sprite es conservador: nunca marca de más. */
+    if (ayther_attrib_capture_pending)
+    {
+      const uint32 w = (uint32)bitmap.viewport.w;
+      const int row = ayther_attrib_row + bitmap.viewport.y;
+      if (row >= 0 && (uint32)row < ayther_attrib_height && w <= 320)
+      {
+        uint8 *out = &ayther_attrib[(size_t)row * ayther_attrib_width];
+        uint32 x;
+        for (x = 0; x < w && x < ayther_attrib_width; ++x)
+        {
+          uint8 attr = ayther_attrib_line[x];
+          if (linebuf[0][0x20 + x] != ayther_attrib_bg_snap[0x20 + x])
+            attr |= AYTHER_ATTRIB_SPRITE;
+          out[x] = attr;
+        }
+      }
+    }
+#endif
 #else
     render_obj(line & 1);
 #endif

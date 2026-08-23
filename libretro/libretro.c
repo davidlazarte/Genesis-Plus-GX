@@ -3969,6 +3969,20 @@ static int32_t ayther_map_region(uint32_t region_id,
          mapping->access_flags |= AYTHER_REGION_ACCESS_CONTROL_WRITE;
          mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_AUDIO_MUTE;
          break;
+      case AYTHER_REGION_ATTRIBUTION:
+         /* #41: se expone del tamano REAL del frame emitido, no del maximo del
+            buffer: leer 320x240 cuando el viewport es 256x224 devolveria filas
+            de otro frame. Fuera de suscripcion la region existe pero
+            read_region la rechaza con NOT_SUBSCRIBED. */
+         mapping->data = ayther_attrib;
+         mapping->element_size = 1;
+         mapping->capacity = ayther_attrib_width * ayther_attrib_height;
+         mapping->byte_size = ayther_attrib_width * ayther_attrib_height;
+         mapping->data_version = AYTHER_LAYOUT_ATTRIBUTION_V1;
+         mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_NONE;
+         mapping->access_flags = AYTHER_REGION_ACCESS_READ |
+            AYTHER_REGION_FRAME_SCOPED | AYTHER_REGION_NATIVE_ENDIAN;
+         break;
       case AYTHER_REGION_RASTER_FALLBACK_REASONS:
          mapping->data = &ayther_raster_dirty;
          mapping->element_size = sizeof(ayther_raster_dirty);
@@ -4004,6 +4018,8 @@ static uint32_t ayther_region_subscription(uint32_t region_id)
          return AYTHER_SUB_SPRITE_CAPTURE;
       case AYTHER_REGION_RASTER_FALLBACK_REASONS:
          return AYTHER_SUB_RASTER_TRACKING;
+      case AYTHER_REGION_ATTRIBUTION:
+         return AYTHER_SUB_ATTRIBUTION;
       default:
          return 0;
    }
@@ -4378,7 +4394,7 @@ static int32_t AYTHER_CALL ayther_set_subscriptions_v1(
 }
 
 static const char ayther_build_id[] =
-   "Genesis Plus GX AYTHER ABI 1.2; core v1.7.4" GIT_VERSION;
+   "Genesis Plus GX AYTHER ABI 1.3; core v1.7.4" GIT_VERSION;
 
 #if defined(LSB_FIRST) || defined(_WIN32) || defined(__LITTLE_ENDIAN__)
 #define AYTHER_HOST_ENDIANNESS AYTHER_ENDIAN_LITTLE
@@ -4446,7 +4462,7 @@ static int32_t AYTHER_CALL ayther_get_recompose_stats_v1(
 
 static const ayther_interface_v1 ayther_interface_1 =
 {
-   AYTHER_ABI_VERSION_1_2,
+   AYTHER_ABI_VERSION_1_3,
    sizeof(ayther_interface_v1),
    AYTHER_CAP_LEGACY_MEMORY | AYTHER_CAP_REGION_QUERY |
       AYTHER_CAP_REGION_READ | AYTHER_CAP_CONTROL_WRITE |
@@ -4454,6 +4470,7 @@ static const ayther_interface_v1 ayther_interface_1 =
       AYTHER_CAP_AUDIO_WRITES_V1 | AYTHER_CAP_RASTER_FALLBACK_V1 |
       AYTHER_CAP_RECOMPOSE_V1 | AYTHER_CAP_SUBSCRIPTIONS_V1 |
       AYTHER_CAP_FRAME_DELTA_V1 | AYTHER_CAP_RECOMPOSE_STATS_V1 |
+      AYTHER_CAP_ATTRIBUTION_V1 |
       AYTHER_AUDIO_PROBE_CAPABILITY,
    AYTHER_HOST_ENDIANNESS,
    sizeof(void *),

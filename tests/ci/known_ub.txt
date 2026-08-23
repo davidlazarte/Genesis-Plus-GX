@@ -19,14 +19,16 @@
 # un renderer upstream -sube el delta de rebase y hay que medir el costo-, y
 # porque hoy no rompe ninguna plataforma soportada. Se vuelve un problema real
 # cuando entre macOS arm64 al matrix: ver #35.
-# Se listan los SITIOS exactos y no el mensaje generico: poner
-# "store to misaligned address" a secas taparia tambien uno nuevo en otro
-# archivo, que es justo lo que este job existe para encontrar.
-vdp_render.c:1776:51: runtime error: store to misaligned address
-vdp_render.c:1777:38: runtime error: store to misaligned address
-vdp_render.c:1778:51: runtime error: store to misaligned address
-vdp_render.c:1779:38: runtime error: store to misaligned address
-vdp_render.c:1870:5: runtime error: store to misaligned address
-vdp_render.c:1881:5: runtime error: store to misaligned address
-vdp_render.c:1943:7: runtime error: store to misaligned address
-vdp_render.c:1954:7: runtime error: store to misaligned address
+# Granularidad: ARCHIVO + CLASE de UB, no archivo:linea:columna.
+#
+# Empece fijando los ocho sitios exactos, que es mas preciso, y duro hasta el
+# primer commit que edito vdp_render.c: las lineas se corren y el gate se pone
+# rojo sin que haya UB nuevo. Un gate que hay que reeditar cada vez que se toca
+# el archivo termina desactivado.
+#
+# Lo que se pierde: un store desalineado NUEVO dentro de vdp_render.c pasaria.
+# Lo que se conserva: cualquier otra clase de UB en este archivo, y cualquier
+# clase en cualquier otro archivo. Es el equilibrio correcto mientras todos los
+# casos conocidos sean el MISMO patron upstream; si aparece uno de otra
+# naturaleza en este archivo, hay que partir la entrada.
+vdp_render.c|store to misaligned address

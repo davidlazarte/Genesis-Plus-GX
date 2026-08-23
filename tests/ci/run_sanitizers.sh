@@ -38,8 +38,18 @@ mkdir -p "$tests_dir/artifacts"
 export UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=0:report_error_type=1"
 export ASAN_OPTIONS="detect_leaks=1:abort_on_error=0:detect_stack_use_after_return=1"
 
+# El nombre del binario lo pone el Makefile segun la plataforma; hardcodear
+# `.exe` hacia que el script solo anduviera en Windows, y en Linux fallaba con
+# "command not found" -exit 127-, que no se parece en nada a la causa.
+replay="$tests_dir/.build/full_core_replay"
+[ -x "$replay" ] || replay="$replay.exe"
+if [ ! -x "$replay" ]; then
+  echo "no encuentro el harness en $tests_dir/.build (¿falta make full-core-replay?)" >&2
+  exit 2
+fi
+
 echo "== full-core replay bajo sanitizers =="
-"$tests_dir/.build/full_core_replay.exe" "$core" "$golden" \
+"$replay" "$core" "$golden" \
   "$tests_dir/artifacts/sanitize_replay.actual.json" \
   "$tests_dir/artifacts/sanitize_replay.frames.jsonl" \
   "$tests_dir/artifacts/sanitize_benchmark.json" 2>&1 | tee "$log"
@@ -60,7 +70,19 @@ while IFS= read -r line; do
   matched=0
   while IFS= read -r pattern; do
     case $pattern in ''|'#'*) continue ;; esac
-    case $line in *"$pattern"*) matched=1; break ;; esac
+    # Un patron puede pedir VARIAS subcadenas separadas por '|', y tienen que
+    # estar TODAS. Hace falta para poder decir "este archivo Y esta clase de UB"
+    # sin fijar archivo:linea:columna, que se desactualiza en cuanto alguien
+    # edita el archivo y deja el gate rojo sin que haya UB nuevo.
+    matched=1
+    rest=$pattern
+    while [ -n "$rest" ]; do
+      part=${rest%%|*}
+      case $rest in *"|"*) rest=${rest#*|} ;; *) rest="" ;; esac
+      [ -n "$part" ] || continue
+      case $line in *"$part"*) ;; *) matched=0; break ;; esac
+    done
+    [ "$matched" = 1 ] && break
   done < <(tr -d '\r' < "$known")
   [ "$matched" = 0 ] && unknown="$unknown$line"$'\n'
 done <<< "$reports"

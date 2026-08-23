@@ -305,6 +305,11 @@ jobs:
       # ASan y precargar el runtime. UBSan si se puede linkear adentro con
       # -static-libsan, y es el que encontro los hallazgos de #38.
       # ASan sobre el core completo queda pendiente en #45.
+      # -shared-libsan y no -static-libsan: clang NO linkea el runtime del
+      # sanitizer dentro de una biblioteca compartida -da por sentado que lo
+      # aporta el ejecutable-, asi que con el estatico quedan undefined
+      # references a __ubsan_handle_*. Con el compartido la .so queda con un
+      # DT_NEEDED al runtime y resuelve.
       - name: Build the core with UBSan
         env:
           CC: clang
@@ -312,18 +317,27 @@ jobs:
         run: >-
           make -B -f Makefile.libretro platform=unix
           SOUND_PROBE=1
-          CC="clang -fsanitize=undefined -static-libsan -fno-omit-frame-pointer -g"
+          CC="clang -fsanitize=undefined -shared-libsan -fno-omit-frame-pointer -g"
           -j2
 
-      - name: Build the replay harness
-        run: make -C tests full-core-replay CC=clang
+      # El harness tambien: es quien hace dlopen del core, y asi el runtime ya
+      # esta cargado e inicializado cuando entra la biblioteca.
+      - name: Build the replay harness with UBSan
+        run: >-
+          make -C tests full-core-replay CC=clang
+          CFLAGS="-O1 -g -Wall -Wextra -fsanitize=undefined -shared-libsan -fno-omit-frame-pointer"
+          LDFLAGS="-fsanitize=undefined -shared-libsan"
 
       # El veredicto lo da tests/ci/run_sanitizers.sh contra known_ub.txt: es
       # una puerta dura sobre UB NUEVO, con el conocido listado por sitio exacto
       # y con dueno. Apagar -fsanitize=alignment para tapar el conocido taparia
       # tambien los futuros.
       - name: Run the full-core replay under UBSan
-        run: bash tests/ci/run_sanitizers.sh "$(pwd)/genesis_plus_gx_libretro.so"
+        run: |
+          # El runtime compartido vive en el directorio de clang, que no esta en
+          # el path del loader por defecto.
+          export LD_LIBRARY_PATH="$(clang -print-runtime-dir):${LD_LIBRARY_PATH:-}"
+          bash tests/ci/run_sanitizers.sh "$(pwd)/genesis_plus_gx_libretro.so"
 
       - name: Upload sanitizer diagnostics
         if: always()

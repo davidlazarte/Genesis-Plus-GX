@@ -49,6 +49,14 @@ jobs:
             exit 1
           fi
 
+      # #28: los gates de capa viven DENTRO de cada renderer Mode 5, y hay
+      # cinco. Cuando se agregaron, tres se quedaron sin ellos y el sintoma fue
+      # el peor posible: escribir la mascara no hacia nada, sin error ni motivo
+      # de fallback. Un test de pixeles necesita una escena por modo (#35);
+      # esto ataca la reincidencia, que es un renderer NUEVO sin gates.
+      - name: Every Mode 5 renderer consults the layer gates
+        run: bash tests/ci/check_render_gates.sh
+
   linux-core:
     name: Linux core (${{ matrix.compiler }}, extensions=${{ matrix.ayther_extensions }}, probe=${{ matrix.sound_probe }}, legacy=${{ matrix.legacy_profile }})
     runs-on: ubuntu-latest

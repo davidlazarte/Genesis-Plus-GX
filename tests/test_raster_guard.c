@@ -19,9 +19,16 @@ int main(void)
 
   /* #27 agrego JOURNAL_OVERFLOW en el bit 7. Los siete originales conservan su
      posicion: un consumidor que solo mira `> 0` o bits concretos no cambia. */
-  CHECK(AYTHER_RASTER_REASON_ALL == 0xFFu, "eight stable reason bits");
+  CHECK(AYTHER_RASTER_REASON_ALL == 0x1FFu, "nine stable reason bits");
   CHECK(AYTHER_RASTER_REASON_JOURNAL_OVERFLOW == (1u << 7),
         "journal overflow is the eighth bit");
+  /* #28: el renderer activo no sabe aplicar un control pedido. Distinto de
+     UNSUPPORTED_MODE, que habla del modo de video y no de los controles. */
+  CHECK(AYTHER_RASTER_REASON_UNSUPPORTED_CONTROLS == (1u << 8),
+        "unsupported controls is the ninth bit");
+  CHECK((AYTHER_RASTER_REASON_REPLAYABLE &
+         AYTHER_RASTER_REASON_UNSUPPORTED_CONTROLS) == 0,
+        "an unsupported control is not something the replay can reproduce");
   CHECK((AYTHER_RASTER_REASON_ALL & 0x7Fu) == 0x7Fu,
         "the seven original reason bits keep their positions");
   /* Lo reproducible es un SUBCONJUNTO estricto: VRAM, DMA, modo no soportado y

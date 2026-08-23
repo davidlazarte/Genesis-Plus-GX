@@ -613,6 +613,18 @@ uint16 spr_col;
 
 #ifdef AYTHER_EXTENSIONS
 
+/* AYTHER (#28): ALT_RENDERER trae su propio juego de renderers Mode 5, sin
+   ninguno de los gates de este fork. Sólo lo activan GameCube, Wii, GCW0, Vita
+   y PSP2 —plataformas que este fork no compila: sus targets son win64, unix y
+   osx—, así que la combinación no se despacha en ningún lado.
+   Un #error es mejor que un fallback en tiempo de ejecución: la alternativa
+   era que alguien portara el fork a una de esas plataformas y descubriera que
+   todas las máscaras son no-op en silencio. Si algún día hace falta, lo que
+   corresponde es gatear esos renderers, no borrar esta línea. */
+#ifdef ALT_RENDERER
+#error "AYTHER_EXTENSIONS y ALT_RENDERER son incompatibles: los renderers de ALT_RENDERER no tienen los gates de capa ni de supresion (ver #28)."
+#endif
+
 /* AYTHER fork delta: máscara de capas visibles (id de memoria privado 0x102).
    Bit set = visible. La leen render_bg_m5/_vs (planos) y render_line (sprites). */
 uint8 ayther_layer_mask = 0xFF;
@@ -1788,8 +1800,36 @@ INLINE uint32 *ayther_draw_col(uint32 *dst, uint32 atbuf, uint32 v_line, const u
 /* Atajo: usa el fast path (DRAW_COLUMN) cuando no hay supresión en este plano. */
 #define DRAW_COLUMN_AE(ATTR, LINE, PS) \
   do { if (PS) dst = ayther_draw_col(dst, (ATTR), (LINE), (PS)); else { DRAW_COLUMN((ATTR), (LINE)) } } while (0)
+
+/* AYTHER (#28): el mismo dibujo de columna para interlace mode 2. Los
+   renderers de im2 usan su propio par de getters -el patrón se indexa distinto
+   porque cada tile guarda dos campos-, así que no alcanzaba con reutilizar
+   `ayther_draw_col`: sin esta variante, la supresión de tiles de plano
+   simplemente no existía en im2. La clave de supresión es la misma (patrón +
+   paleta), para que el frontend no tenga que saber en qué modo está el VDP. */
+INLINE uint32 *ayther_draw_col_im2(uint32 *dst, uint32 atbuf, uint32 v_line,
+                                   const uint8 *ps)
+{
+  uint32 atex, *src;
+#ifdef LSB_FIRST
+  if (AYTHER_PTSUP(ps, atbuf & 0xFFFFu))        { AYTHER_PUT0(); }
+  else { GET_LSB_TILE_IM2(atbuf, v_line) AYTHER_PUTS(); }
+  if (AYTHER_PTSUP(ps, (atbuf >> 16) & 0xFFFFu)){ AYTHER_PUT0(); }
+  else { GET_MSB_TILE_IM2(atbuf, v_line) AYTHER_PUTS(); }
+#else
+  if (AYTHER_PTSUP(ps, (atbuf >> 16) & 0xFFFFu)){ AYTHER_PUT0(); }
+  else { GET_MSB_TILE_IM2(atbuf, v_line) AYTHER_PUTS(); }
+  if (AYTHER_PTSUP(ps, atbuf & 0xFFFFu))        { AYTHER_PUT0(); }
+  else { GET_LSB_TILE_IM2(atbuf, v_line) AYTHER_PUTS(); }
+#endif
+  return dst;
+}
+#define DRAW_COLUMN_IM2_AE(ATTR, LINE, PS) \
+  do { if (PS) dst = ayther_draw_col_im2(dst, (ATTR), (LINE), (PS)); \
+       else { DRAW_COLUMN_IM2((ATTR), (LINE)) } } while (0)
 #else
 #define DRAW_COLUMN_AE(ATTR, LINE, PS) DRAW_COLUMN((ATTR), (LINE))
+#define DRAW_COLUMN_IM2_AE(ATTR, LINE, PS) DRAW_COLUMN_IM2((ATTR), (LINE))
 #endif
 
 #if defined(AYTHER_EXTENSIONS) && defined(__GNUC__)
@@ -2270,6 +2310,28 @@ void render_bg_m5_vs_enhanced(int line)
   uint32 atex, atbuf, *src, *dst;
   uint32 v_line, next_v_line, *nt;
 
+  /* AYTHER (#28): este renderer no tenia los gates de capa ni de supresion de
+     tiles, asi que con la opcion de vscroll mejorado activada escribir la
+     mascara 0x102 o 0x105 no hacia nada. El frontend creia haber ocultado un
+     plano y no pasaba nada: sin error, sin motivo de fallback, sin sintoma
+     salvo el resultado equivocado. Los macros ya incluyen el chequeo de
+     suscripcion y se pliegan a 0 sin AYTHER_EXTENSIONS. */
+  const uint8 *psupA = AYTHER_PSUP(0);
+  const uint8 *psupB = AYTHER_PSUP(1);
+  const uint8 *psupW = AYTHER_PSUP(2);
+  const int hide_a = AYTHER_HIDE_A;
+  const int hide_b = AYTHER_HIDE_B;
+  const int hide_w = AYTHER_HIDE_W;
+#ifdef AYTHER_EXTENSIONS
+  /* La supresion de tiles de plano SI queda fuera de alcance aca: este
+     renderer dibuja cada media columna con su propio v_line -para eso
+     existe- y no pasa por el camino de columna donde vive el filtro. En vez
+     de aplicarlo a medias se declara, para que el frontend pueda apagar la
+     sustitucion en lugar de confiar en un resultado incompleto. */
+  if ((psupA || psupB || psupW))
+    ayther_raster_dirty |= AYTHER_RASTER_REASON_UNSUPPORTED_CONTROLS;
+#endif
+
   /* Vertical scroll offset */
   int v_offset = 0;
 
@@ -2411,9 +2473,16 @@ void render_bg_m5_vs_enhanced(int line)
     w = clip[1].enable;
   }
 
+  /* AYTHER (#28): ocultar Plano A o Window -> limpiar su buffer compartido
+     (linebuf[1]) antes de dibujar. */
+  if (hide_a || hide_w)
+    memset(&linebuf[1][0x20], 0, bitmap.viewport.w);
+
   /* Plane A */
   if (a)
   {
+    if (!hide_a)   /* AYTHER: gate Plano A */
+    {
     /* Plane A width */
     start = clip[0].left;
     end   = clip[0].right;
@@ -2524,13 +2593,15 @@ void render_bg_m5_vs_enhanced(int line)
 #endif
     }
 
+    }   /* AYTHER: fin gate Plano A */
+
     /* Window width */
     start = clip[1].left;
     end   = clip[1].right;
   }
 
   /* Window */
-  if (w)
+  if (w && !hide_w)   /* AYTHER: gate Window */
   {
     /* Window name table */
     nt = (uint32 *)&vram[ntwb | ((line >> 3) << (6 + (reg[12] & 1)))];
@@ -2549,6 +2620,10 @@ void render_bg_m5_vs_enhanced(int line)
   }
 
   /* Merge background layers */
+  /* AYTHER: ocultar Plano B -> limpiar su buffer antes del merge. */
+  if (hide_b)
+    memset(&linebuf[0][0x20], 0, bitmap.viewport.w);
+
   merge(&linebuf[1][0x20], &linebuf[0][0x20], &linebuf[0][0x20], lut[(reg[12] & 0x08) >> 2], bitmap.viewport.w);
 }
 
@@ -2564,6 +2639,19 @@ void render_bg_m5_im2(int line)
   uint32 pf_col_mask  = playfield_col_mask;
   uint32 pf_row_mask  = (playfield_row_mask << 1) | 1;
   uint32 pf_shift     = playfield_shift;
+
+  /* AYTHER (#28): interlace mode 2 no tenia los gates de capa ni de supresion
+     de tiles de plano. Escribir la mascara 0x102 o 0x105 con el VDP en este
+     modo -Sonic 2 en dos jugadores, Combat Cars- no hacia absolutamente nada:
+     ni efecto, ni error, ni motivo de fallback. El frontend creia haber
+     ocultado un plano. Los macros ya incluyen el chequeo de suscripcion y se
+     pliegan a 0 sin AYTHER_EXTENSIONS. */
+  const uint8 *psupA = AYTHER_PSUP(0);
+  const uint8 *psupB = AYTHER_PSUP(1);
+  const uint8 *psupW = AYTHER_PSUP(2);
+  const int hide_a = AYTHER_HIDE_A;
+  const int hide_b = AYTHER_HIDE_B;
+  const int hide_w = AYTHER_HIDE_W;
 
   /* Adjust line offset */
   line = (line << 1) + odd_frame;
@@ -2595,7 +2683,7 @@ void render_bg_m5_im2(int line)
     dst = (uint32 *)&linebuf[0][0x10 + shift];
 
     atbuf = nt[(index - 1) & pf_col_mask];
-    DRAW_COLUMN_IM2(atbuf, v_line)
+    DRAW_COLUMN_IM2_AE(atbuf, v_line, psupB);
   }
   else
   {
@@ -2606,7 +2694,7 @@ void render_bg_m5_im2(int line)
   for(column = 0; column < end; column++, index++)
   {
     atbuf = nt[index & pf_col_mask];
-    DRAW_COLUMN_IM2(atbuf, v_line)
+    DRAW_COLUMN_IM2_AE(atbuf, v_line, psupB);
   }
 
   /* Window & Plane A */
@@ -2626,9 +2714,17 @@ void render_bg_m5_im2(int line)
     w = clip[1].enable;
   }
 
+  /* AYTHER: ocultar Plano A o Window -> limpiar su buffer compartido
+     (linebuf[1]) antes de dibujar; lo no dibujado queda transparente y
+     se ve el Plano B, que es lo que "ocultar una capa" significa. */
+  if (hide_a || hide_w)
+    memset(&linebuf[1][0x20], 0, bitmap.viewport.w);
+
   /* Plane A */
   if (a)
   {
+    if (!hide_a)   /* AYTHER: gate Plano A */
+    {
     /* Plane A width */
     start = clip[0].left;
     end   = clip[0].right;
@@ -2665,7 +2761,7 @@ void render_bg_m5_im2(int line)
         atbuf = nt[(index - 1) & pf_col_mask];
       }
 
-      DRAW_COLUMN_IM2(atbuf, v_line)
+      DRAW_COLUMN_IM2_AE(atbuf, v_line, psupA);
     }
     else
     {
@@ -2676,8 +2772,10 @@ void render_bg_m5_im2(int line)
     for(column = start; column < end; column++, index++)
     {
       atbuf = nt[index & pf_col_mask];
-      DRAW_COLUMN_IM2(atbuf, v_line)
+      DRAW_COLUMN_IM2_AE(atbuf, v_line, psupA);
     }
+
+    }   /* AYTHER: fin gate Plano A */
 
     /* Window width */
     start = clip[1].left;
@@ -2685,7 +2783,7 @@ void render_bg_m5_im2(int line)
   }
 
   /* Window */
-  if (w)
+  if (w && !hide_w)   /* AYTHER: gate Window */
   {
     /* Window name table */
     nt = (uint32 *)&vram[ntwb | ((line >> 4) << (6 + (reg[12] & 1)))];
@@ -2699,9 +2797,13 @@ void render_bg_m5_im2(int line)
     for(column = start; column < end; column++)
     {
       atbuf = nt[column];
-      DRAW_COLUMN_IM2(atbuf, v_line)
+      DRAW_COLUMN_IM2_AE(atbuf, v_line, psupW);
     }
   }
+
+  /* AYTHER: ocultar Plano B -> limpiar su buffer antes del merge. */
+  if (hide_b)
+    memset(&linebuf[0][0x20], 0, bitmap.viewport.w);
 
   /* Merge background layers */
   merge(&linebuf[1][0x20], &linebuf[0][0x20], &linebuf[0][0x20], lut[(reg[12] & 0x08) >> 2], bitmap.viewport.w);
@@ -2719,6 +2821,19 @@ void render_bg_m5_im2_vs(int line)
   uint32 pf_col_mask  = playfield_col_mask;
   uint32 pf_row_mask  = (playfield_row_mask << 1) | 1;
   uint32 pf_shift     = playfield_shift;
+
+  /* AYTHER (#28): interlace mode 2 no tenia los gates de capa ni de supresion
+     de tiles de plano. Escribir la mascara 0x102 o 0x105 con el VDP en este
+     modo -Sonic 2 en dos jugadores, Combat Cars- no hacia absolutamente nada:
+     ni efecto, ni error, ni motivo de fallback. El frontend creia haber
+     ocultado un plano. Los macros ya incluyen el chequeo de suscripcion y se
+     pliegan a 0 sin AYTHER_EXTENSIONS. */
+  const uint8 *psupA = AYTHER_PSUP(0);
+  const uint8 *psupB = AYTHER_PSUP(1);
+  const uint8 *psupW = AYTHER_PSUP(2);
+  const int hide_a = AYTHER_HIDE_A;
+  const int hide_b = AYTHER_HIDE_B;
+  const int hide_w = AYTHER_HIDE_W;
   uint32 *vs          = (uint32 *)&vsram[0];
 
   /* Adjust line offset */
@@ -2761,7 +2876,7 @@ void render_bg_m5_im2_vs(int line)
     dst = (uint32 *)&linebuf[0][0x10 + shift];
 
     atbuf = nt[(index - 1) & pf_col_mask];
-    DRAW_COLUMN_IM2(atbuf, v_line)
+    DRAW_COLUMN_IM2_AE(atbuf, v_line, psupB);
   }
   else
   {
@@ -2785,7 +2900,7 @@ void render_bg_m5_im2_vs(int line)
     v_line = (v_line & 15) << 3;
 
     atbuf = nt[index & pf_col_mask];
-    DRAW_COLUMN_IM2(atbuf, v_line)
+    DRAW_COLUMN_IM2_AE(atbuf, v_line, psupB);
   }
 
   /* Window & Plane A */
@@ -2805,9 +2920,17 @@ void render_bg_m5_im2_vs(int line)
     w = clip[1].enable;
   }
 
+  /* AYTHER: ocultar Plano A o Window -> limpiar su buffer compartido
+     (linebuf[1]) antes de dibujar; lo no dibujado queda transparente y
+     se ve el Plano B, que es lo que "ocultar una capa" significa. */
+  if (hide_a || hide_w)
+    memset(&linebuf[1][0x20], 0, bitmap.viewport.w);
+
   /* Plane A */
   if (a)
   {
+    if (!hide_a)   /* AYTHER: gate Plano A */
+    {
     /* Plane A width */
     start = clip[0].left;
     end   = clip[0].right;
@@ -2845,7 +2968,7 @@ void render_bg_m5_im2_vs(int line)
         atbuf = nt[(index - 1) & pf_col_mask];
       }
 
-      DRAW_COLUMN_IM2(atbuf, v_line)
+      DRAW_COLUMN_IM2_AE(atbuf, v_line, psupA);
     }
     else
     {
@@ -2869,8 +2992,10 @@ void render_bg_m5_im2_vs(int line)
       v_line = (v_line & 15) << 3;
 
       atbuf = nt[index & pf_col_mask];
-      DRAW_COLUMN_IM2(atbuf, v_line)
+      DRAW_COLUMN_IM2_AE(atbuf, v_line, psupA);
     }
+
+    }   /* AYTHER: fin gate Plano A */
 
     /* Window width */
     start = clip[1].left;
@@ -2878,7 +3003,7 @@ void render_bg_m5_im2_vs(int line)
   }
 
   /* Window */
-  if (w)
+  if (w && !hide_w)   /* AYTHER: gate Window */
   {
     /* Window name table */
     nt = (uint32 *)&vram[ntwb | ((line >> 4) << (6 + (reg[12] & 1)))];
@@ -2892,9 +3017,13 @@ void render_bg_m5_im2_vs(int line)
     for(column = start; column < end; column++)
     {
       atbuf = nt[column];
-      DRAW_COLUMN_IM2(atbuf, v_line)
+      DRAW_COLUMN_IM2_AE(atbuf, v_line, psupW);
     }
   }
+
+  /* AYTHER: ocultar Plano B -> limpiar su buffer antes del merge. */
+  if (hide_b)
+    memset(&linebuf[0][0x20], 0, bitmap.viewport.w);
 
   /* Merge background layers */
   merge(&linebuf[1][0x20], &linebuf[0][0x20], &linebuf[0][0x20], lut[(reg[12] & 0x08) >> 2], bitmap.viewport.w);
@@ -5415,7 +5544,17 @@ AYTHER_HOT_INLINE void render_line_impl(int line, int ayther_observed)
     ayther_peel_active = 0;
     if (ayther_observed)
     {
-      const int frow = (line + bitmap.viewport.y) >> 3;
+      /* AYTHER (#28): la fila de celda va en coordenadas del frame EMITIDO, y
+         con salida entrelazada `remap_line` duplica la fila de salida
+         (`line * 2 + odd_frame`). Sin replicar ese ajuste aca, la mascara caia
+         en la mitad de la fila que el frontend habia marcado: ocultaba la celda
+         equivocada, que es peor que no ocultar nada. En interlace mode 2 sin
+         `config.render` la salida NO se dobla y `line` ya es la fila correcta. */
+      int emitted = line + bitmap.viewport.y;
+      if (interlaced && config.render)
+        emitted = (emitted * 2) + odd_frame;
+      {
+      const int frow = emitted >> 3;
       if (frow >= 0 && frow < AYTHER_TILE_ROWS)
       {
         const uint8 *rb = &ayther_tile_suppress[(frow * AYTHER_TILE_COLS) >> 3];
@@ -5425,6 +5564,7 @@ AYTHER_HOT_INLINE void render_line_impl(int line, int ayther_observed)
           ayther_peel_row    = frow;
           ayther_peel_vx     = bitmap.viewport.x;
         }
+      }
       }
     }
 #endif

@@ -609,3 +609,44 @@ implementado `RETRO_MEMORY_VIDEO_RAM` (colisionaría con el delta `7fcf9bc`).
 | [core/sound/](../core/sound/) | Chips de sonido y mezcla. |
 | [core/cart_hw/](../core/cart_hw/) · [core/cd_hw/](../core/cd_hw/) | Hardware de cartridge y Sega/Mega CD. |
 | [core/m68k/](../core/m68k/) · [core/z80/](../core/z80/) | CPUs. |
+
+
+## Qué control soporta cada renderer (#28)
+
+Los gates de capa viven **dentro** de cada renderer de fondo Mode 5, y hay
+cinco. Cuando se agregaron, tres se quedaron sin ellos, y el modo de fallar era
+el peor posible: escribir la máscara no hacía nada — ni efecto, ni error, ni
+motivo de fallback. El frontend creía haber ocultado un plano.
+
+| Renderer | Cuándo corre | Máscara de capas (`0x102`) | Supresión de tiles de plano (`0x105`) | Peel por celda (`0x104`) |
+|---|---|:--:|:--:|:--:|
+| `render_bg_m5` | Mode 5, vscroll global | sí | sí | sí |
+| `render_bg_m5_vs` | Mode 5, vscroll por columna | sí | sí | sí |
+| `render_bg_m5_vs_enhanced` | opción *enhanced vscroll* | sí | **no** → `UNSUPPORTED_CONTROLS` | sí |
+| `render_bg_m5_im2` | interlace mode 2 | sí | sí | sí |
+| `render_bg_m5_im2_vs` | interlace mode 2 + vscroll | sí | sí | sí |
+
+`render_bg_m5_vs_enhanced` dibuja cada media columna con su propio `v_line` —
+para eso existe— y no pasa por el camino de columna donde vive el filtro de
+patrón+paleta. En vez de aplicarlo a medias, el core enciende
+`AYTHER_RASTER_REASON_UNSUPPORTED_CONTROLS` (bit 8) en `0x10E`: un control que
+se ignora en silencio es peor que uno que declara que no puede.
+
+**ALT_RENDERER es incompatible con `AYTHER_EXTENSIONS`** y da error de
+compilación. Trae su propio juego de renderers Mode 5 sin ninguno de los gates,
+y solo lo activan GameCube, Wii, GCW0, Vita y PSP2 — plataformas que este fork
+no compila. Un `#error` es mejor que un fallback en tiempo de ejecución: la
+alternativa era que alguien portara el fork a una de esas plataformas y
+descubriera que todas las máscaras son no-op.
+
+El peel por celda usa coordenadas del frame **emitido**. Con salida entrelazada
+(`interlaced && config.render`) `remap_line` duplica la fila de salida, y ese
+ajuste ahora se replica al calcular la fila de celda; sin él la máscara caía en
+la mitad de la fila marcada, es decir ocultaba la celda equivocada. En interlace
+mode 2 *sin* `config.render` la salida no se dobla y la fila ya era correcta.
+
+Verificación: `tests/ci/check_render_gates.sh` (en el job *Source quality*)
+exige que los cinco renderers consulten `hide_a/hide_b/hide_w` y limpien ambos
+buffers de línea. Es una guarda estructural, no de píxeles: los asserts
+pixel-perfect por modo necesitan escenas de interlace y window en el ROM
+sintético (#35).

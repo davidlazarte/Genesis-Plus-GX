@@ -19,12 +19,19 @@
    solo un prefijo produce un frame que parece bueno y no lo es, asi que este
    bit obliga al fallback en vez de dejar pasar un exito parcial. */
 #define AYTHER_RASTER_REASON_JOURNAL_OVERFLOW (1u << 7)
+/* #28: el renderer activo no sabe aplicar alguno de los controles pedidos. Hoy
+   el unico caso es la supresion de tiles de plano con el vscroll mejorado, que
+   dibuja cada media columna con su propio v_line y no pasa por el camino de
+   columna. Se declara en vez de aplicarse a medias: un control que se ignora en
+   silencio es peor que uno que dice que no puede. */
+#define AYTHER_RASTER_REASON_UNSUPPORTED_CONTROLS (1u << 8)
 
 #define AYTHER_RASTER_REASON_ALL \
   (AYTHER_RASTER_REASON_REG | AYTHER_RASTER_REASON_CRAM | \
    AYTHER_RASTER_REASON_VSRAM | AYTHER_RASTER_REASON_HSCROLL | \
    AYTHER_RASTER_REASON_DMA | AYTHER_RASTER_REASON_UNSUPPORTED_MODE | \
-   AYTHER_RASTER_REASON_VRAM | AYTHER_RASTER_REASON_JOURNAL_OVERFLOW)
+   AYTHER_RASTER_REASON_VRAM | AYTHER_RASTER_REASON_JOURNAL_OVERFLOW | \
+   AYTHER_RASTER_REASON_UNSUPPORTED_CONTROLS)
 
 /* Motivos que el raster replay SI sabe reproducir. Lo que quede fuera de esta
    mascara mantiene el frame en fallback: reproducir la mitad de los eventos da

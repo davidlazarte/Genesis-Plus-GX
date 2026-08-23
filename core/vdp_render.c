@@ -1266,21 +1266,39 @@ static void ayther_attrib_bg(const uint8 *srca, const uint8 *srcb,
 }
 #endif
 
+#ifdef AYTHER_EXTENSIONS
+#if defined(__GNUC__) || defined(__clang__)
+#define AYTHER_NOINLINE __attribute__((noinline))
+#else
+#define AYTHER_NOINLINE
+#endif
+
+/* Fuera de `merge` y sin inlinear a proposito: `merge` es INLINE y se expande en
+   cada renderer, asi que meterle este cuerpo adentro engorda todos los sitios de
+   llamada aunque la rama no se tome. */
+static AYTHER_NOINLINE void ayther_merge_capture(uint8 *srca, uint8 *srcb,
+                                                 uint8 *dst, uint8 *table,
+                                                 int width)
+{
+  /* La atribución necesita las DOS fuentes, y el merge las consume in-place
+     (dst == srcb en todos los renderers). Se copian antes; sólo la sombra se
+     resuelve después, que es lo único que depende del resultado. */
+  static uint8 snap_a[0x200], snap_b[0x200];
+  const int shadow_mode = (reg[12] & 0x08) != 0;
+  memcpy(snap_a, srca, width);
+  memcpy(snap_b, srcb, width);
+  if (ayther_peel_active) ayther_peel_merge(srca, srcb, dst, table, width);
+  else { int i; for (i = 0; i < width; ++i) dst[i] = table[(snap_b[i] << 8) | snap_a[i]]; }
+  ayther_attrib_bg(snap_a, snap_b, dst, width, shadow_mode);
+}
+#endif
+
 INLINE void merge(uint8 *srca, uint8 *srcb, uint8 *dst, uint8 *table, int width)
 {
 #ifdef AYTHER_EXTENSIONS
   if (ayther_attrib_capture)
   {
-    /* La atribución necesita las DOS fuentes, y el merge las consume in-place
-       (dst == srcb en todos los renderers). Se calcula antes y sólo la sombra
-       se resuelve después, que es lo único que depende del resultado. */
-    static uint8 snap_a[0x200], snap_b[0x200];
-    const int shadow_mode = (reg[12] & 0x08) != 0;
-    memcpy(snap_a, srca, width);
-    memcpy(snap_b, srcb, width);
-    if (ayther_peel_active) ayther_peel_merge(srca, srcb, dst, table, width);
-    else { int i; for (i = 0; i < width; ++i) dst[i] = table[(snap_b[i] << 8) | snap_a[i]]; }
-    ayther_attrib_bg(snap_a, snap_b, dst, width, shadow_mode);
+    ayther_merge_capture(srca, srcb, dst, table, width);
     return;
   }
   if (ayther_peel_active) { ayther_peel_merge(srca, srcb, dst, table, width); return; }
@@ -1938,11 +1956,6 @@ INLINE uint32 *ayther_draw_col_im2(uint32 *dst, uint32 atbuf, uint32 v_line,
 #define AYTHER_HOT_INLINE INLINE
 #endif
 
-#if defined(__GNUC__) || defined(__clang__)
-#define AYTHER_NOINLINE __attribute__((noinline))
-#else
-#define AYTHER_NOINLINE
-#endif
 
 /* Mode 5 */
 #ifndef ALT_RENDERER
@@ -5681,10 +5694,15 @@ AYTHER_HOT_INLINE void render_line_impl(int line, int ayther_observed)
        El flag envuelve SÓLO esta llamada: la recomposición usa los mismos
        renderers y, si quedara encendido, una lectura pisaría la atribución del
        frame — el resultado dependería de si alguien miró. */
-    ayther_attrib_capture = ayther_attrib_capture_pending;
-    ayther_attrib_row = line;
+    /* Los stores globales van DENTRO del guard: en el perfil compilado-idle
+       `pending` es 0 y el objetivo es que no quede ni una escritura de mas por
+       linea. Escribir siempre costaba dos stores a globales por linea, y ademas
+       le dice al compilador que esos globales pueden cambiar, lo cual le impide
+       mantener cosas en registros dentro del renderer. */
     if (ayther_attrib_capture_pending)
     {
+      ayther_attrib_capture = 1;
+      ayther_attrib_row = line;
       /* Las dimensiones son las del frame emitido y se refrescan por línea: el
          viewport puede cambiar entre frames y el consumidor tiene que poder
          interpretar el buffer sin adivinarlas. */
@@ -5698,7 +5716,9 @@ AYTHER_HOT_INLINE void render_line_impl(int line, int ayther_observed)
     render_bg(line);
 
 #ifdef AYTHER_EXTENSIONS
-    ayther_attrib_capture = 0;
+    /* Condicional por lo mismo: si nunca se encendio, no hace falta apagarlo. */
+    if (ayther_attrib_capture_pending)
+      ayther_attrib_capture = 0;
     /* AYTHER: el peel sólo aplica a los merges de BG, no a los de sprites. */
     ayther_peel_active = 0;
 

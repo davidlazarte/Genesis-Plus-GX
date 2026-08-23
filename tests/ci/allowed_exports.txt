@@ -21,6 +21,13 @@ base    ayther_get_interface
 # el simbolo suelto queda para los consumidores que todavia lo resuelven con
 # GetProcAddress mientras migran.
 legacy  ayther_recompose_multilayer
+#   En Linux hay que listarlo ademas en libretro/link.T (el version script
+#   restringe los exports). Windows no usa version script y el simbolo salia
+#   solo, asi que el hueco se veia en una sola plataforma: el perfil legacy de
+#   Linux no lo exportaba nunca. Listarlo cuando no esta compilado es inocuo,
+#   el linker simplemente no lo exporta.
+#   Sin comentarios dentro de link.T: no verifique que el parser de version
+#   scripts los acepte, y equivocarse ahi rompe el build entero.
 
 probe   audio_probe_poll
 probe   audio_probe_set_callback

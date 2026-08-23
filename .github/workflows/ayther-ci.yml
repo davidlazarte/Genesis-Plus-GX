@@ -252,6 +252,48 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  full-core-sanitize:
+    name: Full core under ASan and UBSan (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # #38: hasta aca los sanitizers solo cubrian los binarios construidos
+      # contra tests/stub, o sea todo menos vdp_render.c, vdp_ctrl.c, ym2612.c y
+      # libretro.c, que es donde vive el fork. El unico test que los ejercita
+      # -full_core_replay- nunca corria instrumentado.
+      - name: Build the core with ASan and UBSan
+        env:
+          CC: clang
+          CXX: clang++
+        run: >-
+          make -B -f Makefile.libretro platform=unix
+          SOUND_PROBE=1
+          CC="clang -fsanitize=address,undefined -fno-omit-frame-pointer -g"
+          -j2
+
+      - name: Build the replay harness
+        run: make -C tests full-core-replay CC=clang
+
+      # El veredicto lo da tests/ci/run_sanitizers.sh contra known_ub.txt: es
+      # una puerta dura sobre UB NUEVO, con el conocido listado por sitio exacto
+      # y con dueno. Apagar -fsanitize=alignment para tapar el conocido taparia
+      # tambien los futuros.
+      - name: Run the full-core replay under sanitizers
+        run: bash tests/ci/run_sanitizers.sh "$(pwd)/genesis_plus_gx_libretro.so"
+
+      - name: Upload sanitizer diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ayther-full-core-sanitize
+          path: tests/artifacts/
+          if-no-files-found: ignore
+          retention-days: 14
+
   thread-sanitizer:
     name: ThreadSanitizer SPSC stress
     runs-on: ubuntu-latest

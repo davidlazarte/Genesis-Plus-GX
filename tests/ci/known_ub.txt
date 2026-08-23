@@ -1,0 +1,32 @@
+# UB conocido y aceptado, con dueño y fecha (#38).
+#
+# Cada linea es una subcadena; un reporte de UBSan que la contenga no falla el
+# job. Todo lo demas si. La lista existe para que el job pueda ser una PUERTA
+# DURA sobre UB NUEVO: sin ella habria que elegir entre apagar el chequeo entero
+# (y perder los hallazgos futuros) o dejar el job en rojo permanente (que en la
+# practica es lo mismo que no tenerlo).
+#
+# Para sacar una entrada de aca hay que arreglar la causa, no ampliar la lista.
+
+# --- upstream Genesis Plus GX, no del fork ---
+# El renderer escribe el linebuf de a 32 bits para cubrir 4 pixeles por store, y
+# con scroll horizontal fino el destino arranca en `0x10 + shift` (shift 0..7),
+# que solo esta alineado a 4 cuando shift es multiplo de 4. En x86 el store
+# desalineado funciona; en arm64 puede ser mas lento o directamente fallar segun
+# como este configurado el kernel.
+#
+# Se deja documentado en vez de arreglado porque el fix toca el bucle interno de
+# un renderer upstream -sube el delta de rebase y hay que medir el costo-, y
+# porque hoy no rompe ninguna plataforma soportada. Se vuelve un problema real
+# cuando entre macOS arm64 al matrix: ver #35.
+# Se listan los SITIOS exactos y no el mensaje generico: poner
+# "store to misaligned address" a secas taparia tambien uno nuevo en otro
+# archivo, que es justo lo que este job existe para encontrar.
+vdp_render.c:1776:51: runtime error: store to misaligned address
+vdp_render.c:1777:38: runtime error: store to misaligned address
+vdp_render.c:1778:51: runtime error: store to misaligned address
+vdp_render.c:1779:38: runtime error: store to misaligned address
+vdp_render.c:1870:5: runtime error: store to misaligned address
+vdp_render.c:1881:5: runtime error: store to misaligned address
+vdp_render.c:1943:7: runtime error: store to misaligned address
+vdp_render.c:1954:7: runtime error: store to misaligned address

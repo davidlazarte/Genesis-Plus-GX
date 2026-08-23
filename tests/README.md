@@ -153,3 +153,43 @@ tests/
 
 Generated binaries and mismatch reports live under `.build/` and `artifacts/`;
 both directories are ignored by Git.
+
+## Running the core under sanitizers (#38)
+
+`tests/ci/run_sanitizers.sh <core> [golden]` runs the **full-core replay**
+instrumented, not just the stub-built unit tests. Until it existed, ASan/UBSan
+covered everything except `vdp_render.c`, `vdp_ctrl.c`, `ym2612.c` and
+`libretro.c` — which is where the fork lives.
+
+```sh
+# Linux (ASan + UBSan)
+make -B -f Makefile.libretro platform=unix SOUND_PROBE=1 \
+  CC="clang -fsanitize=address,undefined -fno-omit-frame-pointer -g" -j2
+make -C tests full-core-replay CC=clang
+bash tests/ci/run_sanitizers.sh "$(pwd)/genesis_plus_gx_libretro.so"
+
+# Windows llvm-mingw: UBSan only (no ASan runtime ships with the toolchain)
+make -f Makefile.libretro platform=win64 SOUND_PROBE=1 \
+  CC="cc -fsanitize=undefined -fno-omit-frame-pointer" -j8
+bash tests/ci/run_sanitizers.sh genesis_plus_gx_libretro.dll
+```
+
+Do **not** build with `-fno-sanitize-recover=all`: it traps on the first report,
+which defeats `halt_on_error=0` and gives one finding per run instead of the
+full inventory. The verdict is the script's job, not the compiler's.
+
+Reports are grouped **per site** (file:line:col, with addresses normalised) and
+checked against `tests/ci/known_ub.txt`. Anything not listed there fails the run.
+The list currently holds eight misaligned 32-bit stores in `vdp_render.c`:
+upstream writes the line buffer four pixels at a time, and fine horizontal
+scroll makes the destination start at an odd offset. Harmless on x86, relevant
+once macOS arm64 joins the matrix (#35). Entries are removed by fixing the
+cause, not by widening the pattern.
+
+## Comparing two platforms' replays (#38)
+
+The Linux and Windows goldens still differ. `tests/ci/first_divergence.sh
+<a.frames.jsonl> <b.frames.jsonl> [name-a] [name-b]` reports the **first frame
+and subsystem** where two runs part ways, so the diagnosis starts from a
+location instead of from an aggregate hash. Download the other platform's
+`*.frames.jsonl` artifact and point the script at both.

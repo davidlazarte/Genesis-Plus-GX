@@ -543,10 +543,46 @@ scoop install mingw-mstorsjo-llvm-msvcrt   # en el PATH
 make -f Makefile.libretro platform=win64 -j8
 ```
 
-> Un build **UCRT** crashea en `retro_load_game`
-> (`STATUS_STACK_BUFFER_OVERRUN`); el **MSVCRT** es bit-idéntico al DLL stock en
-> emulación. La salida se despliega en AYTHER como
+> Un build **UCRT** aborta en `retro_load_game` (`STATUS_STACK_BUFFER_OVERRUN`);
+> el **MSVCRT** es bit-idéntico al DLL stock en emulación. La salida se
+> despliega en AYTHER como
 > `third_party/cores/genesis_plus_gx_libretro_vram.dll`.
+
+#### Sobre el fallo con UCRT (#38)
+
+El nombre del código de estado despista y conviene dejarlo escrito, porque
+orientó mal la búsqueda durante bastante tiempo:
+
+**`STATUS_STACK_BUFFER_OVERRUN` (0xC0000409) no es agotamiento de pila.** El
+agotamiento de pila es `STATUS_STACK_OVERFLOW` (0xC00000FD). 0xC0000409 es lo
+que produce `__fastfail`, y en UCRT `abort()` está implementado justamente sobre
+`__fastfail(FAST_FAIL_FATAL_APP_EXIT)`. También lo produce el *invalid parameter
+handler* de UCRT, que MSVCRT no tiene: MSVCRT es tolerante donde UCRT termina el
+proceso.
+
+Es decir: la hipótesis con más respaldo es que el build UCRT **llama a `abort()`
+o al manejador de parámetro inválido**, no que se le acabe la pila. Eso también
+explica por qué MSVCRT "funciona": no es que no haya un problema, es que no
+reacciona igual ante uno.
+
+Evidencia que apoya descartar la pila, medida con
+`clang -Wframe-larger-than` sobre el build win64:
+
+| Función | Frame |
+|---|---:|
+| `load_rom` | 16.504 B |
+| `check_variables` | 4.392 B |
+| `ayther_core_recompose_multilayer` | 2.840 B |
+| `ayther_recompose_frame` | 1.480 B |
+| `vdp_reg_w` | 1.112 B |
+
+El mayor es `load_rom` con ~16 KB, tres órdenes de magnitud por debajo del 1 MB
+de pila por defecto en Windows, y no hay recursión en esa ruta.
+
+Lo que falta para cerrarlo es un toolchain llvm-mingw **UCRT** instalado para
+reproducirlo y capturar el `__fastfail` en el depurador; la CI lo previene
+prohibiendo imports de `ucrtbase.dll`, que es una contención, no un
+diagnóstico.
 
 Otros targets: `Makefile.gc`/`Makefile.gc.low-mem` (GameCube), `Makefile.wii`
 (Wii), y los proyectos en `libretro/` para Android (`jni/`), MSVC (`msvc/`,

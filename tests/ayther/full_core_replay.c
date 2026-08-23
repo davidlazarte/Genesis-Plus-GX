@@ -35,8 +35,8 @@ typedef void *library_t;
 #define FNV_PRIME UINT64_C(1099511628211)
 #define FIXTURE_CONFIGURATION \
   "region=auto;overscan=disabled;aspect=auto;sprite_limit=hardware;" \
-  "ntsc_filter=disabled;audio_filter=disabled;pixel_format=rgb565;" \
-  "audio_video=enabled;subscriptions=0x7f"
+"ntsc_filter=disabled;audio_filter=disabled;pixel_format=rgb565;" \
+"audio_video=enabled;subscriptions=0x7f"
 
 struct core_api
 {
@@ -661,7 +661,11 @@ static int check_recompose_control_cache(const struct core_api *api)
       return 0;
     }
     if (!recompose_probe(api, px_b, &n_b) || !recompose_stats(api, &s1))
+    {
+      fprintf(stderr, "recompose cache: probe failed with %s active\n",
+              cases[c].name);
       return 0;
+    }
 
     if (s1.controls_fingerprint == s0.controls_fingerprint)
     {
@@ -681,9 +685,17 @@ static int check_recompose_control_cache(const struct core_api *api)
        reves (el cache seguia sirviendo B). */
     if (api->ayther->write_control(cases[c].region, cases[c].offset,
           &neutral, 1, AYTHER_GENERATION_ANY, NULL) != AYTHER_STATUS_OK)
+    {
+      fprintf(stderr, "recompose cache: cannot restore %s to neutral\n",
+              cases[c].name);
       return 0;
+    }
     if (!recompose_probe(api, px_a2, &n_a2) || !recompose_stats(api, &s2))
+    {
+      fprintf(stderr, "recompose cache: probe failed after restoring %s\n",
+              cases[c].name);
       return 0;
+    }
     if (n_a2 != n_a1 || memcmp(px_a1, px_a2, n_a1 * sizeof(uint16_t)) != 0)
     {
       fprintf(stderr,
@@ -694,7 +706,11 @@ static int check_recompose_control_cache(const struct core_api *api)
 
     /* Sin cambios: ahora SI tiene que ser acierto, y byte-identico. */
     if (!recompose_probe(api, px_a3, &n_a3) || !recompose_stats(api, &s3))
+    {
+      fprintf(stderr, "recompose cache: repeat probe failed (%s)\n",
+              cases[c].name);
       return 0;
+    }
     if (s3.single_hits != s2.single_hits + 1)
     {
       fprintf(stderr, "recompose cache: no hit for unchanged state (%s)\n",
@@ -805,7 +821,10 @@ static int check_raster_replay_isolation(const struct core_api *api,
   }
 
   if (!recompose_stats(api, &stats_after))
+  {
+    fprintf(stderr, "raster isolation: recompose stats unavailable\n");
     return 0;
+  }
   if (stats_after.multilayer_hits != stats_before.multilayer_hits)
   {
     /* Si la llamada se sirvio del cache no se ejecuto el replay, y entonces
@@ -835,7 +854,7 @@ static int check_raster_replay_isolation(const struct core_api *api,
   {
     fprintf(stderr,
             "raster isolation: recomposition changed fallback reasons "
-            "(%u -> %u)\n", fallback_before, fallback_after);
+"(%u -> %u)\n", fallback_before, fallback_after);
     ok = 0;
   }
   return ok;
@@ -902,12 +921,12 @@ static void write_frame_report(FILE *report, const char *pass,
   if (!report) return;
   fprintf(report,
     "{\"pass\":\"%s\",\"frame\":%u,\"input\":%u,"
-    "\"video\":\"%016" PRIx64 "\",\"audio\":\"%016" PRIx64
-    "\",\"state\":\"%016" PRIx64 "\",\"telemetry\":\"%016" PRIx64
-    "\",\"width\":%u,\"height\":%u,\"audio_frames\":%u,"
-    "\"fallback_reasons\":%u,\"sprites\":%u,\"audio_writes\":%u,"
-    "\"events\":%u,\"different_pixels\":%u,\"false_clean\":%s,"
-    "\"recompose_unavailable\":%s}\n",
+"\"video\":\"%016" PRIx64 "\",\"audio\":\"%016" PRIx64
+"\",\"state\":\"%016" PRIx64 "\",\"telemetry\":\"%016" PRIx64
+"\",\"width\":%u,\"height\":%u,\"audio_frames\":%u,"
+"\"fallback_reasons\":%u,\"sprites\":%u,\"audio_writes\":%u,"
+"\"events\":%u,\"different_pixels\":%u,\"false_clean\":%s,"
+"\"recompose_unavailable\":%s}\n",
     pass, frame, record->input_mask, record->video_hash, record->audio_hash,
     record->state_hash, record->telemetry_hash, record->width, record->height,
     record->audio_frames, record->fallback_reasons, record->sprite_count,
@@ -1031,7 +1050,7 @@ static int run_pass(const struct core_api *api, const void *checkpoint,
     {
       fprintf(stderr,
         "replay mismatch at frame %u: expected=%016" PRIx64
-        " actual=%016" PRIx64 "\n",
+" actual=%016" PRIx64 "\n",
         frame, expected[frame].digest, record->digest);
       if (summary) ++summary->replay_mismatches;
     }
@@ -1055,8 +1074,8 @@ static int emulation_records_equal(const struct frame_record *idle,
     {
       fprintf(stderr,
         "idle/observed emulation mismatch at frame %u: "
-        "video=%016" PRIx64 "/%016" PRIx64 " state=%016" PRIx64
-        "/%016" PRIx64 "\n",
+"video=%016" PRIx64 "/%016" PRIx64 " state=%016" PRIx64
+"/%016" PRIx64 "\n",
         frame, idle[frame].video_hash, observed[frame].video_hash,
         idle[frame].state_hash, observed[frame].state_hash);
       return 0;
@@ -1261,8 +1280,8 @@ static int compare_profiles(const char *off_core, const char *idle_core,
       if (!round_identical)
         fprintf(stderr,
           "profile round %u mismatch: off=%016" PRIx64 "/%016" PRIx64
-          "/%016" PRIx64 " idle=%016" PRIx64 "/%016" PRIx64
-          "/%016" PRIx64 "\n",
+"/%016" PRIx64 " idle=%016" PRIx64 "/%016" PRIx64
+"/%016" PRIx64 "\n",
           round, off[round].video_hash, off[round].audio_hash,
           off[round].state_hash, idle[round].video_hash,
           idle[round].audio_hash, idle[round].state_hash);
@@ -1284,17 +1303,17 @@ static int compare_profiles(const char *off_core, const char *idle_core,
   }
   fprintf(output,
     "{\"schema\":1,\"fixture\":\"generated-v1\",\"frames\":%u,"
-    "\"rounds\":%u,"
-    "\"bit_identical\":%s,\"state_hash_cross_process_compared\":false,"
-    "\"idle_overhead_percent_p50\":%.3f,"
-    "\"target_percent\":1.0,\"within_target\":%s,"
-    "\"extensions_off\":{\"p50_ns\":%.3f,\"p95_ns\":%.3f,"
-    "\"binary_bytes\":%" PRIu64 "},"
-    "\"compiled_idle\":{\"p50_ns\":%.3f,\"p95_ns\":%.3f,"
-    "\"binary_bytes\":%" PRIu64 "},"
-    "\"video_hash\":\"%016" PRIx64 "\","
-    "\"audio_hash\":\"%016" PRIx64 "\","
-    "\"state_hash\":\"%016" PRIx64 "\"}\n",
+"\"rounds\":%u,"
+"\"bit_identical\":%s,\"state_hash_cross_process_compared\":false,"
+"\"idle_overhead_percent_p50\":%.3f,"
+"\"target_percent\":1.0,\"within_target\":%s,"
+"\"extensions_off\":{\"p50_ns\":%.3f,\"p95_ns\":%.3f,"
+"\"binary_bytes\":%" PRIu64 "},"
+"\"compiled_idle\":{\"p50_ns\":%.3f,\"p95_ns\":%.3f,"
+"\"binary_bytes\":%" PRIu64 "},"
+"\"video_hash\":\"%016" PRIx64 "\","
+"\"audio_hash\":\"%016" PRIx64 "\","
+"\"state_hash\":\"%016" PRIx64 "\"}\n",
     REPLAY_FRAMES, PROFILE_ROUNDS, identical ? "true" : "false", overhead,
     overhead < 1.0 ? "true" : "false",
     off_p50[PROFILE_ROUNDS / 2u], off_p95[PROFILE_ROUNDS / 2u],
@@ -1344,14 +1363,14 @@ static int read_golden(const char *path, struct golden *golden)
   fclose(file);
   if (sscanf(buffer,
       "{\"schema\":%u,\"fixture\":\"generated-v1\",\"frames\":%u,"
-      "\"video_hash\":\"%16[0-9a-fA-F]\","
-      "\"audio_hash\":\"%16[0-9a-fA-F]\","
-      "\"state_hash\":\"%16[0-9a-fA-F]\","
-      "\"telemetry_hash\":\"%16[0-9a-fA-F]\","
-      "\"input_hash\":\"%16[0-9a-fA-F]\","
-      "\"configuration_hash\":\"%16[0-9a-fA-F]\","
-      "\"replay_hash\":\"%16[0-9a-fA-F]\","
-      "\"fallback_frames\":%u,\"false_clean_frames\":%u}",
+"\"video_hash\":\"%16[0-9a-fA-F]\","
+"\"audio_hash\":\"%16[0-9a-fA-F]\","
+"\"state_hash\":\"%16[0-9a-fA-F]\","
+"\"telemetry_hash\":\"%16[0-9a-fA-F]\","
+"\"input_hash\":\"%16[0-9a-fA-F]\","
+"\"configuration_hash\":\"%16[0-9a-fA-F]\","
+"\"replay_hash\":\"%16[0-9a-fA-F]\","
+"\"fallback_frames\":%u,\"false_clean_frames\":%u}",
       &golden->schema, &golden->frames, video, audio, state, telemetry,
       input, config, replay, &golden->fallback_frames,
       &golden->false_clean_frames) != 11)
@@ -1373,14 +1392,14 @@ static void write_summary(FILE *file, const struct replay_summary *summary)
 {
   fprintf(file,
     "{\"schema\":1,\"fixture\":\"generated-v1\",\"frames\":%u,"
-    "\"video_hash\":\"%016" PRIx64 "\","
-    "\"audio_hash\":\"%016" PRIx64 "\","
-    "\"state_hash\":\"%016" PRIx64 "\","
-    "\"telemetry_hash\":\"%016" PRIx64 "\","
-    "\"input_hash\":\"%016" PRIx64 "\","
-    "\"configuration_hash\":\"%016" PRIx64 "\","
-    "\"replay_hash\":\"%016" PRIx64 "\","
-    "\"fallback_frames\":%u,\"false_clean_frames\":%u}\n",
+"\"video_hash\":\"%016" PRIx64 "\","
+"\"audio_hash\":\"%016" PRIx64 "\","
+"\"state_hash\":\"%016" PRIx64 "\","
+"\"telemetry_hash\":\"%016" PRIx64 "\","
+"\"input_hash\":\"%016" PRIx64 "\","
+"\"configuration_hash\":\"%016" PRIx64 "\","
+"\"replay_hash\":\"%016" PRIx64 "\","
+"\"fallback_frames\":%u,\"false_clean_frames\":%u}\n",
     REPLAY_FRAMES, summary->video_hash, summary->audio_hash,
     summary->state_hash, summary->telemetry_hash, summary->input_hash,
     summary->configuration_hash, summary->replay_hash,
@@ -1418,20 +1437,20 @@ static int write_benchmark(const char *path,
   }
   fprintf(file,
     "{\"schema\":1,\"fixture\":\"generated-v1\","
-    "\"target\":\"%s\",\"compiler\":\"%s\","
-    "\"unit\":\"ns/frame\",\"warmup_frames\":%u,"
-    "\"samples\":%u,\"frame_time\":{\"min\":%.3f,\"p50\":%.3f,"
-    "\"p95\":%.3f,\"p99\":%.3f,\"max\":%.3f},"
-    "\"idle_frame_time\":{\"min\":%.3f,\"p50\":%.3f,"
-    "\"p95\":%.3f,\"p99\":%.3f,\"max\":%.3f},"
-    "\"observed_overhead_percent_p50\":%.3f,"
-    "\"memory\":{\"rom_bytes\":%u,\"serialized_state_bytes\":%zu,"
-    "\"framebuffer_peak_bytes\":%zu,\"recompose_buffer_bytes\":%zu},"
-    "\"core_binary_bytes\":%" PRIu64 ",\"events\":%" PRIu64
-    ",\"events_per_frame\":%.3f,\"fallback_frames\":%u,"
-    "\"false_clean_frames\":%u,\"replay_mismatches\":%u,"
-    "\"max_sprites\":%u,\"max_audio_writes\":%u,"
-    "\"max_audio_frames\":%u}\n",
+"\"target\":\"%s\",\"compiler\":\"%s\","
+"\"unit\":\"ns/frame\",\"warmup_frames\":%u,"
+"\"samples\":%u,\"frame_time\":{\"min\":%.3f,\"p50\":%.3f,"
+"\"p95\":%.3f,\"p99\":%.3f,\"max\":%.3f},"
+"\"idle_frame_time\":{\"min\":%.3f,\"p50\":%.3f,"
+"\"p95\":%.3f,\"p99\":%.3f,\"max\":%.3f},"
+"\"observed_overhead_percent_p50\":%.3f,"
+"\"memory\":{\"rom_bytes\":%u,\"serialized_state_bytes\":%zu,"
+"\"framebuffer_peak_bytes\":%zu,\"recompose_buffer_bytes\":%zu},"
+"\"core_binary_bytes\":%" PRIu64 ",\"events\":%" PRIu64
+",\"events_per_frame\":%.3f,\"fallback_frames\":%u,"
+"\"false_clean_frames\":%u,\"replay_mismatches\":%u,"
+"\"max_sprites\":%u,\"max_audio_writes\":%u,"
+"\"max_audio_frames\":%u}\n",
     target_name(), compiler_name(),
     BOOTSTRAP_FRAMES + (2u * REPLAY_FRAMES), REPLAY_FRAMES,
     observed_stats->minimum, observed_stats->p50,
@@ -1455,8 +1474,8 @@ static void usage(const char *program)
 {
   fprintf(stderr,
     "usage: %s CORE GOLDEN_JSON ACTUAL_JSON FRAME_REPORT_JSONL "
-    "BENCHMARK_JSON\n"
-    "       %s --compare-profiles OFF_CORE IDLE_CORE OUTPUT_JSON\n",
+"BENCHMARK_JSON\n"
+"       %s --compare-profiles OFF_CORE IDLE_CORE OUTPUT_JSON\n",
     program, program);
 }
 

@@ -55,6 +55,10 @@ struct core_api
   size_t (*serialize_size)(void);
   bool (*serialize)(void *data, size_t size);
   bool (*unserialize)(const void *data, size_t size);
+  /* #33: la superficie legacy de memoria no tenia ni un test, empezando por
+     RETRO_MEMORY_VIDEO_RAM, que es el delta que da nombre a esta rama. */
+  void *(*get_memory_data)(unsigned id);
+  size_t (*get_memory_size)(unsigned id);
   ayther_get_interface_fn get_ayther_interface;
   const ayther_interface_v1 *ayther;
   /* #32: se resuelve por el DESCRIPTOR (ABI 1.2). Cuando salia del export
@@ -426,7 +430,9 @@ static int load_api(library_t library, struct core_api *api,
         LOAD_API(api, library, run, "retro_run") &&
         LOAD_API(api, library, serialize_size, "retro_serialize_size") &&
         LOAD_API(api, library, serialize, "retro_serialize") &&
-        LOAD_API(api, library, unserialize, "retro_unserialize")))
+        LOAD_API(api, library, unserialize, "retro_unserialize") &&
+        LOAD_API(api, library, get_memory_data, "retro_get_memory_data") &&
+        LOAD_API(api, library, get_memory_size, "retro_get_memory_size")))
     return 0;
 
   if (!require_ayther)
@@ -895,6 +901,239 @@ static int check_raster_journal_accounting(const struct core_api *api)
           delta.raster_event_count, (unsigned)AYTHER_RASTER_JOURNAL_MAX,
           delta.raster_events_dropped);
   return 1;
+}
+
+/* #33: la superficie de memoria legacy no tenia cobertura.
+ *
+ * Empezando por `RETRO_MEMORY_VIDEO_RAM`, que es el delta que da nombre a esta
+ * rama: upstream devuelve NULL y el fork expone los 64 KB de VRAM. Que ese
+ * puntero siga siendo valido y del mismo tamano DESPUES de un reset o de cargar
+ * un savestate es justo lo que un frontend asume sin poder verificarlo -lo
+ * cachea una vez al cargar el core- y lo que nadie estaba comprobando.
+ *
+ * La estabilidad del puntero importa mas de lo que parece: si `retro_reset`
+ * reasignara los buffers, el frontend seguiria leyendo memoria liberada y el
+ * sintoma serian graficos corruptos intermitentes, lejos de la causa. */
+static int check_memory_regions(const struct core_api *api,
+                                const void *checkpoint, size_t state_size)
+{
+  static const struct { unsigned id; size_t size; const char *name; } expected[] = {
+    { RETRO_MEMORY_VIDEO_RAM,                  0x10000, "VIDEO_RAM (vram)" },
+    { AYTHER_LEGACY_MEMORY_CRAM,               0x80,    "CRAM" },
+    { AYTHER_LEGACY_MEMORY_VDP_REGS,           0x20,    "VDP regs" },
+    { AYTHER_LEGACY_MEMORY_VSRAM,              0x80,    "VSRAM" },
+    { AYTHER_LEGACY_MEMORY_LAYER_MASK,         1,       "layer mask" },
+    { AYTHER_LEGACY_MEMORY_SPRITE_SUPPRESS,    16,      "sprite suppress" },
+    { AYTHER_LEGACY_MEMORY_TILE_SUPPRESS,      512,     "tile suppress" },
+    { AYTHER_LEGACY_MEMORY_PLANE_TILE_SUPPRESS, 3 * 1024, "plane tile suppress" },
+    { AYTHER_LEGACY_MEMORY_PLANE_SUPPRESS_ACTIVE, 1,   "plane suppress active" },
+    { AYTHER_LEGACY_MEMORY_LAYER_DIM,          1,       "layer dim" },
+    { AYTHER_LEGACY_MEMORY_RASTER_DIRTY,       4,       "raster reasons" }
+  };
+  void *before[sizeof(expected) / sizeof(expected[0])];
+  size_t i;
+  int ok = 1;
+
+  for (i = 0; i < sizeof(expected) / sizeof(expected[0]); ++i)
+  {
+    before[i] = api->get_memory_data(expected[i].id);
+    if (!before[i])
+    {
+      fprintf(stderr, "memory regions: %s is NULL\n", expected[i].name);
+      ok = 0;
+      continue;
+    }
+    if (api->get_memory_size(expected[i].id) != expected[i].size)
+    {
+      fprintf(stderr, "memory regions: %s is %u bytes, expected %u\n",
+              expected[i].name,
+              (unsigned)api->get_memory_size(expected[i].id),
+              (unsigned)expected[i].size);
+      ok = 0;
+    }
+  }
+
+  /* Un id que el core no conoce tiene que devolver NULL y tamano 0, no un
+     puntero a cualquier cosa. */
+  if (api->get_memory_data(0x1FF) != NULL ||
+      api->get_memory_size(0x1FF) != 0)
+  {
+    fprintf(stderr, "memory regions: an unknown id returned a mapping\n");
+    ok = 0;
+  }
+
+  /* Estabilidad a traves de reset y de unserialize. */
+  api->reset();
+  for (i = 0; i < sizeof(expected) / sizeof(expected[0]); ++i)
+  {
+    if (before[i] && api->get_memory_data(expected[i].id) != before[i])
+    {
+      fprintf(stderr, "memory regions: %s moved across retro_reset\n",
+              expected[i].name);
+      ok = 0;
+    }
+  }
+  if (!api->unserialize(checkpoint, state_size))
+  {
+    fprintf(stderr, "memory regions: could not restore the checkpoint\n");
+    return 0;
+  }
+  for (i = 0; i < sizeof(expected) / sizeof(expected[0]); ++i)
+  {
+    if (before[i] && api->get_memory_data(expected[i].id) != before[i])
+    {
+      fprintf(stderr, "memory regions: %s moved across retro_unserialize\n",
+              expected[i].name);
+      ok = 0;
+    }
+  }
+
+  /* El puntero legacy de VRAM y la region de la ABI tienen que ver lo mismo:
+     son dos ventanas a la misma memoria, y si divergieran el Lab mostraria una
+     cosa y el motor HD usaria otra. */
+  {
+    static uint8_t via_abi[0x10000];
+    const uint8_t *via_legacy = (const uint8_t *)before[0];
+    if (via_legacy &&
+        api->ayther->read_region(AYTHER_REGION_VRAM, 0, via_abi,
+          sizeof(via_abi), AYTHER_GENERATION_ANY, NULL) == AYTHER_STATUS_OK &&
+        memcmp(via_abi, via_legacy, sizeof(via_abi)) != 0)
+    {
+      fprintf(stderr, "memory regions: legacy VRAM and the ABI region differ\n");
+      ok = 0;
+    }
+  }
+  return ok;
+}
+
+/* #33: ida y vuelta del savestate.
+ *
+ * El replay ya prueba que restaurar y re-simular da los mismos hashes, pero eso
+ * no cubre que el estado SERIALIZADO sea estable: un campo sin inicializar o
+ * padding sin limpiar produce dos volcados distintos del mismo estado, y el
+ * sintoma no aparece hasta que alguien compara savestates o los versiona. */
+static int check_savestate_roundtrip(const struct core_api *api,
+                                     size_t state_size)
+{
+  uint8_t *first = (uint8_t *)malloc(state_size);
+  uint8_t *second = (uint8_t *)malloc(state_size);
+  int ok = 1;
+
+  if (!first || !second)
+  {
+    free(first); free(second);
+    fprintf(stderr, "savestate: out of memory\n");
+    return 0;
+  }
+
+  /* Primero: cuanto escribe realmente el core de lo que declara.
+     `retro_serialize_size` devuelve una COTA, no el tamano exacto, asi que el
+     resto del buffer queda como lo dejo quien lo asigno. Se mide llenando con
+     dos patrones distintos y viendo hasta donde el core los piso. No es un
+     fallo -es la semantica de libretro- pero significa que el archivo que el
+     frontend guarda lleva una cola no inicializada, y por lo tanto que dos
+     savestates del mismo estado no son iguales byte a byte. Vale la pena verlo
+     escrito en vez de descubrirlo comparando archivos. */
+  {
+    size_t written_a = 0, written_b = 0, at;
+    memset(first, 0x00, state_size);
+    memset(second, 0xFF, state_size);
+    if (api->serialize(first, state_size) && api->serialize(second, state_size))
+    {
+      for (at = state_size; at > 0; --at)
+        if (first[at - 1] != 0x00) { written_a = at; break; }
+      for (at = state_size; at > 0; --at)
+        if (second[at - 1] != 0xFF) { written_b = at; break; }
+      if (written_a > state_size || written_b > state_size)
+      {
+        fprintf(stderr, "savestate: the core wrote past the declared size\n");
+        ok = 0;
+      }
+      fprintf(stderr,
+              "savestate: %u of %u declared bytes are written (%.1f%%)\n",
+              (unsigned)(written_a > written_b ? written_a : written_b),
+              (unsigned)state_size,
+              100.0 * (double)(written_a > written_b ? written_a : written_b) /
+                (double)state_size);
+    }
+  }
+
+  /* Ahora si, la propiedad que importa: los bytes que el core SI escribe tienen
+     que ser los mismos para el mismo estado. Ambos buffers arrancan iguales,
+     asi que cualquier diferencia viene del core y no de la cola sin tocar. */
+  memset(first, 0x00, state_size);
+  memset(second, 0x00, state_size);
+
+  if (!api->serialize(first, state_size) ||
+      !api->unserialize(first, state_size) ||
+      !api->serialize(second, state_size))
+  {
+    fprintf(stderr, "savestate: serialize/unserialize round trip failed\n");
+    ok = 0;
+  }
+  else if (memcmp(first, second, state_size) != 0)
+  {
+    /* El rango y la cantidad, no solo el primer byte: un puntero suelto son 8
+       bytes contiguos y una estructura con padding son islas dispersas, y la
+       diferencia entre esos dos casos es la mitad del diagnostico. */
+    size_t at, lo = state_size, hi = 0, count = 0;
+    for (at = 0; at < state_size; ++at)
+    {
+      if (first[at] != second[at])
+      {
+        if (at < lo) lo = at;
+        hi = at;
+        ++count;
+      }
+    }
+    fprintf(stderr,
+            "savestate: save->load->save differs in %u bytes, "
+            "offsets %u..%u of %u\n",
+            (unsigned)count, (unsigned)lo, (unsigned)hi,
+            (unsigned)state_size);
+    for (at = lo; at <= hi && at < lo + 32; ++at)
+      fprintf(stderr, "  [%u] %02x -> %02x%s\n", (unsigned)at,
+              first[at], second[at],
+              first[at] == second[at] ? " (igual)" : "");
+    ok = 0;
+  }
+
+  if (api->serialize_size() != state_size)
+  {
+    fprintf(stderr, "savestate: serialize_size changed between frames\n");
+    ok = 0;
+  }
+  /* Un buffer mas chico tiene que ser rechazado, no truncado en silencio. */
+  if (state_size > 1 && api->serialize(first, state_size - 1))
+  {
+    fprintf(stderr, "savestate: serialize accepted an undersized buffer\n");
+    ok = 0;
+  }
+  if (state_size > 1 && api->unserialize(first, state_size - 1))
+  {
+    fprintf(stderr, "savestate: unserialize accepted a truncated state\n");
+    ok = 0;
+  }
+  /* Y un estado con la cabecera rota tampoco puede pasar por bueno. */
+  {
+    uint8_t saved = first[0];
+    first[0] = (uint8_t)~saved;
+    if (api->unserialize(first, state_size))
+    {
+      fprintf(stderr, "savestate: unserialize accepted a corrupted header\n");
+      ok = 0;
+    }
+    first[0] = saved;
+    if (!api->unserialize(first, state_size))
+    {
+      fprintf(stderr, "savestate: could not restore after the corruption probe\n");
+      ok = 0;
+    }
+  }
+
+  free(first);
+  free(second);
+  return ok;
 }
 
 static uint64_t frame_digest(const struct frame_record *record)
@@ -1688,7 +1927,9 @@ int main(int argc, char **argv)
      positivo dificil de leer. Aca no puede contaminar nada. */
   if (!check_recompose_control_cache(&api) ||
       !check_raster_replay_isolation(&api, recomposed) ||
-      !check_raster_journal_accounting(&api))
+      !check_raster_journal_accounting(&api) ||
+      !check_savestate_roundtrip(&api, state_size) ||
+      !check_memory_regions(&api, checkpoint, state_size))
     goto cleanup;
 
   actual = fopen(argv[3], "wb");

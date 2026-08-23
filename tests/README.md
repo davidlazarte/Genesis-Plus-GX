@@ -193,3 +193,35 @@ The Linux and Windows goldens still differ. `tests/ci/first_divergence.sh
 and subsystem** where two runs part ways, so the diagnosis starts from a
 location instead of from an aggregate hash. Download the other platform's
 `*.frames.jsonl` artifact and point the script at both.
+
+## Coverage added for the previously untested surfaces (#33)
+
+Three areas had no direct test and were only covered incidentally, if at all.
+
+**Legacy memory ids** (`check_memory_regions` in `full_core_replay.c`). Starting
+with `RETRO_MEMORY_VIDEO_RAM` — the delta this branch is named after — every id
+is checked for size, non-NULL, and **pointer stability across `retro_reset` and
+`retro_unserialize`**. A frontend caches those pointers once at load; if a reset
+reallocated the buffers it would keep reading freed memory, and the symptom
+would be intermittent graphical corruption far from the cause. The legacy VRAM
+pointer is also compared against the ABI region, since they are two windows onto
+the same memory.
+
+**Savestate round trip** (`check_savestate_roundtrip`). `save → load → save` must
+be byte-identical for the bytes the core writes; truncated buffers and corrupted
+headers must be rejected rather than silently accepted. Note the measurement it
+prints: **the core writes ~144 KB of the ~1,036 KB that `retro_serialize_size`
+declares (14%)**. That is libretro semantics — the size is an upper bound — but
+it means the tail of a saved file is whatever the frontend's buffer happened to
+contain, so two savestates of the same state are not byte-equal on disk.
+
+**A real ABI 1.0 client** (`tests/ci/abi_compat_1_0.c`). `test_ayther_api.c`
+freezes offsets against the *current* header, which catches a reordering but
+cannot answer whether an already-compiled frontend still works. This one does
+not include `ayther_api.h` at all: it transcribes the 1.0 prefix with its own
+types and uses it, the way a consumer from that era would.
+
+`HOOK_CPU=1` also joined the Linux matrix. It had not been built in CI, and it
+had been broken for a while: `cpuhook.h` *defined* `cpu_hook` instead of
+declaring it, which only linked under `-fcommon` (the default up to gcc 9 /
+clang 10).

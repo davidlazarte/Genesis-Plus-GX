@@ -86,6 +86,16 @@ jobs:
             ayther_extensions: 1
             sound_probe: 1
             legacy_profile: 1
+          # #33: HOOK_CPU nunca se compilaba en CI, y por eso llevaba tiempo
+          # roto: cpuhook.h definia `cpu_hook` en vez de declararlo, lo cual
+          # solo linkeaba con -fcommon (default hasta gcc 9 / clang 10).
+          - compiler: clang
+            cc: clang
+            cxx: clang++
+            ayther_extensions: 1
+            sound_probe: 1
+            legacy_profile: 0
+            hook_cpu: 1
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -100,7 +110,8 @@ jobs:
           make -f Makefile.libretro platform=unix
           AYTHER_EXTENSIONS=${{ matrix.ayther_extensions }}
           AYTHER_LEGACY_PROFILE=${{ matrix.legacy_profile }}
-          SOUND_PROBE=${{ matrix.sound_probe }} -j2
+          SOUND_PROBE=${{ matrix.sound_probe }}
+          HOOK_CPU=${{ matrix.hook_cpu || 0 }} -j2
 
       - name: Verify shared-library exports
         shell: bash
@@ -148,6 +159,13 @@ jobs:
           else
             ayther-artifacts/verify_ayther_api \
               "$(pwd)/genesis_plus_gx_libretro.so"
+          fi
+          # #33: un cliente compilado contra 1.0, que no conoce 1.1 ni 1.2.
+          # Congelar offsets contra el header actual detecta un reordenamiento
+          # pero no contesta si un frontend ya compilado sigue funcionando.
+          if [[ "$AYTHER_EXTENSIONS" == "1" ]]; then
+            "$CC" -O2 -Wall -Wextra -o ayther-artifacts/abi_compat_1_0 tests/ci/abi_compat_1_0.c -ldl
+            ayther-artifacts/abi_compat_1_0 "$(pwd)/genesis_plus_gx_libretro.so"
           fi
           "$CC" -shared -fPIC -o ayther-artifacts/mock_stock_core.so \
             tests/ci/mock_stock_core.c

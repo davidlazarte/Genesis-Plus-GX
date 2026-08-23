@@ -142,6 +142,22 @@ if ($LASTEXITCODE -ne 0) {
     throw 'The AYTHER ABI negotiation/compatibility verification failed.'
 }
 
+# #33: un cliente compilado contra ABI 1.0, que no conoce 1.1 ni 1.2. Congelar
+# offsets contra el header actual detecta un reordenamiento, pero no contesta la
+# pregunta que importa: ¿un frontend ya compilado sigue funcionando?
+if ($AytherExtensions -eq 1) {
+    $compatSource = Join-Path $repositoryRoot 'tests\ci\abi_compat_1_0.c'
+    $compatBinary = Join-Path $artifactRoot 'abi_compat_1_0.exe'
+    & $Compiler -O2 -Wall -Wextra -o $compatBinary $compatSource
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Failed to build the ABI 1.0 compatibility client.'
+    }
+    & $compatBinary $dll
+    if ($LASTEXITCODE -ne 0) {
+        throw 'A 1.0 client can no longer use this core.'
+    }
+}
+
 $mockSource = Join-Path $repositoryRoot 'tests\ci\mock_stock_core.c'
 $mockCore = Join-Path $artifactRoot 'mock_stock_core.dll'
 & $Compiler -shared -o $mockCore $mockSource

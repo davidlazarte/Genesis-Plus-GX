@@ -79,8 +79,16 @@ typedef enum {
 
 
 /* CPU hook is called on read, write, and execute.
+ *
+ * AYTHER (#33): `extern`. Sin el, esto es una definicion TENTATIVA en un header
+ * y cada unidad que lo incluye define el simbolo. Con -fcommon -el default de
+ * gcc hasta la 9 y de clang hasta la 10- el linker las fusionaba; con
+ * -fno-common, que es el default desde entonces, HOOK_CPU=1 no linkea:
+ * "duplicate symbol: cpu_hook". La definicion real vive en cpuhook.c.
+ *
+ * Estuvo roto sin que nadie lo notara porque HOOK_CPU no se compilaba en CI.
  */
-void (*cpu_hook)(hook_type_t type, int width, unsigned int address, unsigned int value);
+extern void (*cpu_hook)(hook_type_t type, int width, unsigned int address, unsigned int value);
 
 /* Use set_cpu_hook() to assign a callback that can process the data provided
  * by cpu_hook().

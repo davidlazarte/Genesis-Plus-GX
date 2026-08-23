@@ -162,17 +162,25 @@ covered everything except `vdp_render.c`, `vdp_ctrl.c`, `ym2612.c` and
 `libretro.c` — which is where the fork lives.
 
 ```sh
-# Linux (ASan + UBSan)
+# Linux
 make -B -f Makefile.libretro platform=unix SOUND_PROBE=1 \
-  CC="clang -fsanitize=address,undefined -fno-omit-frame-pointer -g" -j2
+  CC="clang -fsanitize=undefined -static-libsan -fno-omit-frame-pointer -g" -j2
 make -C tests full-core-replay CC=clang
 bash tests/ci/run_sanitizers.sh "$(pwd)/genesis_plus_gx_libretro.so"
 
-# Windows llvm-mingw: UBSan only (no ASan runtime ships with the toolchain)
+# Windows llvm-mingw (the toolchain ships no ASan runtime)
 make -f Makefile.libretro platform=win64 SOUND_PROBE=1 \
   CC="cc -fsanitize=undefined -fno-omit-frame-pointer" -j8
 bash tests/ci/run_sanitizers.sh genesis_plus_gx_libretro.dll
 ```
+
+**UBSan and not ASan**, on both platforms. The core is built as a shared library
+with `-Wl,--no-undefined`, and ASan's runtime does not link into one: it is
+expected in the executable that loads it, so you get undefined references to
+`__asan_report_*`. Making it work would mean building the harness with ASan too
+and preloading the runtime. `-static-libsan` puts UBSan's runtime inside the
+`.so`, and UBSan is what found everything this section documents. ASan over the
+full core is tracked in #45; over the stub-built tests it already runs.
 
 Do **not** build with `-fno-sanitize-recover=all`: it traps on the first report,
 which defeats `halt_on_error=0` and gives one finding per run instead of the

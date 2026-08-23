@@ -715,6 +715,51 @@ static int ayther_peel_vx     = 0;   /* desplazamiento del borde izquierdo (view
 #define AYTHER_RC_NOLIMIT_ACTIVE ayther_rc_nolimit
 #define AYTHER_RC_NOMASK_ACTIVE ayther_rc_nomask
 
+/* Huella de TODO lo que el frontend puede cambiar sin correr un frame (#26).
+ *
+ * El cache de recomposición se indexaba por (generación de frame, flags,
+ * layer_mask). Las otras regiones de control —supresión de sprites, celdas,
+ * tiles de plano, dim— también cambian los píxeles que produce el recompositor,
+ * y no estaban en la clave: escribir una de ellas entre dos recomposiciones del
+ * MISMO frame devolvía la imagen vieja. Silencioso, y peor en el Lab que en
+ * ningún lado, porque ahí la secuencia normal es exactamente esa: el emulador
+ * pausado y la UI cambiando máscaras sobre un frame fijo.
+ *
+ * Es una huella de CONTENIDO y no un contador porque los ids privados 0x102-0x108
+ * siguen entregando punteros mutables por `retro_get_memory_data`: un consumidor
+ * legacy escribe la máscara sin pasar por `write_control`, así que no hay hook
+ * donde incrementar nada. Lo único que ve las dos rutas es el contenido.
+ *
+ * Entra también la máscara de suscripción, porque los controles sólo tienen
+ * efecto cuando RENDER_CONTROLS está activa: suscribir o desuscribir cambia el
+ * frame recompuesto sin tocar un solo byte de las máscaras.
+ *
+ * Costo: FNV-1a sobre ~3,6 KB. Es menos de lo que cuesta el memcpy de 150 KB que
+ * este mismo cache hace en un acierto, así que no cambia el balance de tenerlo. */
+uint64_t ayther_controls_fingerprint(void)
+{
+  uint64_t h = UINT64_C(0xCBF29CE484222325);
+  size_t i;
+
+#define AYTHER_FP_BYTE(b) \
+  do { h ^= (uint64_t)(uint8)(b); h *= UINT64_C(0x100000001B3); } while (0)
+#define AYTHER_FP_BUF(p, n) \
+  do { for (i = 0; i < (size_t)(n); ++i) AYTHER_FP_BYTE(((const uint8 *)(p))[i]); } while (0)
+
+  AYTHER_FP_BYTE(AYTHER_CONTROLS_ACTIVE ? 1 : 0);
+  AYTHER_FP_BYTE(ayther_layer_mask);
+  AYTHER_FP_BYTE(ayther_layer_dim);
+  AYTHER_FP_BYTE(ayther_plane_suppress_active);
+  AYTHER_FP_BUF(ayther_sprite_suppress, sizeof(ayther_sprite_suppress));
+  AYTHER_FP_BUF(ayther_tile_suppress, sizeof(ayther_tile_suppress));
+  AYTHER_FP_BUF(ayther_plane_tile_suppress, sizeof(ayther_plane_tile_suppress));
+
+#undef AYTHER_FP_BUF
+#undef AYTHER_FP_BYTE
+
+  return h;
+}
+
 #else
 
 #define AYTHER_CONTROLS_ACTIVE 0

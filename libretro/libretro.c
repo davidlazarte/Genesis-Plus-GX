@@ -4352,7 +4352,7 @@ static int32_t AYTHER_CALL ayther_set_subscriptions_v1(
 }
 
 static const char ayther_build_id[] =
-   "Genesis Plus GX AYTHER ABI 1.0; core v1.7.4" GIT_VERSION;
+   "Genesis Plus GX AYTHER ABI 1.1; core v1.7.4" GIT_VERSION;
 
 #if defined(LSB_FIRST) || defined(_WIN32) || defined(__LITTLE_ENDIAN__)
 #define AYTHER_HOST_ENDIANNESS AYTHER_ENDIAN_LITTLE
@@ -4399,16 +4399,35 @@ static int32_t AYTHER_CALL ayther_poll_frame_delta_v1(
    return AYTHER_STATUS_OK;
 }
 
+static int32_t AYTHER_CALL ayther_get_recompose_stats_v1(
+      ayther_recompose_stats_v1 *out, uint32_t out_size)
+{
+   if (!out)
+      return AYTHER_STATUS_INVALID_ARGUMENT;
+   if (out_size < sizeof(*out))
+      return AYTHER_STATUS_BUFFER_TOO_SMALL;
+
+   memset(out, 0, sizeof(*out));
+   out->struct_size = sizeof(*out);
+   out->single_calls = ayther_rc_stat_single_calls;
+   out->single_hits = ayther_rc_stat_single_hits;
+   out->multilayer_calls = ayther_rc_stat_multi_calls;
+   out->multilayer_hits = ayther_rc_stat_multi_hits;
+   out->controls_fingerprint = ayther_controls_fingerprint();
+   return AYTHER_STATUS_OK;
+}
+
 static const ayther_interface_v1 ayther_interface_1 =
 {
-   AYTHER_ABI_VERSION_1_0,
+   AYTHER_ABI_VERSION_1_1,
    sizeof(ayther_interface_v1),
    AYTHER_CAP_LEGACY_MEMORY | AYTHER_CAP_REGION_QUERY |
       AYTHER_CAP_REGION_READ | AYTHER_CAP_CONTROL_WRITE |
       AYTHER_CAP_FRAME_SNAPSHOT | AYTHER_CAP_PARSED_SPRITES_V1 |
       AYTHER_CAP_AUDIO_WRITES_V1 | AYTHER_CAP_RASTER_FALLBACK_V1 |
       AYTHER_CAP_RECOMPOSE_V1 | AYTHER_CAP_SUBSCRIPTIONS_V1 |
-      AYTHER_CAP_FRAME_DELTA_V1 | AYTHER_AUDIO_PROBE_CAPABILITY,
+      AYTHER_CAP_FRAME_DELTA_V1 | AYTHER_CAP_RECOMPOSE_STATS_V1 |
+      AYTHER_AUDIO_PROBE_CAPABILITY,
    AYTHER_HOST_ENDIANNESS,
    sizeof(void *),
    sizeof(ayther_region_info_v1),
@@ -4432,14 +4451,27 @@ static const ayther_interface_v1 ayther_interface_1 =
    ayther_get_subscriptions_v1,
    ayther_set_subscriptions_v1,
    sizeof(ayther_frame_delta_v1),
-   ayther_poll_frame_delta_v1
+   ayther_poll_frame_delta_v1,
+   sizeof(ayther_recompose_stats_v1),
+   0,
+   ayther_get_recompose_stats_v1
 };
 
 AYTHER_API const ayther_interface_v1 *AYTHER_CALL ayther_get_interface(
       uint32_t requested_version)
 {
-   if ((requested_version == 0) ||
-       (requested_version == AYTHER_ABI_VERSION_1_0))
+   /* Un pedido de 1.0 recibe este mismo descriptor 1.1: los campos de 1.0 están
+      en las mismas posiciones y `struct_size` le dice al cliente viejo dónde
+      termina lo que él conoce. Rechazar el pedido de 1.0 rompería a los
+      consumidores existentes sin ninguna ganancia. Lo que NO se acepta es un
+      minor mayor al que este core implementa: ahí el cliente pide campos que no
+      existen y devolver algo sería mentir. */
+   if (requested_version == 0)
+      return &ayther_interface_1;
+   if ((AYTHER_ABI_VERSION_MAJOR(requested_version) ==
+        AYTHER_ABI_VERSION_MAJOR(AYTHER_ABI_VERSION_LATEST)) &&
+       (AYTHER_ABI_VERSION_MINOR(requested_version) <=
+        AYTHER_ABI_VERSION_MINOR(AYTHER_ABI_VERSION_LATEST)))
       return &ayther_interface_1;
    return NULL;
 }

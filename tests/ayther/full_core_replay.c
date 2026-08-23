@@ -561,6 +561,168 @@ static uint32_t compare_recomposition(const struct core_api *api,
   return different;
 }
 
+/* #26: el cache de recomposicion tiene que estar indexado tambien por el
+ * contenido de las regiones de control.
+ *
+ * El defecto que cubre: escribir una mascara entre dos recomposiciones del
+ * MISMO frame devolvia la imagen anterior, porque la clave era solo
+ * (generacion de frame, flags, layer_mask). El Lab hace exactamente esa
+ * secuencia con el emulador pausado, asi que el bug se veia como "la UI no
+ * responde" sin ningun error.
+ *
+ * La prueba alterna A -> B -> A -> A sobre un frame fijo:
+ *   - B tiene que dar pixeles distintos de A   (con el bug, daba los de A);
+ *   - el segundo A tiene que reproducir el primero bit a bit (fallo, porque
+ *     el cache quedo con B) — que el resultado dependa SOLO del estado y no
+ *     del orden de las llamadas;
+ *   - el tercer A tiene que ser ACIERTO de cache y byte-identico, para que
+ *     arreglar la correccion no equivalga a apagar el cache.
+ * Se afirma sobre los contadores y no sobre tiempos: cronometrar en un runner
+ * compartido mide ruido, no el mecanismo. */
+static int recompose_probe(const struct core_api *api, uint16_t *out,
+                           uint32_t *pixels)
+{
+  uint32_t width = 0;
+  uint32_t height = 0;
+  if (api->ayther->recompose_frame(out, MAX_RECOMPOSE_PIXELS, 0,
+                                   &width, &height) != AYTHER_STATUS_OK)
+    return 0;
+  *pixels = width * height;
+  return *pixels != 0;
+}
+
+static int recompose_stats(const struct core_api *api,
+                           ayther_recompose_stats_v1 *out)
+{
+  memset(out, 0, sizeof(*out));
+  out->struct_size = sizeof(*out);
+  return api->ayther->get_recompose_stats(out, sizeof(*out)) ==
+         AYTHER_STATUS_OK;
+}
+
+static int check_recompose_control_cache(const struct core_api *api)
+{
+  /* Un control por caso: el valor "activo" y el neutro al que se vuelve. La
+     lista arranca con layer_dim porque atenua TODO pixel que no sea sprite:
+     cualquier frame con algo dibujado cambia, asi que el caso no depende de
+     que la ROM sintetica tenga sprites o tiles en un lugar concreto. */
+  static const struct {
+    const char *name;
+    uint32_t region;
+    uint32_t offset;
+    uint8_t active;
+  } cases[] = {
+    { "layer_dim",            AYTHER_REGION_LAYER_DIM,       0, 1 },
+    { "sprite_suppress",      AYTHER_REGION_SPRITE_SUPPRESS, 0, 0xFF },
+    { "tile_suppress",        AYTHER_REGION_TILE_SUPPRESS,   0, 0xFF },
+    { "plane_tile_suppress",  AYTHER_REGION_PLANE_TILE_SUPPRESS, 0, 0xFF }
+  };
+  static uint16_t px_a1[MAX_RECOMPOSE_PIXELS];
+  static uint16_t px_b[MAX_RECOMPOSE_PIXELS];
+  static uint16_t px_a2[MAX_RECOMPOSE_PIXELS];
+  static uint16_t px_a3[MAX_RECOMPOSE_PIXELS];
+  const uint8_t neutral = 0;
+  size_t c;
+  int ok = 1;
+
+  if (!api->ayther->get_recompose_stats)
+  {
+    fprintf(stderr, "core lacks get_recompose_stats (ABI 1.1)\n");
+    return 0;
+  }
+
+  for (c = 0; c < sizeof(cases) / sizeof(cases[0]); ++c)
+  {
+    ayther_recompose_stats_v1 s0, s1, s2, s3;
+    uint32_t n_a1 = 0, n_b = 0, n_a2 = 0, n_a3 = 0;
+    uint32_t changed;
+
+    if (!recompose_probe(api, px_a1, &n_a1) || !recompose_stats(api, &s0))
+    {
+      fprintf(stderr, "recompose cache: baseline failed (%s)\n",
+              cases[c].name);
+      return 0;
+    }
+
+    if (api->ayther->write_control(cases[c].region, cases[c].offset,
+          &cases[c].active, 1, AYTHER_GENERATION_ANY, NULL) !=
+        AYTHER_STATUS_OK)
+    {
+      fprintf(stderr, "recompose cache: write_control failed (%s)\n",
+              cases[c].name);
+      return 0;
+    }
+    if (!recompose_probe(api, px_b, &n_b) || !recompose_stats(api, &s1))
+      return 0;
+
+    if (s1.controls_fingerprint == s0.controls_fingerprint)
+    {
+      fprintf(stderr, "recompose cache: fingerprint ignored %s\n",
+              cases[c].name);
+      ok = 0;
+    }
+    if (s1.single_hits != s0.single_hits)
+    {
+      fprintf(stderr, "recompose cache: stale hit after writing %s\n",
+              cases[c].name);
+      ok = 0;
+    }
+
+    /* Volver al estado neutro y recomponer: tiene que reproducir el primer
+       resultado exactamente. Aca es donde el bug original se manifestaba al
+       reves (el cache seguia sirviendo B). */
+    if (api->ayther->write_control(cases[c].region, cases[c].offset,
+          &neutral, 1, AYTHER_GENERATION_ANY, NULL) != AYTHER_STATUS_OK)
+      return 0;
+    if (!recompose_probe(api, px_a2, &n_a2) || !recompose_stats(api, &s2))
+      return 0;
+    if (n_a2 != n_a1 || memcmp(px_a1, px_a2, n_a1 * sizeof(uint16_t)) != 0)
+    {
+      fprintf(stderr,
+              "recompose cache: result depends on call order (%s)\n",
+              cases[c].name);
+      ok = 0;
+    }
+
+    /* Sin cambios: ahora SI tiene que ser acierto, y byte-identico. */
+    if (!recompose_probe(api, px_a3, &n_a3) || !recompose_stats(api, &s3))
+      return 0;
+    if (s3.single_hits != s2.single_hits + 1)
+    {
+      fprintf(stderr, "recompose cache: no hit for unchanged state (%s)\n",
+              cases[c].name);
+      ok = 0;
+    }
+    if (n_a3 != n_a1 || memcmp(px_a1, px_a3, n_a1 * sizeof(uint16_t)) != 0)
+    {
+      fprintf(stderr, "recompose cache: hit served wrong pixels (%s)\n",
+              cases[c].name);
+      ok = 0;
+    }
+
+    changed = 0;
+    if (n_b == n_a1)
+    {
+      uint32_t i;
+      for (i = 0; i < n_a1; ++i)
+        changed += px_b[i] != px_a1[i];
+    }
+    /* layer_dim es el unico caso con efecto garantizado sobre cualquier frame
+       no vacio; los demas dependen de donde caiga el contenido de la ROM, asi
+       que su valor esta en las afirmaciones de arriba (huella, fallo, orden). */
+    if (c == 0 && changed == 0)
+    {
+      fprintf(stderr,
+              "recompose cache: %s did not change any pixel\n",
+              cases[c].name);
+      ok = 0;
+    }
+    if (!ok)
+      return 0;
+  }
+  return 1;
+}
+
 static uint64_t frame_digest(const struct frame_record *record)
 {
   uint64_t hash = FNV_OFFSET;
@@ -1345,6 +1507,12 @@ int main(int argc, char **argv)
       !run_pass(&api, checkpoint, state_size, state_buffer, recomposed,
                 replay, reference, observed_timings, report, "replay-2",
                 &summary, 1))
+    goto cleanup;
+
+  /* Va DESPUES de los pases hasheados: escribe regiones de control, y aunque
+     las deja neutras, cualquier efecto suyo sobre los hashes seria un falso
+     positivo dificil de leer. Aca no puede contaminar nada. */
+  if (!check_recompose_control_cache(&api))
     goto cleanup;
 
   actual = fopen(argv[3], "wb");

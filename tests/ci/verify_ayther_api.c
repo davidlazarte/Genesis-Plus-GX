@@ -152,8 +152,24 @@ int main(int argc, char **argv)
       AYTHER_CAP_FRAME_SNAPSHOT | AYTHER_CAP_PARSED_SPRITES_V1 |
       AYTHER_CAP_AUDIO_WRITES_V1 | AYTHER_CAP_RASTER_FALLBACK_V1 |
       AYTHER_CAP_RECOMPOSE_V1 | AYTHER_CAP_SUBSCRIPTIONS_V1;
-  CHECK(api->abi_version == AYTHER_ABI_VERSION_1_0,
-        "descriptor reports ABI v1.0");
+  /* La regla es "mismo major, minor suficiente", no "version igual a la mia":
+     un core que crece en minor le sigue sirviendo a este cliente porque los
+     campos que conoce no se movieron y `struct_size` marca hasta donde leer.
+     Comprobar igualdad exacta convertiria cada bump aditivo en una rotura
+     ficticia. */
+  CHECK(AYTHER_ABI_VERSION_MAJOR(api->abi_version) ==
+        AYTHER_ABI_VERSION_MAJOR(AYTHER_ABI_VERSION_1_0),
+        "descriptor reports the ABI major this client was built against");
+  CHECK(AYTHER_ABI_VERSION_MINOR(api->abi_version) >=
+        AYTHER_ABI_VERSION_MINOR(AYTHER_ABI_VERSION_1_0),
+        "descriptor minor is at least the one this client needs");
+  /* Un cliente 1.0 pide 1.0 y tiene que recibir un descriptor usable, aunque el
+     core ya sea 1.1: esto es el test de compatibilidad hacia atras. */
+  CHECK(get_interface(AYTHER_ABI_VERSION_1_0) != NULL &&
+        get_interface(AYTHER_ABI_VERSION_1_0)->query_region != NULL,
+        "a 1.0 client still negotiates successfully against this core");
+  CHECK(get_interface(UINT32_C(0x0001FFFF)) == NULL,
+        "a minor newer than the core provides is refused");
   CHECK(api->struct_size >= offsetof(ayther_interface_v1,
         set_subscriptions) + sizeof(api->set_subscriptions),
         "descriptor exposes every v1 function");
@@ -319,6 +335,28 @@ int main(int argc, char **argv)
   CHECK(api->recompose_frame(NULL, 0, 0, NULL, NULL) ==
         AYTHER_STATUS_INVALID_ARGUMENT,
         "recomposition validates output dimensions before use");
+
+  /* ABI 1.1 (#26). Se consulta por `struct_size` y no por la version: es la
+     comprobacion que un cliente real tiene que hacer, asi que el verificador la
+     ejerce igual que la haria el frontend. */
+  if (AYTHER_IFACE_HAS(api, get_recompose_stats))
+  {
+    ayther_recompose_stats_v1 stats;
+    CHECK((api->capabilities & AYTHER_CAP_RECOMPOSE_STATS_V1) != 0,
+          "a core exposing recompose stats advertises the capability");
+    CHECK(api->recompose_stats_size == sizeof(ayther_recompose_stats_v1),
+          "recompose stats size matches the header");
+    memset(&stats, 0, sizeof(stats));
+    CHECK(api->get_recompose_stats(&stats, sizeof(stats)) ==
+          AYTHER_STATUS_OK && stats.struct_size == sizeof(stats),
+          "recompose stats are readable and self-describing");
+    CHECK(api->get_recompose_stats(NULL, sizeof(stats)) ==
+          AYTHER_STATUS_INVALID_ARGUMENT,
+          "recompose stats reject a null destination");
+    CHECK(api->get_recompose_stats(&stats, 1) ==
+          AYTHER_STATUS_BUFFER_TOO_SMALL,
+          "recompose stats reject an undersized destination");
+  }
 
   printf("AYTHER ABI dynamic tests: %d passed, %d failed; build=%.*s\n",
          passed, failed, (int)api->build_id_size, api->build_id);

@@ -9,6 +9,7 @@
 #define AYTHER_API_H
 
 #include <stdint.h>
+#include <stddef.h>   /* offsetof, para AYTHER_IFACE_HAS */
 
 #ifdef __cplusplus
 extern "C" {
@@ -37,7 +38,17 @@ extern "C" {
 #endif
 
 #define AYTHER_ABI_VERSION_1_0 UINT32_C(0x00010000)
-#define AYTHER_ABI_VERSION_LATEST AYTHER_ABI_VERSION_1_0
+/* 1.1 (#26): agrega `recompose_stats_size` + `get_recompose_stats` al final del
+ * descriptor. Es un cambio ADITIVO: el descriptor es uno solo y `struct_size`
+ * dice hasta dónde llega, así que un cliente compilado contra 1.0 lo sigue
+ * usando sin cambios — pide 1.0, recibe este mismo puntero y nunca lee más allá
+ * de su propio sizeof. La regla para el cliente es "major igual, minor >= el que
+ * necesito", no "version == la mía". */
+#define AYTHER_ABI_VERSION_1_1 UINT32_C(0x00010001)
+#define AYTHER_ABI_VERSION_LATEST AYTHER_ABI_VERSION_1_1
+
+#define AYTHER_ABI_VERSION_MAJOR(v) ((uint32_t)(v) >> 16)
+#define AYTHER_ABI_VERSION_MINOR(v) ((uint32_t)(v) & UINT32_C(0xFFFF))
 
 #define AYTHER_GENERATION_ANY UINT64_MAX
 #define AYTHER_LEGACY_MEMORY_NONE UINT32_MAX
@@ -109,6 +120,7 @@ enum ayther_endianness
 #define AYTHER_CAP_AUDIO_PROBE_V1      (UINT64_C(1) << 9)
 #define AYTHER_CAP_SUBSCRIPTIONS_V1    (UINT64_C(1) << 10)
 #define AYTHER_CAP_FRAME_DELTA_V1      (UINT64_C(1) << 11)
+#define AYTHER_CAP_RECOMPOSE_STATS_V1  (UINT64_C(1) << 12)
 
 /* Observation and control work is opt-in. A requested mask becomes active at
  * the beginning of the next frame; unknown bits are rejected. */
@@ -401,6 +413,28 @@ typedef struct ayther_frame_delta_v1
 typedef int32_t (AYTHER_CALL *ayther_poll_frame_delta_v1_fn)(
     ayther_frame_delta_v1 *out, uint32_t out_size);
 
+/* #26: estado observable de los caches de recomposición.
+ *
+ * Existe para que "el cache sigue sirviendo" sea afirmable sin cronometrar:
+ * un test que mide tiempo en un runner compartido mide ruido. `controls_
+ * fingerprint` es además la respuesta a "¿por qué no acertó?" cuando el
+ * frontend cree no haber tocado nada: si la huella cambió, algo escribió una
+ * máscara — posiblemente por el puntero mutable legacy, que no pasa por
+ * `write_control` y por eso no mueve `snapshot_generation`. */
+typedef struct ayther_recompose_stats_v1
+{
+  uint32_t struct_size;
+  uint32_t reserved0;
+  uint64_t single_calls;
+  uint64_t single_hits;
+  uint64_t multilayer_calls;
+  uint64_t multilayer_hits;
+  uint64_t controls_fingerprint;
+} ayther_recompose_stats_v1;
+
+typedef int32_t (AYTHER_CALL *ayther_get_recompose_stats_v1_fn)(
+    ayther_recompose_stats_v1 *out, uint32_t out_size);
+
 typedef struct ayther_interface_v1
 {
   uint32_t abi_version;
@@ -430,7 +464,18 @@ typedef struct ayther_interface_v1
   ayther_set_subscriptions_v1_fn set_subscriptions;
   uint32_t frame_delta_size;
   ayther_poll_frame_delta_v1_fn poll_frame_delta;
+  /* --- ABI 1.1 (#26). Todo lo de acá abajo sólo se puede leer si
+     `struct_size` llega hasta el campo. --- */
+  uint32_t recompose_stats_size;
+  uint32_t reserved2;
+  ayther_get_recompose_stats_v1_fn get_recompose_stats;
 } ayther_interface_v1;
+
+/* Un campo opcional es legible sólo si el descriptor llega hasta él. Esta es la
+ * comprobación que reemplaza a `abi_version == la mía`. */
+#define AYTHER_IFACE_HAS(iface, field) \
+  ((iface)->struct_size >= (offsetof(ayther_interface_v1, field) + \
+                            sizeof(((const ayther_interface_v1 *)0)->field)))
 
 typedef const ayther_interface_v1 *(AYTHER_CALL *ayther_get_interface_fn)(
     uint32_t requested_version);

@@ -6,7 +6,29 @@ extern uint64_t ayther_core_frame_generation;
 static uint64_t ayther_rc_cache_generation = ~(uint64_t)0;
 static unsigned int ayther_rc_cache_flags = 0;
 static uint8 ayther_rc_cache_mask = 0;
+static uint64_t ayther_rc_cache_controls = 0;
+static int ayther_rc_cache_valid = 0;
+static int ayther_rc_cache_w = 0;
+static int ayther_rc_cache_h = 0;
 static uint16 ayther_rc_cache_pixels[320 * 300];
+
+/* Telemetría de los dos caches (#26). Sin esto, "el cache sigue funcionando"
+ * sólo se puede afirmar cronometrando, que en CI es una medición que flakea.
+ * Con los contadores el test afirma sobre el mecanismo y no sobre el reloj. */
+uint64_t ayther_rc_stat_single_calls = 0;
+uint64_t ayther_rc_stat_single_hits = 0;
+uint64_t ayther_rc_stat_multi_calls = 0;
+uint64_t ayther_rc_stat_multi_hits = 0;
+
+/* Máscara de capas EFECTIVA de una llamada: el byte alto de flags la pisa sólo
+ * durante la recomposición. Se calcula una vez y se usa tanto para consultar el
+ * cache como para guardarlo; antes la consulta usaba la efectiva y el guardado
+ * la ambiente, así que con override el cache no acertaba nunca. */
+static uint8 ayther_rc_effective_mask(unsigned int flags)
+{
+  return (uint8)((flags & AYTHER_RC_LAYER_MASK(0xFF)) ? (flags >> 24)
+                                                      : ayther_layer_mask);
+}
 
 /* Cache MULTICAPA (#406). El de arriba es de `ayther_recompose_frame` y
  * multilayer no lo tocaba: pedir el mismo frame dos veces costaba lo mismo las
@@ -30,6 +52,7 @@ static uint16 ayther_rc_cache_pixels[320 * 300];
 static uint64_t ayther_ml_cache_generation = ~(uint64_t)0;
 static unsigned int ayther_ml_cache_flags = 0;
 static uint8 ayther_ml_cache_mask = 0;
+static uint64_t ayther_ml_cache_controls = 0;
 static uint8 ayther_ml_cache_have = 0;
 static int ayther_ml_cache_w = 0;
 static int ayther_ml_cache_h = 0;
@@ -51,6 +74,8 @@ int ayther_recompose_frame(uint16 *out, int cap, unsigned int flags,
   uint8 *s_bdata;
   int    s_bpitch, s_bvx, s_bvy;
   int    l, w, h, vs, ste, sh_rebuilt;
+  uint64_t rc_controls;
+  uint8  rc_mask;
   void (*rbg)(int);
   void (*robj)(int);
 
@@ -63,14 +88,22 @@ int ayther_recompose_frame(uint16 *out, int cap, unsigned int flags,
   if (config.ntsc) return AYTHER_RC_ERR_NTSC_FILTER;
   if (!out || w <= 0 || h <= 0 || cap < w * h) return AYTHER_RC_ERR_INVALID_PARAMS;
 
-  if (ayther_rc_cache_generation == ayther_core_frame_generation &&
+  rc_controls = ayther_controls_fingerprint();
+  rc_mask = ayther_rc_effective_mask(flags);
+  ayther_rc_stat_single_calls++;
+
+  if (ayther_rc_cache_valid &&
+      ayther_rc_cache_generation == ayther_core_frame_generation &&
       ayther_rc_cache_flags == flags &&
-      ayther_rc_cache_mask == (uint8)((flags & AYTHER_RC_LAYER_MASK(0xFF)) ? (flags >> 24) : ayther_layer_mask) &&
+      ayther_rc_cache_mask == rc_mask &&
+      ayther_rc_cache_controls == rc_controls &&
+      ayther_rc_cache_w == w && ayther_rc_cache_h == h &&
       cap >= w * h)
   {
     memcpy(out, ayther_rc_cache_pixels, w * h * 2);
     if (out_w) *out_w = w;
     if (out_h) *out_h = h;
+    ayther_rc_stat_single_hits++;
     return 1;
   }
 
@@ -213,10 +246,23 @@ int ayther_recompose_frame(uint16 *out, int cap, unsigned int flags,
 
   if (w * h <= 320 * 300)
   {
+    /* La huella y la máscara son las de la ENTRADA: durante el render se pisan
+       (`ayther_layer_mask` con el override, y el frontend no puede escribir
+       porque `write_control` rechaza con BUSY), y acá ya se restauraron. Guardar
+       lo de la entrada es lo que hace que la próxima consulta con el mismo
+       estado acierte. */
     ayther_rc_cache_generation = ayther_core_frame_generation;
     ayther_rc_cache_flags = flags;
-    ayther_rc_cache_mask = ayther_layer_mask;
+    ayther_rc_cache_mask = rc_mask;
+    ayther_rc_cache_controls = rc_controls;
+    ayther_rc_cache_w = w;
+    ayther_rc_cache_h = h;
+    ayther_rc_cache_valid = 1;
     memcpy(ayther_rc_cache_pixels, out, w * h * 2);
+  }
+  else
+  {
+    ayther_rc_cache_valid = 0;
   }
 
   return 1;
@@ -242,6 +288,7 @@ int ayther_core_recompose_multilayer(
   int    s_bpitch, s_bvx, s_bvy;
   int    l, w, h, vs, ste, sh_rebuilt;
   uint8  ml_want = 0;
+  uint64_t ml_controls;
   void (*rbg)(int);
   void (*robj)(int);
 
@@ -267,9 +314,12 @@ int ayther_core_recompose_multilayer(
                                (out_sprites  ? AYTHER_ML_SPR  : 0) |
                                (out_composite? AYTHER_ML_COMP : 0));
     ml_want = want;
+    ml_controls = ayther_controls_fingerprint();
+    ayther_rc_stat_multi_calls++;
     if (ayther_ml_cache_generation == ayther_core_frame_generation &&
         ayther_ml_cache_flags == flags &&
         ayther_ml_cache_mask == ayther_layer_mask &&
+        ayther_ml_cache_controls == ml_controls &&
         ayther_ml_cache_w == w && ayther_ml_cache_h == h &&
         (want & ~ayther_ml_cache_have) == 0)
     {
@@ -281,6 +331,7 @@ int ayther_core_recompose_multilayer(
       if (out_composite) memcpy(out_composite, ayther_ml_cache_px[4], n);
       if (out_w) *out_w = w;
       if (out_h) *out_h = h;
+      ayther_rc_stat_multi_hits++;
       return 1;
     }
   }
@@ -489,11 +540,13 @@ int ayther_core_recompose_multilayer(
     if (ayther_ml_cache_generation != ayther_core_frame_generation ||
         ayther_ml_cache_flags != flags ||
         ayther_ml_cache_mask != ayther_layer_mask ||
+        ayther_ml_cache_controls != ml_controls ||
         ayther_ml_cache_w != w || ayther_ml_cache_h != h)
     {
       ayther_ml_cache_generation = ayther_core_frame_generation;
       ayther_ml_cache_flags = flags;
       ayther_ml_cache_mask = ayther_layer_mask;
+      ayther_ml_cache_controls = ml_controls;
       ayther_ml_cache_w = w;
       ayther_ml_cache_h = h;
       ayther_ml_cache_have = 0;

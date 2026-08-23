@@ -26,6 +26,31 @@ ABI versions use `0xMMMMmmmm` (`major`, `minor`). A future descriptor may append
 fields; consumers must only read fields covered by `struct_size` and ignore
 unknown capability bits.
 
+### The version check a consumer must actually perform
+
+The rule is **same major, minor at least what you need** — never
+`abi_version == mine`. The core returns a single descriptor and answers every
+request whose major matches and whose minor it can satisfy, so a consumer built
+against 1.0 keeps working against a 1.1 core: the 1.0 fields are at the same
+offsets, and `struct_size` says where its knowledge ends. A request for a minor
+the core does not implement returns `NULL`, because serving it would mean
+promising fields that are not there.
+
+Guard every optional field with the header's helper, which asks `struct_size`
+rather than the version:
+
+```c
+if (AYTHER_IFACE_HAS(api, get_recompose_stats))
+  api->get_recompose_stats(&stats, sizeof(stats));
+```
+
+### Version history
+
+| Version | Change |
+|---|---|
+| 1.0 | Initial contract: regions, snapshots, subscriptions, recomposition, audio transport, frame delta. |
+| 1.1 | **Additive.** Appends `recompose_stats_size` + `get_recompose_stats` and the `AYTHER_CAP_RECOMPOSE_STATS_V1` capability bit (#26). No existing field moved or changed meaning. |
+
 ## Descriptor and capabilities
 
 The immutable descriptor is owned by the DLL/so and remains valid until the
@@ -116,6 +141,41 @@ legacy pointers preserve their historical mutability for the transition.
 ## Recomposition and Delta Stream
 
 Recomposition capabilities (`ayther_recompose_frame` and `ayther_core_recompose_multilayer`) are exposed via function pointers in the interface. They allow rendering specific layers or frames with custom parameters (like ignoring sprite limits or layer masks) without mutating the core's deterministic state. This effectively acts as an oracle for the Delta Stream implementation, which uses these capabilities to isolate and stream partial frame updates (such as only sprites or a single plane) to the frontend, significantly accelerating network replication and state sync.
+
+### Recomposition cache key (#26)
+
+Both recompositors cache their last result. The key is:
+
+```
+(core frame generation, flags, effective layer mask, controls fingerprint,
+ output width, output height)
+```
+
+`controls fingerprint` is an FNV-1a hash over the **contents** of every control
+region — layer mask, layer dim, sprite suppression, cell suppression, plane-tile
+suppression and its active flag — plus whether `AYTHER_SUB_RENDER_CONTROLS` is
+active, since the controls only take effect while subscribed.
+
+It hashes contents rather than counting writes because the legacy ids
+`0x102`–`0x108` still hand out mutable pointers through
+`retro_get_memory_data`: a legacy consumer writes a mask without ever calling
+`write_control`, so there is no hook where a counter could be bumped, and
+`snapshot_generation` does not move. Content is the only thing both paths share.
+
+The practical guarantee for a frontend: **the pixels you get always match the
+control state you set**, no matter the order or number of calls on a given
+frame. Before this key existed, writing a mask between two recompositions of the
+same frame returned the previous image — silently, which in the Lab reads as an
+unresponsive UI rather than as an error.
+
+Hashing ~3.6 KB costs less than the ~150 KB copy a cache hit performs, so the
+correctness fix does not change the case for keeping the cache.
+
+`get_recompose_stats` (ABI 1.1) reports `single_calls`/`single_hits`,
+`multilayer_calls`/`multilayer_hits` and the current `controls_fingerprint`. Use
+it to answer "why did my recomposition not hit the cache?": if the fingerprint
+moved and you did not call `write_control`, something wrote through a legacy
+mutable pointer.
 
 
 ## Consistent frame snapshots

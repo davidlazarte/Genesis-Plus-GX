@@ -159,6 +159,18 @@ extern int ayther_core_recompose_multilayer(
     uint16 *out_sprites, uint16 *out_composite,
     int cap, unsigned int flags,
     int *out_w, int *out_h);
+
+/* #26: huella de contenido de TODAS las regiones de control + el estado de la
+   suscripción RENDER_CONTROLS. Es la clave que faltaba en los caches de
+   recomposición; ver el comentario largo en vdp_render.c. */
+extern uint64_t ayther_controls_fingerprint(void);
+
+/* #26: aciertos/llamadas de cada cache, para que el test afirme sobre el
+   mecanismo en vez de cronometrar. */
+extern uint64_t ayther_rc_stat_single_calls;
+extern uint64_t ayther_rc_stat_single_hits;
+extern uint64_t ayther_rc_stat_multi_calls;
+extern uint64_t ayther_rc_stat_multi_hits;
 #endif /* AYTHER_EXTENSIONS */
 
 /* Function prototypes */

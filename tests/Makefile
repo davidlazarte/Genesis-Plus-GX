@@ -70,6 +70,7 @@ RASTER_BIN := $(BUILD_DIR)/test_raster_guard$(EXE_EXT)
 SPRITE_CAPTURE_BIN := $(BUILD_DIR)/test_sprite_capture$(EXE_EXT)
 ROM_PROBE_BIN := $(BUILD_DIR)/raster_rom_probe$(EXE_EXT)
 FULL_CORE_BIN := $(BUILD_DIR)/full_core_replay$(EXE_EXT)
+STATE_GUARD_BIN := $(BUILD_DIR)/state_guard$(EXE_EXT)
 TRACE_BIN := $(BUILD_DIR)/audio_probe_trace$(EXE_EXT)
 TRACE_GOLDEN := ayther/golden/audio_probe_trace.json
 TRACE_ACTUAL := $(ARTIFACT_DIR)/audio_probe_trace.actual.json
@@ -142,6 +143,15 @@ $(FULL_CORE_BIN): ayther/full_core_replay.c ayther/generated_rom.c \
 		-I$(CORE_DIR)/libretro/libretro-common/include -Iayther \
 		-o $@ ayther/full_core_replay.c ayther/generated_rom.c \
 		$(LDFLAGS) $(ROM_PROBE_LIBS)
+
+$(STATE_GUARD_BIN): ayther/state_guard.c ayther/generated_rom.c 		ayther/generated_rom.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core 		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include 		-Iayther -o $@ ayther/state_guard.c ayther/generated_rom.c 		$(LDFLAGS) $(ROM_PROBE_LIBS)
+
+# Necesita el core REAL: lo que se verifica es que retro_unserialize rechace un
+# estado de otro layout, y eso solo lo puede contestar el binario.
+check-state-guard: $(STATE_GUARD_BIN)
+	$(call require_core)
+	$(STATE_GUARD_BIN) "$(CORE)"
 
 full-core-replay: $(FULL_CORE_BIN)
 

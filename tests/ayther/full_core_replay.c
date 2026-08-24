@@ -1035,14 +1035,24 @@ static int check_savestate_roundtrip(const struct core_api *api,
      savestates del mismo estado no son iguales byte a byte. Vale la pena verlo
      escrito en vez de descubrirlo comparando archivos. */
   {
+    /* Espejo de AYTHER_STATE_TAG_BYTES en libretro/libretro.c. */
+    const size_t ayther_tag_bytes = 16;
     size_t written_a = 0, written_b = 0, at;
+    const size_t scan_limit =
+      (state_size > ayther_tag_bytes) ? (state_size - ayther_tag_bytes) : state_size;
     memset(first, 0x00, state_size);
     memset(second, 0xFF, state_size);
     if (api->serialize(first, state_size) && api->serialize(second, state_size))
     {
-      for (at = state_size; at > 0; --at)
+      /* El barrido arranca DEBAJO del tag de layout de AYTHER, que vive en
+         los ultimos AYTHER_STATE_TAG_BYTES del buffer (ver retro_serialize en
+         libretro/libretro.c). Sin esto la metrica es inutil: busca el ultimo
+         byte tocado, y el tag esta al final, asi que reportaba 100% escrito
+         para cualquier estado -tapando exactamente lo que este chequeo
+         existe para ver, que es cuanto de lo declarado se usa de verdad-. */
+      for (at = scan_limit; at > 0; --at)
         if (first[at - 1] != 0x00) { written_a = at; break; }
-      for (at = state_size; at > 0; --at)
+      for (at = scan_limit; at > 0; --at)
         if (second[at - 1] != 0xFF) { written_b = at; break; }
       if (written_a > state_size || written_b > state_size)
       {

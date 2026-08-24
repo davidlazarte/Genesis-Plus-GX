@@ -1,32 +1,162 @@
 # Upstream Sync Runbook (AYTHER)
 
-Este runbook define las políticas y pasos estrictos para realizar la sincronización con el repositorio original (upstream) de Genesis-Plus-GX.
+Cómo sincronizar este fork con upstream sin romper AYTHER y sin pelearse con el
+historial.
 
-## 1. Políticas Generales
-*   **Rebases pequeños**: Siempre preferir rebases incrementales sobre merges gigantes para mantener un historial limpio y localizable.
-*   **Normalización previa**: Antes de hacer rebase, asegúrate de que tu rama local esté normalizada (CRLF vs LF) con `.gitattributes`.
-*   **Aislamiento**: Todo código de AYTHER que no requiera intimidad con el VDP (helpers, inicialización de estructuras, etc.) debe habitar en `core/ayther/`.
+## 0. Cuál es upstream
 
-## 2. Procedimiento de Fetch y Rebase
-1.  Obtener los últimos cambios de upstream:
-    ```bash
-    git remote add upstream https://github.com/ekeeke/Genesis-Plus-GX.git
-    git fetch upstream
-    ```
-2.  Iniciar el rebase interactivo si aplica:
-    ```bash
-    git rebase upstream/master
-    ```
-
-## 3. Resolución de Conflictos Críticos
-Presta atención meticulosa a los siguientes archivos críticos donde se asientan nuestros _hooks_:
-*   `libretro/libretro.c`: (Retro_get_memory_data, inicialización).
-*   `core/vdp_render.c`: (Render_line, parse_satb_m5).
-*   `core/sound/sound.c` y `ym2612.c`: (Mixer loop y shadow registers).
-
-## 4. Suite Obligatoria de Verificación
-Si superaste el rebase, antes de crear el commit de sync final, DEBES correr localmente:
-```bash
-make -C tests check
 ```
-Si los tests fallan (en particular el chequeo de determinismo `audio_probe_trace`), evalúa inmediatamente la regresión en accuracy y ajusta el golden trace **solo si** el cambio de upstream está fundamentado (ej: corrección de un bug en emulación).
+https://github.com/libretro/Genesis-Plus-GX.git
+```
+
+**No es `ekeeke/Genesis-Plus-GX`.** Este runbook decía eso y estaba mal: el
+remoto real es el de libretro, que es el que trae el soporte libretro que
+nosotros usamos. `libretro/master` ya integra lo de ekeeke, así que sincronizar
+contra libretro nos deja al día con los dos.
+
+```bash
+git remote add upstream https://github.com/libretro/Genesis-Plus-GX.git
+git fetch upstream
+```
+
+## 1. Políticas
+
+### Rebase o merge: la regla real
+
+La versión vieja de este runbook decía *«siempre preferir rebases incrementales
+sobre merges gigantes»*, sin matices, y eso no se podía cumplir. La regla que sí
+se cumple:
+
+* **Ramas de tema (las nuestras, cortas): rebase.** Es barato, deja el historial
+  legible, y es lo que la directiva original quería decir.
+* **Syncs de upstream: merge.** Un sync trae decenas de commits de otra gente;
+  rebasear nuestro trabajo sobre ellos reproduce cada commit nuestro contra la
+  base nueva y multiplica los conflictos por la cantidad de commits.
+* **Nunca reescribir historia ya publicada.** `aether/expose-vram-video-ram`
+  está pusheada y mergeada a `master` varias veces. Rebasearla no es una
+  operación de limpieza, es reescribir algo de lo que ya dependen otros refs.
+
+El corolario práctico: **sincronizar seguido**. La política de «rebases
+pequeños» era, en el fondo, una política de *rangos pequeños*. Eso se consigue
+sincronizando a menudo, no eligiendo el verbo de git.
+
+### Fin de línea: los archivos de upstream se guardan con los bytes de upstream
+
+Upstream no tiene `.gitattributes` y guarda CRLF en la mayoría de los `.c`/`.h`.
+Mientras nosotros normalizábamos todo a LF, **143 archivos diferían de upstream
+por nada más que el fin de línea**: el 84% de nuestra divergencia aparente, y
+cero de nuestro valor. En el sync de 24 commits eso costó 20 conflictos, y los 20
+eran ruido: el único archivo con contenido real de los dos lados
+(`libretro/Makefile.common`) automergeó solo.
+
+Hoy `.gitattributes` dice `* -text`: git no convierte nada, y lo de upstream
+queda byte a byte igual a upstream. Lo nuestro (`.sh`, `.github`, `tests`,
+`bench`, `core/ayther`, `docs`) va en LF explícito con `text=auto eol=lf`.
+
+Dos cosas que conviene no volver a aprender por las malas:
+
+* **`eol=crlf` NO sirve** para igualar bytes con upstream. El blob de un archivo
+  marcado `text` es *siempre* LF; `eol=` sólo decide cómo se ve en el working
+  tree. Lo que consigue guardar bytes crudos es `-text`.
+* Los `.sh` **necesitan** LF, no es preferencia: Git Bash aborta un script con
+  CRLF (`$'\r': command not found`) y el job de Windows corre
+  `check_exports.sh` igual que el de Linux.
+
+Si aun así aparece un conflicto que es puro EOL, la red de seguridad es
+`-Xrenormalize`, que normaliza ambos lados antes de comparar:
+
+```bash
+git merge -Xrenormalize upstream/master
+```
+
+### Aislamiento
+
+Todo código AYTHER que no requiera intimidad con el VDP (helpers, inicialización
+de estructuras) vive en `core/ayther/`. Cuanto más ahí, menos superficie de
+parche en archivos de upstream, y más barato cada sync.
+
+## 2. Procedimiento
+
+```bash
+git fetch upstream
+git switch -c sync/upstream-AAAA-MM-DD master
+git merge upstream/master          # agregar -Xrenormalize si aparece ruido de EOL
+# resolver, verificar (sección 4), commitear
+gh pr create --base master
+```
+
+Rama corta, PR, merge, y la rama se borra. Nadie rebasea 74 commits nunca.
+
+## 3. Dónde miran nuestros parches
+
+Medido contra `upstream/master`: parcheamos **27 archivos**. Concentrados, así
+que un sync que no toque estos casi no nos puede romper.
+
+| Archivo | Líneas | Qué vive ahí |
+|---|---:|---|
+| `core/vdp_render.c` | 1066 | `render_line`, `parse_satb_m5`, recomposición, atribución |
+| `libretro/libretro.c` | 943 | `retro_get_memory_data`, ABI AYTHER, inicialización |
+| `core/vdp_ctrl.c` | 308 | journal raster, `raster_dirty` |
+| `core/sound/psg.c` | 188 | telemetría PSG |
+| `core/sound/ym2612.c` | 124 | shadow registers |
+| `core/sound/sound.c` | 86 | loop del mixer |
+| `core/cd_hw/pcm.c` | 74 | eventos PCM |
+| `core/state.c` | 30 | latch de input hardware en el savestate |
+| `libretro/Makefile.common` | 26 | perfiles `AYTHER_EXTENSIONS` / `SOUND_PROBE` |
+| `core/input_hw/gamepad.c` | 22 | latch de fase TH |
+
+El resto (`core/vdp_render.h`, `core/sound/sound.h`, `core/vdp_ctrl.h`,
+`core/shared.h`, `core/system.c`, `core/loadrom.c`, `core/debug/cpuhook.h`,
+`libretro/link.T`, `Makefile.libretro`, `.gitignore`, los README) son parches
+chicos.
+
+`libretro/Makefile.common` merece atención aparte: es el que históricamente
+choca de verdad, porque upstream también lo edita.
+
+## 4. Verificación obligatoria
+
+Antes de abrir el PR del sync, correr **todo** esto:
+
+```bash
+# 1. El core compila en el perfil principal
+make -B -f Makefile.libretro platform=win AYTHER_EXTENSIONS=1 SOUND_PROBE=1 -j8
+
+# 2. Suite completa + traza determinista
+make -C tests check
+
+# 3. Replay full-core contra el golden (save/load incluido)
+make -C tests check-full-core CORE=../genesis_plus_gx_libretro.dll
+
+# 4. Closure de exports: que no se haya escapado ni un símbolo AYTHER de más
+llvm-readobj --coff-exports genesis_plus_gx_libretro.dll \
+  | sed -n 's/^[[:space:]]*Name:[[:space:]]*\(\S*\)[[:space:]]*$/\1/p' | sort -u > /tmp/exp.txt
+bash tests/ci/check_exports.sh /tmp/exp.txt 1 0 1
+
+# 5. El perfil sin extensiones no filtra implementación
+make -B -f Makefile.libretro platform=win AYTHER_EXTENSIONS=0 SOUND_PROBE=0 -j8
+```
+
+Si falla el determinismo (`audio_probe_trace`) o el replay full-core, **evaluar
+la regresión antes de tocar el golden**. Ajustarlo sólo si el cambio de upstream
+está fundamentado (por ejemplo, corrección de un bug de emulación) — y dejar
+escrito en el commit *cuál* fue ese cambio.
+
+Ojo con los hashes del replay: `video_hash`, `audio_hash` y `telemetry_hash`
+dependen sólo de la emulación, pero `state_hash` depende del **layout
+serializado**. Hay un golden por plataforma (Linux y Windows) porque el probe
+reporta distinto en cada una. Y además, medido: entre el core x64 y el x86 los
+hashes de video/audio/telemetría son idénticos pero `state_hash` no, porque el
+padding de los structs y el ancho de puntero cambian el layout. Los savestates
+no son portables entre arquitecturas.
+
+## 5. Después del sync
+
+Upstream actualiza sus binarios precompilados en `builds/`. Los nuestros hay que
+**rebuildearlos**, o `builds/` termina ofreciendo un core sin AYTHER — que es
+exactamente lo que estuvo pasando hasta que se detectó: en todo el historial del
+fork, `builds/genesis_plus_gx_libretro.dll` sólo lo habían tocado commits de
+upstream. Ver `builds/README.md`.
+
+Los `.dol` de Gamecube/Wii siguen siendo los de upstream: necesitan devkitPPC,
+que no está en la toolchain de este fork, y esas plataformas están fuera del
+scope actual.

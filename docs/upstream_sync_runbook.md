@@ -151,11 +151,24 @@ no son portables entre arquitecturas.
 
 ## 5. Después del sync
 
-Upstream actualiza sus binarios precompilados en `builds/`. Los nuestros hay que
-**rebuildearlos**, o `builds/` termina ofreciendo un core sin AYTHER — que es
-exactamente lo que estuvo pasando hasta que se detectó: en todo el historial del
-fork, `builds/genesis_plus_gx_libretro.dll` sólo lo habían tocado commits de
-upstream. Ver `builds/README.md`.
+Upstream actualiza sus binarios precompilados en `builds/`. **Eso está bien y no
+hay que tocarlo**: `builds/` es de upstream, se deja intacto, y por eso dejó de
+ser superficie de conflicto en los syncs.
+
+Nuestros binarios NO viven ahí. Viven en los releases del fork, con perfil y
+arquitectura explícitos en el nombre (`_ayther_x64`, `_ayther_x86`,
+`_stock_x64`). Ver `builds/README.md`.
+
+Hubo un tiempo en que sí vivían en `builds/`, bajo el mismo nombre que usa
+upstream, y salió mal de la peor manera: upstream regenera
+`genesis_plus_gx_libretro.dll` en cada release suyo, así que cada sync lo
+sobreescribía. Durante todo el historial del fork ese directorio ofreció un core
+sin una línea de AYTHER, y nadie lo notó porque el archivo estaba y se llamaba
+como correspondía.
+
+Si el sync cambia algo que afecte al core publicado, lo que hay que hacer es
+**un release nuevo**, no tocar `builds/`. Y avisar los SHA-256 nuevos, porque el
+CI del Engine los verifica contra `third_party/cores/core.lock`.
 
 Los `.dol` de Gamecube/Wii siguen siendo los de upstream: necesitan devkitPPC,
 que no está en la toolchain de este fork, y esas plataformas están fuera del

@@ -1,8 +1,35 @@
-* text=auto
-*.c text eol=lf
-*.h text eol=lf
+# Este repo es un FORK que sincroniza seguido con upstream, y upstream NO tiene
+# .gitattributes: guarda los bytes tal cual los commitea cada quien, que en la
+# mayoria de los .c/.h es CRLF.
+#
+# Mientras nosotros normalizabamos TODO a LF, 143 archivos diferian de upstream
+# por nada mas que el fin de linea: el 84% de nuestra divergencia aparente, y
+# cero de nuestro valor. Eso es superficie de conflicto en cada sync. En el
+# sync de 24 commits, 20 de los 23 archivos tocados por ambos lados
+# conflictuaron, y 22 de esos 23 eran EOL puro.
+#
+# Y no es lo mismo bajo merge que bajo rebase. Bajo merge se paga UNA vez, y
+# -Xrenormalize lo anula. Bajo REBASE se paga POR COMMIT, porque rebase
+# reproduce cada commit contra la base nueva y cada uno vuelve a chocar con los
+# mismos archivos. Por eso rebasear era caro aca: no por el tamanio del fork,
+# sino por un desacuerdo de bytes que no nos daba nada.
+#
+# Regla: lo que es de upstream se guarda con los MISMOS BYTES que upstream.
+# `-text` es lo que lo consigue: git no convierte EOL, ni al leer ni al
+# escribir. Ojo que `eol=crlf` NO sirve para esto -- el blob de un archivo
+# marcado `text` es SIEMPRE LF, y `eol=` solo decide como se ve en el working
+# tree.
+* -text
 
-# #32: los scripts de shell tienen que quedar en LF tambien en un checkout de
-# Windows. Git Bash aborta un .sh con CRLF ("$'\r': command not found"), y el job
-# de Windows corre check_exports.sh igual que el de Linux.
-*.sh text eol=lf
+# Lo NUESTRO va en LF explicito. `text=auto` ademas protege: si alguna vez cae
+# un binario en estos arboles, git lo detecta y no lo convierte.
+*.sh            text=auto eol=lf
+.github/**      text=auto eol=lf
+tests/**        text=auto eol=lf
+bench/**        text=auto eol=lf
+core/ayther/**  text=auto eol=lf
+docs/**         text=auto eol=lf
+
+# Los .sh ademas lo NECESITAN, no es preferencia: Git Bash aborta un script con
+# CRLF ("$'\r': command not found"), y el job de Windows corre check_exports.sh
+# igual que el de Linux (#32).

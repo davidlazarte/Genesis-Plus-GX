@@ -24,8 +24,27 @@
 #include <libretro.h>
 #include "generated_rom.h"
 
+#if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+typedef HMODULE library_t;
+static library_t open_library(const char *path) { return LoadLibraryA(path); }
+static void *load_symbol(library_t lib, const char *name)
+{
+  return (void *)(uintptr_t)GetProcAddress(lib, name);
+}
+#else
+#include <dlfcn.h>
+typedef void *library_t;
+static library_t open_library(const char *path)
+{
+  return dlopen(path, RTLD_NOW | RTLD_LOCAL);
+}
+static void *load_symbol(library_t lib, const char *name)
+{
+  return dlsym(lib, name);
+}
+#endif
 
 #define ROM_SIZE AYTHER_GENERATED_ROM_SIZE
 
@@ -74,13 +93,13 @@ static size_t aud_cb(const int16_t *d,size_t f){(void)d;return f;}
 static void poll_cb(void){}
 static int16_t input_cb(unsigned a,unsigned b,unsigned c,unsigned d){(void)a;(void)b;(void)c;(void)d;return 0;}
 
-#define SYM(v,n) do { *(void **)&v = (void *)(uintptr_t)GetProcAddress(lib,n); \
+#define SYM(v,n) do { *(void **)&v = load_symbol(lib,n); \
   if(!v){fprintf(stderr,"falta %s\n",n);return 2;} } while(0)
 
 int main(int argc, char **argv)
 {
   if (argc < 2) { fprintf(stderr, "uso: %s <core.dll>\n", argv[0]); return 2; }
-  HMODULE lib = LoadLibraryA(argv[1]);
+  library_t lib = open_library(argv[1]);
   if (!lib) { fprintf(stderr, "no carga %s\n", argv[1]); return 2; }
 
   SYM(p_set_environment,"retro_set_environment");

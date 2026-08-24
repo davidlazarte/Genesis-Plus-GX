@@ -62,7 +62,17 @@ jobs:
             if git merge-base --is-ancestor "$commit" upstream/master 2>/dev/null; then
               continue
             fi
-            git -c core.whitespace=cr-at-eol show --check --format=fuller --no-renames "$commit" || status=1
+            parent=$(git rev-parse -q --verify "$commit^") || continue
+            # Un cambio de fin de linea reescribe TODAS las lineas del archivo,
+            # asi que `--check` las ve como agregadas y aflora el trailing
+            # whitespace que YA ESTABA. Ese whitespace no lo introdujo este
+            # commit: cambiar el EOL no toca los espacios. Por eso se revisan
+            # solo los archivos cuyo CONTENIDO cambio, y no el commit entero.
+            # --numstat con --ignore-cr-at-eol es lo que sabe la diferencia;
+            # --name-only NO sirve, lista igual los archivos EOL-only.
+            mapfile -t paths < <(git -c core.quotePath=false diff --numstat --ignore-cr-at-eol --no-renames "$parent" "$commit" | awk -F'	' '$1 != "-" && $1 + $2 > 0 { print $3 }')
+            [ "${#paths[@]}" -gt 0 ] || continue
+            git -c core.whitespace=cr-at-eol show --check --format=fuller --no-renames "$commit" -- "${paths[@]}" || status=1
           done
           exit "$status"
 

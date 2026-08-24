@@ -3379,6 +3379,84 @@ void retro_set_controller_port_device(unsigned port, unsigned device)
 
 size_t retro_serialize_size(void) { return STATE_SIZE; }
 
+/* AYTHER: guard de layout del savestate.
+ *
+ * El formato de upstream es un volcado crudo de memoria: `save_param` es un
+ * memcpy, y varios structs se vuelcan enteros con sizeof. Z80_Regs mide 88
+ * bytes en x64 y 76 en x86 porque lleva DOS PUNTEROS A FUNCION adentro
+ * (`daisy`, `irq_callback`), asi que un estado escrito por un binario no se
+ * puede leer con otro de distinto ABI: desde el primer struct con puntero en
+ * adelante, todo sale corrido.
+ *
+ * Y hasta aca NADA lo detectaba. STATE_SIZE es 0xfd000 hardcodeado, identico
+ * en las dos arquitecturas, y la firma "GENPLUS-GX 1.7.7" tambien: el estado
+ * pasaba las dos validaciones y se cargaba mal EN SILENCIO. Ese es el peor
+ * modo de falla posible; no ves un error, ves un emulador que se porta raro.
+ *
+ * El tag va en un offset FIJO contado desde el FINAL del buffer, no despues de
+ * lo que escribio state_save. Es deliberado: si el estado viene de otro ABI, a
+ * esa altura el offset de lectura ya esta corrido, y leeriamos el tag del
+ * lugar equivocado. STATE_SIZE reserva 1.036.288 bytes y se usan ~144.000, o
+ * sea que la cola esta libre.
+ *
+ * Un estado SIN tag se acepta: son los que escribieron las versiones previas,
+ * todas x64. El build de 32 bits se publico recien, asi que en la practica no
+ * hay estados x86 sin tag dando vueltas, y de aca en mas todo lo que
+ * escribimos queda tageado. */
+#define AYTHER_STATE_TAG_MAGIC  UINT32_C(0x53535941)  /* "AYSS" */
+#define AYTHER_STATE_TAG_BYTES  16
+#define AYTHER_STATE_TAG_OFFSET (STATE_SIZE - AYTHER_STATE_TAG_BYTES)
+
+/* Huella del layout de ESTE binario. sizeof(void*) es la causa raiz; los
+ * structs que se vuelcan enteros van tambien, asi que un cambio de packing o
+ * de compilador se detecta igual. */
+static uint32_t ayther_state_layout_id(void)
+{
+   const uint32_t parts[4] = {
+      (uint32_t)sizeof(void *),
+      (uint32_t)sizeof(Z80_Regs),
+      (uint32_t)sizeof(m68ki_cpu_core),
+      (uint32_t)sizeof(cart_hw_t)
+   };
+   const unsigned char *bytes = (const unsigned char *)parts;
+   uint32_t h = UINT32_C(2166136261);
+   size_t i;
+
+   for (i = 0; i < sizeof(parts); i++)
+   {
+      h ^= (uint32_t)bytes[i];
+      h *= UINT32_C(16777619);
+   }
+
+   return h;
+}
+
+static void ayther_state_tag_write(void *data)
+{
+   unsigned char *p = (unsigned char *)data + AYTHER_STATE_TAG_OFFSET;
+   uint32_t magic  = AYTHER_STATE_TAG_MAGIC;
+   uint32_t layout = ayther_state_layout_id();
+
+   memset(p, 0, AYTHER_STATE_TAG_BYTES);
+   memcpy(p, &magic, sizeof(magic));
+   memcpy(p + sizeof(magic), &layout, sizeof(layout));
+}
+
+/* FALSE solo si HAY tag y no coincide. Sin tag se acepta, por lo de arriba. */
+static bool ayther_state_tag_ok(const void *data)
+{
+   const unsigned char *p = (const unsigned char *)data + AYTHER_STATE_TAG_OFFSET;
+   uint32_t magic  = 0;
+   uint32_t layout = 0;
+
+   memcpy(&magic, p, sizeof(magic));
+   if (magic != AYTHER_STATE_TAG_MAGIC)
+      return TRUE;
+
+   memcpy(&layout, p + sizeof(magic), sizeof(layout));
+   return layout == ayther_state_layout_id();
+}
+
 extern int8 fast_savestates;
 
 bool get_fast_savestates(void)
@@ -3403,6 +3481,7 @@ bool retro_serialize(void *data, size_t size)
       return FALSE;
 
    state_save(data);
+   ayther_state_tag_write(data);
    if (fast_savestates) save_sound_buffer();
 
    return TRUE;
@@ -3412,6 +3491,11 @@ bool retro_unserialize(const void *data, size_t size)
 {
    fast_savestates = get_fast_savestates();
    if (size != STATE_SIZE)
+      return FALSE;
+
+   /* Antes que state_load: si el layout no es el nuestro, lo que sigue seria
+      una lectura corrida y silenciosa. */
+   if (!ayther_state_tag_ok(data))
       return FALSE;
 
    if (!state_load((uint8_t*)data))

@@ -263,6 +263,12 @@ jobs:
           CC=clang
           CORE=../genesis_plus_gx_libretro.so
 
+      - name: Reject a savestate written by a different ABI
+        run: >-
+          make -C tests check-state-guard
+          CC=clang
+          CORE=../genesis_plus_gx_libretro.so
+
       # El numero se publica pero NO bloquea. Evidencia: dos corridas PARALELAS
       # del mismo commit midieron 1,023% y 1,708% -0,7 puntos de spread sobre
       # binarios identicos-, o sea que el ruido del runner compartido es mayor
@@ -462,6 +468,14 @@ jobs:
         shell: pwsh
         run: >-
           make -C tests check-full-core
+          CC=clang
+          CORE=../genesis_plus_gx_libretro.dll
+
+      - name: Reject a savestate written by a different ABI
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        shell: pwsh
+        run: >-
+          make -C tests check-state-guard
           CC=clang
           CORE=../genesis_plus_gx_libretro.dll
 

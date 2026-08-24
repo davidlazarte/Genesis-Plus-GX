@@ -27,18 +27,44 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # El gate vale para el codigo QUE ESCRIBIMOS NOSOTROS. Upstream commitea
+      # con trailing whitespace, asi que un `diff --check` acumulado sobre el
+      # rango entero rebotaba TODO PR de sync: no por algo que hicimos mal, sino
+      # porque el rango incluye las lineas de upstream. Y el arreglo tentador
+      # -limpiar esas lineas- diverge de upstream justo donde mas duele: cada
+      # vez que upstream las vuelva a tocar, conflicto, para siempre y a cambio
+      # de nada.
+      #
+      # Por eso se revisa COMMIT POR COMMIT y se saltean los que ya viven en
+      # upstream/master. Los nuestros se siguen revisando enteros, incluidos los
+      # de un PR que ademas trae un sync: el #46 trajo 24 commits de upstream y
+      # uno nuestro, y el nuestro tiene que pasar igual.
       - name: Check whitespace in changed lines
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          UPSTREAM_URL: https://github.com/libretro/Genesis-Plus-GX.git
         run: |
           set -euo pipefail
-          if [[ "$EVENT_NAME" == "pull_request" ]]; then
-            git -c core.whitespace=cr-at-eol diff --check "$BASE_SHA...HEAD"
+          git remote get-url upstream >/dev/null 2>&1 || git remote add upstream "$UPSTREAM_URL"
+          # Si el fetch falla NO se saltea nada: se revisa todo y el job se pone
+          # rojo. Fallar cerrado es lo correcto; un fetch caido que apagara el
+          # gate en silencio es exactamente el modo de falla que no queremos.
+          git fetch --no-tags --quiet upstream master || echo "AVISO: fetch de upstream fallo; no se saltea ningun commit." >&2
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            range="$BASE_SHA..HEAD"
           else
-            git -c core.whitespace=cr-at-eol show --check --format=fuller --no-renames HEAD
+            range="HEAD~1..HEAD"
           fi
+          status=0
+          for commit in $(git rev-list --no-merges "$range"); do
+            if git merge-base --is-ancestor "$commit" upstream/master 2>/dev/null; then
+              continue
+            fi
+            git -c core.whitespace=cr-at-eol show --check --format=fuller --no-renames "$commit" || status=1
+          done
+          exit "$status"
 
       - name: Enforce LF in AYTHER automation and fixtures
         shell: bash

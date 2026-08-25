@@ -686,7 +686,8 @@ uint8 ayther_layer_mask = 0xFF;
   AYTHER_SUBSCRIBED(AYTHER_SUB_RENDER_CONTROLS |  \
                     AYTHER_SUB_ATTRIBUTION |      \
                     AYTHER_SUB_LINE_STATE |       \
-                    AYTHER_SUB_LINE_CRAM)
+                    AYTHER_SUB_LINE_CRAM |        \
+                    AYTHER_SUB_LINE_CELLS)
 #define AYTHER_HIDE_A \
   (AYTHER_CONTROLS_ACTIVE && !(ayther_layer_mask & AYTHER_LAYER_A))
 #define AYTHER_HIDE_B \
@@ -841,6 +842,12 @@ static int ayther_peel_vx     = 0;   /* desplazamiento del borde izquierdo (view
    y evita una asignacion en un camino que corre por linea. */
 #define AYTHER_LINE_MAX 240u
 ayther_line_regs_v1 ayther_line_regs[AYTHER_LINE_MAX];
+ayther_line_cells_v1 ayther_line_cells[AYTHER_LINE_MAX];
+/* #42.C: la fila que se esta capturando, y el plano. El renderer dibuja plano
+   por plano, asi que un puntero al arreglo del plano en curso evita pasar el
+   plano por cada columna. */
+static uint32 *ayther_cell_dst;
+static uint8 *ayther_cell_count;
 uint8 ayther_line_cram[AYTHER_LINE_MAX][128];
 uint32 ayther_line_count = 0;
 uint32 ayther_line_flags = 0;
@@ -849,6 +856,16 @@ static int ayther_line_cram_dirty = 0;
 
 #define AYTHER_LINE_STATE_ACTIVE AYTHER_SUBSCRIBED(AYTHER_SUB_LINE_STATE)
 #define AYTHER_LINE_CRAM_ACTIVE  AYTHER_SUBSCRIBED(AYTHER_SUB_LINE_CRAM)
+#define AYTHER_LINE_CELLS_ACTIVE AYTHER_SUBSCRIBED(AYTHER_SUB_LINE_CELLS)
+
+/* #42.C: se guarda el par crudo, tal como el renderer lo consumio. Un store a
+   un puntero que ya esta en un registro; sin lecturas extra de VRAM. */
+#define AYTHER_CELL_RECORD(pair)                                          \
+  do {                                                                    \
+    if (ayther_observed && ayther_cell_dst &&                             \
+        *ayther_cell_count < AYTHER_LINE_CELL_COLUMNS)                    \
+      ayther_cell_dst[(*ayther_cell_count)++] = (uint32)(pair);           \
+  } while (0)
 
 /* Se llama al empezar el frame: lo que sigue pertenece a ESTE frame y no al
    anterior. `lines` queda en cero hasta que las lineas se dibujen, asi que un
@@ -938,6 +955,38 @@ static void ayther_line_capture(uint32 line, uint32 xscroll,
     ayther_line_count = line + 1u;
 }
 
+/* #42.C: abre la captura de un plano para la linea en curso. `row` y `shift`
+   son por linea y por plano -- el renderer los calcula una vez-, asi que van
+   aca y no repetidos en cada columna. */
+static void ayther_cells_open(uint32 line, int plane, uint32 row, uint32 shift)
+{
+  ayther_line_cells_v1 *c;
+  if (line >= AYTHER_LINE_MAX) { ayther_cell_dst = 0; return; }
+  c = &ayther_line_cells[line];
+  switch (plane)
+  {
+    case 0: ayther_cell_dst = c->name_a; ayther_cell_count = &c->cols_a;
+            c->row_a = (uint8)row; c->shift_a = (uint8)shift; break;
+    case 1: ayther_cell_dst = c->name_b; ayther_cell_count = &c->cols_b;
+            c->row_b = (uint8)row; c->shift_b = (uint8)shift; break;
+    default: ayther_cell_dst = c->name_w; ayther_cell_count = &c->cols_w;
+            c->row_w = (uint8)row; break;
+  }
+  *ayther_cell_count = 0;
+}
+
+static void ayther_cells_close(void)
+{
+  ayther_cell_dst = 0;
+}
+
+static void ayther_cells_begin_line(uint32 line)
+{
+  if (line < AYTHER_LINE_MAX)
+    memset(&ayther_line_cells[line], 0, sizeof(ayther_line_cells[line]));
+  ayther_cell_dst = 0;
+}
+
 uint8 ayther_attrib[320 * 240];
 uint32 ayther_attrib_width = 0;
 uint32 ayther_attrib_height = 0;
@@ -1016,6 +1065,7 @@ uint64_t ayther_controls_fingerprint(void)
 #define AYTHER_SPR_SUPPRESSED_ACTIVE(active, slot) ((void)(active), 0)
 #define AYTHER_PSUP(plane) ((const uint8 *)0)
 #define ayther_sprite_capture_record(yr, xr, attr, w, h, sat_idx, chain_pos) ((void)0)
+#define AYTHER_CELL_RECORD(pair) ((void)0)
 
 #endif /* AYTHER_EXTENSIONS */
 
@@ -2260,6 +2310,16 @@ AYTHER_HOT_INLINE void render_bg_m5_impl(int line, int ayther_observed)
   /* Pattern row index */
   v_line = (v_line & 7) << 3;
 
+#ifdef AYTHER_EXTENSIONS
+  /* #42.C: la fila y el desplazamiento fino son por LINEA y por PLANO -- el
+     renderer los calcula una vez-, asi que se guardan aca y no repetidos en
+     cada una de las 21 columnas. */
+  if (ayther_observed && AYTHER_LINE_CELLS_ACTIVE)
+  {
+    ayther_cells_begin_line((uint32)line);
+    ayther_cells_open((uint32)line, 1, v_line, shift);
+  }
+#endif
   if(shift)
   {
     /* Plane B line buffer */
@@ -2267,6 +2327,7 @@ AYTHER_HOT_INLINE void render_bg_m5_impl(int line, int ayther_observed)
 
     atbuf = nt[(index - 1) & pf_col_mask];
     DRAW_COLUMN_AE(atbuf, v_line, psupB);
+      AYTHER_CELL_RECORD(atbuf);
   }
   else
   {
@@ -2278,7 +2339,11 @@ AYTHER_HOT_INLINE void render_bg_m5_impl(int line, int ayther_observed)
   {
     atbuf = nt[index & pf_col_mask];
     DRAW_COLUMN_AE(atbuf, v_line, psupB);
+      AYTHER_CELL_RECORD(atbuf);
   }
+#ifdef AYTHER_EXTENSIONS
+  if (ayther_observed) ayther_cells_close();
+#endif
 
   /* AYTHER: ocultar Plano A o Window → limpiar su buffer compartido (linebuf[1])
      antes de dibujar; lo no dibujado queda transparente y se ve Plano B. */
@@ -2323,6 +2388,10 @@ AYTHER_HOT_INLINE void render_bg_m5_impl(int line, int ayther_observed)
 
     /* Pattern row index */
     v_line = (v_line & 7) << 3;
+#ifdef AYTHER_EXTENSIONS
+    if (ayther_observed && AYTHER_LINE_CELLS_ACTIVE)
+      ayther_cells_open((uint32)line, 0, v_line, shift);
+#endif
 
     if(shift)
     {
@@ -2340,6 +2409,7 @@ AYTHER_HOT_INLINE void render_bg_m5_impl(int line, int ayther_observed)
       }
 
       DRAW_COLUMN_AE(atbuf, v_line, psupA);
+      AYTHER_CELL_RECORD(atbuf);
     }
     else
     {
@@ -2351,7 +2421,11 @@ AYTHER_HOT_INLINE void render_bg_m5_impl(int line, int ayther_observed)
     {
       atbuf = nt[index & pf_col_mask];
       DRAW_COLUMN_AE(atbuf, v_line, psupA);
+      AYTHER_CELL_RECORD(atbuf);
     }
+#ifdef AYTHER_EXTENSIONS
+    if (ayther_observed) ayther_cells_close();
+#endif
     }   /* AYTHER: fin gate Plano A */
 
     /* Window width */
@@ -2367,6 +2441,10 @@ AYTHER_HOT_INLINE void render_bg_m5_impl(int line, int ayther_observed)
 
     /* Pattern row index */
     v_line = (line & 7) << 3;
+#ifdef AYTHER_EXTENSIONS
+    if (ayther_observed && AYTHER_LINE_CELLS_ACTIVE)
+      ayther_cells_open((uint32)line, 2, v_line, 0);
+#endif
 
     /* Plane A line buffer */
     dst = (uint32 *)&linebuf[1][0x20 + (start << 4)];
@@ -2375,6 +2453,7 @@ AYTHER_HOT_INLINE void render_bg_m5_impl(int line, int ayther_observed)
     {
       atbuf = nt[column];
       DRAW_COLUMN_AE(atbuf, v_line, psupW);
+      AYTHER_CELL_RECORD(atbuf);
     }
   }
 
@@ -2489,6 +2568,7 @@ AYTHER_HOT_INLINE void render_bg_m5_vs_impl(int line, int ayther_observed)
 
     atbuf = nt[(index - 1) & pf_col_mask];
     DRAW_COLUMN_AE(atbuf, v_line, psupB);
+      AYTHER_CELL_RECORD(atbuf);
   }
   else
   {
@@ -2513,6 +2593,7 @@ AYTHER_HOT_INLINE void render_bg_m5_vs_impl(int line, int ayther_observed)
 
     atbuf = nt[index & pf_col_mask];
     DRAW_COLUMN_AE(atbuf, v_line, psupB);
+      AYTHER_CELL_RECORD(atbuf);
   }
 
   /* AYTHER: ocultar Plano A o Window → limpiar su buffer compartido (linebuf[1]). */
@@ -2575,6 +2656,7 @@ AYTHER_HOT_INLINE void render_bg_m5_vs_impl(int line, int ayther_observed)
       }
 
       DRAW_COLUMN_AE(atbuf, v_line, psupA);
+      AYTHER_CELL_RECORD(atbuf);
     }
     else
     {
@@ -2599,6 +2681,7 @@ AYTHER_HOT_INLINE void render_bg_m5_vs_impl(int line, int ayther_observed)
 
       atbuf = nt[index & pf_col_mask];
       DRAW_COLUMN_AE(atbuf, v_line, psupA);
+      AYTHER_CELL_RECORD(atbuf);
     }
     }   /* AYTHER: fin gate Plano A */
 
@@ -2615,6 +2698,10 @@ AYTHER_HOT_INLINE void render_bg_m5_vs_impl(int line, int ayther_observed)
 
     /* Pattern row index */
     v_line = (line & 7) << 3;
+#ifdef AYTHER_EXTENSIONS
+    if (ayther_observed && AYTHER_LINE_CELLS_ACTIVE)
+      ayther_cells_open((uint32)line, 2, v_line, 0);
+#endif
 
     /* Plane A line buffer */
     dst = (uint32 *)&linebuf[1][0x20 + (start << 4)];
@@ -2623,6 +2710,7 @@ AYTHER_HOT_INLINE void render_bg_m5_vs_impl(int line, int ayther_observed)
     {
       atbuf = nt[column];
       DRAW_COLUMN_AE(atbuf, v_line, psupW);
+      AYTHER_CELL_RECORD(atbuf);
     }
   }
 
@@ -3458,6 +3546,10 @@ void render_bg_m5(int line)
 
     /* Pattern row index */
     v_line = (v_line & 7) << 3;
+#ifdef AYTHER_EXTENSIONS
+    if (ayther_observed && AYTHER_LINE_CELLS_ACTIVE)
+      ayther_cells_open((uint32)line, 0, v_line, shift);
+#endif
 
     if(shift)
     {

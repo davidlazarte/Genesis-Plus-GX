@@ -260,6 +260,9 @@ static uint8_t ayther_line_regs_buf[sizeof(ayther_line_header_v1) +
                                     AYTHER_LINE_MAX * sizeof(ayther_line_regs_v1)];
 static uint8_t ayther_line_cram_buf[sizeof(ayther_line_header_v1) +
                                     AYTHER_LINE_MAX * 128];
+static uint8_t ayther_line_cells_buf[sizeof(ayther_line_header_v1) +
+                                     AYTHER_LINE_MAX * sizeof(ayther_line_cells_v1)];
+static uint32_t ayther_line_cells_bytes;
 static uint32_t ayther_line_regs_bytes;
 static uint32_t ayther_line_cram_bytes;
 
@@ -287,6 +290,19 @@ static void ayther_fill_line_regs(void)
           ayther_line_regs, lines * sizeof(ayther_line_regs_v1));
    ayther_line_regs_bytes = (uint32_t)(sizeof(ayther_line_header_v1) +
                                        lines * sizeof(ayther_line_regs_v1));
+}
+
+static void ayther_fill_line_cells(void)
+{
+   uint32_t lines = ayther_line_count;
+   if (lines > AYTHER_LINE_MAX) lines = AYTHER_LINE_MAX;
+   ayther_fill_line_header(ayther_line_cells_buf,
+                           (uint32_t)sizeof(ayther_line_cells_v1),
+                           lines, ayther_line_flags);
+   memcpy(ayther_line_cells_buf + sizeof(ayther_line_header_v1),
+          ayther_line_cells, lines * sizeof(ayther_line_cells_v1));
+   ayther_line_cells_bytes = (uint32_t)(sizeof(ayther_line_header_v1) +
+                                        lines * sizeof(ayther_line_cells_v1));
 }
 
 static void ayther_fill_line_cram(void)
@@ -4245,6 +4261,22 @@ static int32_t ayther_map_region(uint32_t region_id,
          mapping->access_flags = AYTHER_REGION_ACCESS_READ |
             AYTHER_REGION_FRAME_SCOPED | AYTHER_REGION_NATIVE_ENDIAN;
          break;
+      case AYTHER_REGION_LINE_CELLS:
+         ayther_fill_line_cells();
+         mapping->data = ayther_line_cells_buf;
+         mapping->element_size = sizeof(ayther_line_cells_v1);
+         mapping->capacity = ayther_line_count;
+         mapping->byte_size = ayther_line_cells_bytes;
+         mapping->data_version = AYTHER_LAYOUT_LINE_CELLS_V1;
+         mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_NONE;
+         /* `name_pair` es la carga de 32 bits tal cual la hizo el renderer
+            sobre la VRAM, y en un host little-endian esa VRAM esta guardada
+            con los bytes intercambiados. Es la misma convencion que la region
+            VRAM ya declara con este flag: decirlo aca es lo que evita que un
+            consumidor la lea al reves y no se entere. */
+         mapping->access_flags = AYTHER_REGION_ACCESS_READ |
+            AYTHER_REGION_FRAME_SCOPED | AYTHER_REGION_WORD_SWAPPED_LE;
+         break;
       case AYTHER_REGION_SYSTEM:
          /* #39.B: descriptor de solo lectura. Se rellena aca, en la consulta,
             y no una vez por frame: ver la nota en ayther_fill_system. */
@@ -4299,6 +4331,8 @@ static uint32_t ayther_region_subscription(uint32_t region_id)
          return AYTHER_SUB_LINE_STATE;
       case AYTHER_REGION_LINE_CRAM:
          return AYTHER_SUB_LINE_CRAM;
+      case AYTHER_REGION_LINE_CELLS:
+         return AYTHER_SUB_LINE_CELLS;
       default:
          return 0;
    }

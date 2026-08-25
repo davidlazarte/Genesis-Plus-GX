@@ -197,7 +197,8 @@ enum ayther_endianness
    quien quiere el mapa de celdas no necesariamente quiere pagar la CRAM. */
 #define AYTHER_SUB_LINE_STATE       (UINT32_C(1) << 8)
 #define AYTHER_SUB_LINE_CRAM        (UINT32_C(1) << 9)
-#define AYTHER_SUB_ALL              UINT32_C(0x3FF)
+#define AYTHER_SUB_LINE_CELLS       (UINT32_C(1) << 10)
+#define AYTHER_SUB_ALL              UINT32_C(0x7FF)
 
 enum ayther_region_id
 {
@@ -225,6 +226,8 @@ enum ayther_region_id
   AYTHER_REGION_LINE_REGS,
   /* #42: la CRAM vigente en cada linea. */
   AYTHER_REGION_LINE_CRAM,
+  /* #42.C: que entrada de la name table le toco a cada columna. */
+  AYTHER_REGION_LINE_CELLS,
   AYTHER_REGION_COUNT
 };
 
@@ -295,6 +298,7 @@ enum ayther_legacy_memory_id
 #define AYTHER_LAYOUT_SYSTEM_V1      UINT32_C(1)
 #define AYTHER_LAYOUT_LINE_REGS_V1   UINT32_C(1)
 #define AYTHER_LAYOUT_LINE_CRAM_V1   UINT32_C(1)
+#define AYTHER_LAYOUT_LINE_CELLS_V1  UINT32_C(1)
 
 /* AYTHER (#42): el estado de render POR SCANLINE, capturado del lado de la
  * LECTURA -- cuando el renderer lo usa- y no reconstruido desde el lado de la
@@ -338,6 +342,39 @@ typedef struct ayther_line_header_v1
   uint32_t flags;            /* AYTHER_LINES_* de abajo                      */
   uint64_t frame_generation; /* el frame al que pertenece                    */
 } ayther_line_header_v1;
+
+/* AYTHER (#42.C): procedencia por CELDA de cada linea.
+ *
+ * Con LINE_REGS un frontend sabe el scroll de la linea; con esto sabe, sin
+ * volver a leer VRAM ni reimplementar el calculo de direcciones, QUE ENTRADA de
+ * la name table le toco a cada columna de 16 px, y en que fila del tile.
+ *
+ * El VDP lee la name table de a pares -- dos celdas por acceso de 32 bits-, y
+ * eso es lo que se guarda: `name_pair` es el valor crudo, tal como el renderer
+ * lo consumio. Guardar los pares y no las celdas sueltas es lo que hace que la
+ * captura no cueste una lectura extra: el valor ya estaba en un registro.
+ *
+ * Ese "tal cual" incluye el orden de bytes: en un host little-endian la VRAM
+ * esta guardada con los bytes intercambiados, asi que la region se declara con
+ * AYTHER_REGION_WORD_SWAPPED_LE. Leerla sin mirar ese flag da celdas al reves
+ * sin ningun sintoma que lo delate.
+ *
+ * Fila y desplazamiento fino son por LINEA y por PLANO, no por columna: el
+ * renderer los calcula una vez. Guardarlos por columna seria repetir 21 veces
+ * el mismo byte.
+ */
+#define AYTHER_LINE_CELL_COLUMNS 21   /* 21 x 16 px cubre H40 con el preambulo */
+
+typedef struct ayther_line_cells_v1
+{
+  uint32_t name_a[AYTHER_LINE_CELL_COLUMNS];
+  uint32_t name_b[AYTHER_LINE_CELL_COLUMNS];
+  uint32_t name_w[AYTHER_LINE_CELL_COLUMNS];
+  uint8_t  row_a, row_b, row_w;   /* fila dentro del tile, en pixeles      */
+  uint8_t  shift_a, shift_b;      /* desplazamiento fino de la linea (0-15) */
+  uint8_t  cols_a, cols_b, cols_w;
+  uint8_t  reserved0;
+} ayther_line_cells_v1;
 
 /* La CRAM no cambio en todo el frame: solo la entrada 0 es significativa. */
 #define AYTHER_LINES_CRAM_UNIFORM   UINT32_C(0x01)

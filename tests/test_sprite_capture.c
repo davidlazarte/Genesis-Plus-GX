@@ -73,6 +73,39 @@ int main(void)
   CHECK(ayther_sprite_metrics.hash_probes < 8,
         "duplicate lookup uses a bounded O(1) probe sequence");
 
+  /* #37 punto 2: un sprite de 32 px de alto se registra una vez POR SCANLINE
+     en la que es visible. Las 31 repeticiones terminaban todas en el mismo
+     lugar -- el dedup-- pero recien despues de hashear diez bytes y sondear la
+     tabla. El filtro por slot de la SAT las corta antes.
+
+     Lo que se afirma no es tiempo sino TRABAJO: 32 llamadas identicas tienen
+     que costar un solo sondeo, el de la primera. Con un cronometro este ahorro
+     no se ve en un fixture de sprites de 8x8; con el contador si. */
+  {
+    int line;
+    ayther_sprite_capture_begin_frame();
+    for (line = 0; line < 32; ++line)
+      ayther_sprite_capture_record(0x90, 0x120, 0x4000, 4, 4, 9, 0);
+    CHECK(ayther_sprite_n == 1,
+          "a 32-line sprite is captured exactly once");
+    CHECK(ayther_sprite_metrics.record_calls == 32,
+          "the renderer still offers the sprite on every visible line");
+    CHECK(ayther_sprite_metrics.hash_probes == 1,
+          "only the first line reaches the hash table");
+    CHECK(ayther_sprite_metrics.duplicates == 31,
+          "the remaining lines are rejected by the per-slot filter");
+
+    /* Y la razon por la que el filtro recuerda la ULTIMA identidad y no un
+       "ya lo vi": el SAT reescrito a mitad de frame -- el genio del logo
+       Sega-- pone otra identidad en el MISMO slot, y esa tiene que entrar. */
+    ayther_sprite_capture_record(0x90, 0x120, 0x4001, 4, 4, 9, 0);
+    CHECK(ayther_sprite_n == 2,
+          "a mid-frame rewrite of the same SAT slot still gets through");
+    ayther_sprite_capture_record(0x90, 0x120, 0x4000, 4, 4, 9, 0);
+    CHECK(ayther_sprite_n == 2,
+          "and going back to the first identity finds it already captured");
+  }
+
   printf("sprite capture unit tests: %d passed, %d failed\n", passed, failed);
   return failed ? 1 : 0;
 }

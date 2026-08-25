@@ -18,6 +18,30 @@ static ayther_sprite_hash_entry
     ayther_sprite_hash[AYTHER_SPRITE_CAPTURE_HASH_SIZE];
 static uint32_t ayther_sprite_generation = 1;
 
+/* #37 punto 2: un sprite de 32 px de alto se registra 32 veces por frame, una
+   por scanline en la que es visible. Las 31 repeticiones terminan en el mismo
+   lugar -- el dedup del hash-- pero recien despues de hashear diez bytes y
+   sondear la tabla.
+
+   El filtro de aca adelante recuerda, POR SLOT DE LA SAT, la ultima identidad
+   registrada. Si la de esta linea es la misma, no hay nada que hacer y se sale
+   con una comparacion. Si cambio, sigue el camino de siempre.
+
+   Recordar la ULTIMA y no un "ya lo vi este frame" es lo que conserva el caso
+   que la captura existe para cubrir: el SAT reescrito a mitad de frame -- el
+   genio del logo Sega-- donde un mismo slot tiene dos identidades distintas en
+   el mismo frame. Un bitmap de "visto" se comeria la segunda. */
+#define AYTHER_SPRITE_SLOTS 128u
+
+typedef struct ayther_sprite_last_seen
+{
+  uint32_t generation;
+  uint16_t yr, xr, attr;
+  uint8_t w, h, chain_pos;
+} ayther_sprite_last_seen;
+
+static ayther_sprite_last_seen ayther_sprite_last[AYTHER_SPRITE_SLOTS];
+
 #ifdef AYTHER_SPRITE_CAPTURE_METRICS
 ayther_sprite_capture_metrics ayther_sprite_metrics;
 #define AYTHER_METRIC_ADD(field, value) \
@@ -73,6 +97,7 @@ void ayther_sprite_capture_begin_frame(void)
   if (!ayther_sprite_generation)
   {
     memset(ayther_sprite_hash, 0, sizeof(ayther_sprite_hash));
+    memset(ayther_sprite_last, 0, sizeof(ayther_sprite_last));
     ayther_sprite_generation = 1;
   }
 #ifdef AYTHER_SPRITE_CAPTURE_METRICS
@@ -84,12 +109,28 @@ void ayther_sprite_capture_record(uint16_t yr, uint16_t xr, uint16_t attr,
                                   uint8_t w, uint8_t h, uint8_t sat_idx,
                                   uint8_t chain_pos)
 {
-  uint32_t slot = ayther_sprite_hash_key(
-      yr, xr, attr, w, h, sat_idx, chain_pos) &
-      (AYTHER_SPRITE_CAPTURE_HASH_SIZE - 1u);
+  uint32_t slot;
   uint32_t probe;
+  ayther_sprite_last_seen *last = &ayther_sprite_last[sat_idx & (AYTHER_SPRITE_SLOTS - 1u)];
 
   AYTHER_METRIC_ADD(record_calls, 1);
+
+  /* #37.2: la misma identidad en el mismo slot y el mismo frame ya se
+     registro. Salir aca ahorra el hash de diez bytes y el sondeo. */
+  if (last->generation == ayther_sprite_generation &&
+      last->yr == yr && last->xr == xr && last->attr == attr &&
+      last->w == w && last->h == h && last->chain_pos == chain_pos)
+  {
+    AYTHER_METRIC_ADD(duplicates, 1);
+    return;
+  }
+  last->generation = ayther_sprite_generation;
+  last->yr = yr; last->xr = xr; last->attr = attr;
+  last->w = w; last->h = h; last->chain_pos = chain_pos;
+
+  slot = ayther_sprite_hash_key(
+      yr, xr, attr, w, h, sat_idx, chain_pos) &
+      (AYTHER_SPRITE_CAPTURE_HASH_SIZE - 1u);
   for (probe = 1; probe <= AYTHER_SPRITE_CAPTURE_HASH_SIZE; ++probe)
   {
     ayther_sprite_hash_entry *entry = &ayther_sprite_hash[slot];

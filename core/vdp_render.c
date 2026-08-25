@@ -4796,6 +4796,11 @@ AYTHER_HOT_INLINE void render_obj_m5_impl(int line, int ayther_observed)
   int masked = 0;
   int max_pixels = AYTHER_RC_NOLIMIT_ACTIVE ? 0x7FFF   /* AYTHER (#270): sin presupuesto */
                                      : MODE5_MAX_SPRITE_PIXELS;
+  /* #36 punto 6: el flag se leia del global una vez POR SPRITE. Es una carga
+     barata, pero ademas le dice al compilador que ese global puede cambiar
+     adentro del bucle, y eso le impide mantener cosas en registros. Se lee una
+     vez por linea, que es cuando puede cambiar. */
+  const int rc_nomask = AYTHER_RC_NOMASK_ACTIVE;
 
   uint8 *src, *s, *lb;
   uint32 temp, v_line;
@@ -4828,7 +4833,7 @@ AYTHER_HOT_INLINE void render_obj_m5_impl(int line, int ayther_observed)
       /* Requires at least one sprite with xpos > 0 */
       spr_ovr = 1;
     }
-    else if (spr_ovr && !AYTHER_RC_NOMASK_ACTIVE)   /* AYTHER (#270): nomask la anula */
+    else if (spr_ovr && !rc_nomask)   /* AYTHER (#270): nomask la anula */
     {
       /* Remaining sprites are not drawn */
       masked = 1;
@@ -4957,6 +4962,11 @@ void render_obj_m5_ste(int line)
   int masked = 0;
   int max_pixels = AYTHER_RC_NOLIMIT_ACTIVE ? 0x7FFF   /* AYTHER (#270): sin presupuesto */
                                      : MODE5_MAX_SPRITE_PIXELS;
+  /* #36 punto 6: el flag se leia del global una vez POR SPRITE. Es una carga
+     barata, pero ademas le dice al compilador que ese global puede cambiar
+     adentro del bucle, y eso le impide mantener cosas en registros. Se lee una
+     vez por linea, que es cuando puede cambiar. */
+  const int rc_nomask = AYTHER_RC_NOMASK_ACTIVE;
 
   uint8 *src, *s, *lb;
   uint32 temp, v_line;
@@ -4981,7 +4991,7 @@ void render_obj_m5_ste(int line)
       /* Requires at least one sprite with xpos > 0 */
       spr_ovr = 1;
     }
-    else if (spr_ovr && !AYTHER_RC_NOMASK_ACTIVE)   /* AYTHER (#270): nomask la anula */
+    else if (spr_ovr && !rc_nomask)   /* AYTHER (#270): nomask la anula */
     {
       /* Remaining sprites are not drawn */
       masked = 1;
@@ -5076,6 +5086,11 @@ AYTHER_HOT_INLINE void render_obj_m5_im2_impl(int line, int ayther_observed)
   int masked = 0;
   int max_pixels = AYTHER_RC_NOLIMIT_ACTIVE ? 0x7FFF   /* AYTHER (#270): sin presupuesto */
                                      : MODE5_MAX_SPRITE_PIXELS;
+  /* #36 punto 6: el flag se leia del global una vez POR SPRITE. Es una carga
+     barata, pero ademas le dice al compilador que ese global puede cambiar
+     adentro del bucle, y eso le impide mantener cosas en registros. Se lee una
+     vez por linea, que es cuando puede cambiar. */
+  const int rc_nomask = AYTHER_RC_NOMASK_ACTIVE;
 
   uint8 *src, *s, *lb;
   uint32 temp, v_line;
@@ -5108,7 +5123,7 @@ AYTHER_HOT_INLINE void render_obj_m5_im2_impl(int line, int ayther_observed)
       /* Requires at least one sprite with xpos > 0 */
       spr_ovr = 1;
     }
-    else if (spr_ovr && !AYTHER_RC_NOMASK_ACTIVE)   /* AYTHER (#270): nomask la anula */
+    else if (spr_ovr && !rc_nomask)   /* AYTHER (#270): nomask la anula */
     {
       /* Remaining sprites are not drawn */
       masked = 1;
@@ -5233,6 +5248,11 @@ void render_obj_m5_im2_ste(int line)
   int masked = 0;
   int max_pixels = AYTHER_RC_NOLIMIT_ACTIVE ? 0x7FFF   /* AYTHER (#270): sin presupuesto */
                                      : MODE5_MAX_SPRITE_PIXELS;
+  /* #36 punto 6: el flag se leia del global una vez POR SPRITE. Es una carga
+     barata, pero ademas le dice al compilador que ese global puede cambiar
+     adentro del bucle, y eso le impide mantener cosas en registros. Se lee una
+     vez por linea, que es cuando puede cambiar. */
+  const int rc_nomask = AYTHER_RC_NOMASK_ACTIVE;
 
   uint8 *src, *s, *lb;
   uint32 temp, v_line;
@@ -5257,7 +5277,7 @@ void render_obj_m5_im2_ste(int line)
       /* Requires at least one sprite with xpos > 0 */
       spr_ovr = 1;
     }
-    else if (spr_ovr && !AYTHER_RC_NOMASK_ACTIVE)   /* AYTHER (#270): nomask la anula */
+    else if (spr_ovr && !rc_nomask)   /* AYTHER (#270): nomask la anula */
     {
       /* Remaining sprites are not drawn */
       masked = 1;

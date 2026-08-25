@@ -487,6 +487,15 @@ frame boundary.
 the palette: a frame with no mid-frame CRAM writes returns **one** entry and the
 `AYTHER_LINES_CRAM_UNIFORM` flag — 128 bytes instead of 30 KB.
 
+### Memory
+
+The recomposition caches (1.15 MB in total) used to be static, and therefore
+resident in every build with extensions whether anyone looked or not. A core
+nobody observes carried them in memory and, worse, in cache: 1.15 MB that is
+never touched still evicts lines that are. They are now requested on the first
+recomposition and released in `retro_deinit`, so a frontend that only reads VRAM
+pays nothing for them (#36).
+
 ### Cost
 
 The capture lives in the observed clone of `render_bg_m5*` and runs only under

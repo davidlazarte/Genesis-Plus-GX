@@ -71,6 +71,7 @@ SPRITE_CAPTURE_BIN := $(BUILD_DIR)/test_sprite_capture$(EXE_EXT)
 ROM_PROBE_BIN := $(BUILD_DIR)/raster_rom_probe$(EXE_EXT)
 FULL_CORE_BIN := $(BUILD_DIR)/full_core_replay$(EXE_EXT)
 STATE_GUARD_BIN := $(BUILD_DIR)/state_guard$(EXE_EXT)
+STATE_LAYOUT_BIN := $(BUILD_DIR)/state_layout$(EXE_EXT)
 TRACE_BIN := $(BUILD_DIR)/audio_probe_trace$(EXE_EXT)
 TRACE_GOLDEN := ayther/golden/audio_probe_trace.json
 TRACE_ACTUAL := $(ARTIFACT_DIR)/audio_probe_trace.actual.json
@@ -152,6 +153,18 @@ $(STATE_GUARD_BIN): ayther/state_guard.c ayther/generated_rom.c 		ayther/generat
 check-state-guard: $(STATE_GUARD_BIN)
 	$(call require_core)
 	$(STATE_GUARD_BIN) "$(CORE)"
+
+# #45: shared.h arrastra los headers del core, asi que necesita el mismo set de
+# -I que el build real.
+CORE_INCFLAGS := -I$(CORE_DIR)/core -I$(CORE_DIR)/core/z80 	-I$(CORE_DIR)/core/m68k -I$(CORE_DIR)/core/ntsc -I$(CORE_DIR)/core/sound 	-I$(CORE_DIR)/core/input_hw -I$(CORE_DIR)/core/cd_hw 	-I$(CORE_DIR)/core/cart_hw -I$(CORE_DIR)/core/cart_hw/svp 	-I$(CORE_DIR)/core/debug -I$(CORE_DIR)/core/ayther 	-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include
+
+$(STATE_LAYOUT_BIN): ayther/state_layout.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) $(CORE_INCFLAGS) -o $@ ayther/state_layout.c $(LDFLAGS)
+
+# Diagnostico, no gate: imprime y sale 0. Lo que aporta es dejar los tamanios
+# en el log de CADA plataforma, para que comparar sea leer dos logs.
+state-layout: $(STATE_LAYOUT_BIN)
+	$(STATE_LAYOUT_BIN)
 
 full-core-replay: $(FULL_CORE_BIN)
 

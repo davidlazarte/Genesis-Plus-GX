@@ -928,7 +928,21 @@ clean:
 	rm -f $(OBJECTS)
 	rm -f $(TARGET)
 
-.PHONY: clean clean-objs
+# #43: `clean` solo borra los objetos del core. Los arboles de artefactos viven
+# en tests/ y bench/, y los residuos de corridas viejas se acumulaban ahi sin
+# que nada los barriera: 44 MB en tests/artifacts-issue9 al momento de escribir
+# esto. distclean deja el arbol como un clon recien hecho.
+distclean: clean
+	$(MAKE) -C tests clean
+	$(MAKE) -C bench clean
+	rm -rf tests/artifacts bench/artifacts ayther-artifacts
+	rm -rf .uv-cache-raster
+	# Los overrides de BUILD_DIR/ARTIFACT_DIR de corridas viejas dejan
+	# arboles con sufijo (.build-issue9, artifacts-sanitize-gcc...) que
+	# ningun `clean` conoce por nombre.
+	rm -rf tests/.build-* bench/.build-* tests/artifacts-* bench/artifacts-*
+
+.PHONY: clean clean-objs distclean
 endif
 
 print-%:

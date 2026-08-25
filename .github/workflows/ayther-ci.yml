@@ -269,6 +269,11 @@ jobs:
           CC=clang
           CORE=../genesis_plus_gx_libretro.so
 
+      # #45: los tamanios quedan en el log de las DOS plataformas; comparar la
+      # divergencia de state_hash pasa a ser leer dos corridas.
+      - name: Report serialized struct layout
+        run: make -C tests state-layout CC=clang
+
       # El numero se publica pero NO bloquea. Evidencia: dos corridas PARALELAS
       # del mismo commit midieron 1,023% y 1,708% -0,7 puntos de spread sobre
       # binarios identicos-, o sea que el ruido del runner compartido es mayor
@@ -313,8 +318,8 @@ jobs:
         run: >-
           make -C tests check
           CC=clang
-          BUILD_DIR=.build-sanitize
-          ARTIFACT_DIR=artifacts-sanitize
+          BUILD_DIR=.build/sanitize
+          ARTIFACT_DIR=artifacts/sanitize
           CFLAGS="-O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-omit-frame-pointer"
           LDFLAGS="-fsanitize=address,undefined"
 
@@ -323,7 +328,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ayther-sanitizer-diagnostics
-          path: tests/artifacts-sanitize/
+          path: tests/artifacts/sanitize/
           if-no-files-found: ignore
           retention-days: 14
 
@@ -405,7 +410,7 @@ jobs:
         run: >-
           make -C tests check-concurrency
           CC=clang
-          BUILD_DIR=.build-tsan
+          BUILD_DIR=.build/tsan
           CFLAGS="-O1 -g -Wall -Wextra -fsanitize=thread -fno-omit-frame-pointer"
           LDFLAGS="-fsanitize=thread"
 
@@ -478,6 +483,11 @@ jobs:
           make -C tests check-state-guard
           CC=clang
           CORE=../genesis_plus_gx_libretro.dll
+
+      - name: Report serialized struct layout
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        shell: pwsh
+        run: make -C tests state-layout CC=clang
 
       - name: Compare extensions-off and compiled-idle profiles
         continue-on-error: true

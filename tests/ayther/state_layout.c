@@ -15,6 +15,9 @@
  */
 #include <stdio.h>
 #include "shared.h"
+#include "ym3438.h"
+#include "opll.h"
+#include "ssp16.h"
 
 #define P(t) printf("  %-24s %6u\n", #t, (unsigned)sizeof(t))
 
@@ -28,5 +31,12 @@ int main(void)
   P(cpu_memory_map);
   P(cart_hw_t);
   P(md_cart_t);
+
+  /* Los chips de sonido y el SVP tambien se vuelcan enteros con sizeof, en
+     sound_context_save y md_cart_context_save. Sin estos la respuesta seria
+     parcial: alcanza UNO distinto para explicar la divergencia. */
+  P(ym3438_t);
+  P(opll_t);
+  P(ssp1601_t);
   return 0;
 }

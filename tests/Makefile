@@ -129,7 +129,12 @@ $(SPRITE_CAPTURE_BIN): test_sprite_capture.c $(SPRITE_CAPTURE_SRC) \
 		-I$(CORE_DIR)/core -o $@ test_sprite_capture.c \
 		$(SPRITE_CAPTURE_SRC) $(LDFLAGS)
 
+# #35.2: en macOS `dlopen` vive en libSystem y no hay una libdl que
+# linkear; en Windows se usa LoadLibrary. Solo Linux (y los Unix con
+# libdl separada) necesitan el -ldl.
 ifeq ($(OS),Windows_NT)
+ROM_PROBE_LIBS :=
+else ifeq ($(shell uname -s),Darwin)
 ROM_PROBE_LIBS :=
 else
 ROM_PROBE_LIBS := -ldl

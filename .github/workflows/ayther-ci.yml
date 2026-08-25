@@ -653,3 +653,138 @@ jobs:
           path: ayther-artifacts/
           if-no-files-found: ignore
           retention-days: 14
+  # #35 punto 2: macOS en CI.
+  #
+  # No es "una plataforma mas". Los runners de macOS son arm64, asi que este
+  # job es lo unico que corre los goldens fuera de x86-64, y es la unica
+  # forma de saber si el fixture generado y las tablas del VDP dependen de la
+  # arquitectura o solo del endianness. Si un golden se mueve aca, lo que hay
+  # que mirar es el golden, no el job.
+  #
+  # Lo que este job NO hace, a proposito: el cierre de exports. `check_exports.sh`
+  # lee simbolos con nm/objdump al estilo ELF/PE, y en Mach-O los simbolos llevan
+  # un guion bajo delante. Correrlo aca sin adaptarlo daria un verde que no
+  # verifica nada, que es peor que no correrlo.
+  macos-core:
+    name: macOS arm64 (extensions=${{ matrix.ayther_extensions }}, probe=${{ matrix.sound_probe }}, legacy=${{ matrix.legacy_profile }})
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - ayther_extensions: 0
+            sound_probe: 0
+            legacy_profile: 0
+          - ayther_extensions: 1
+            sound_probe: 0
+            legacy_profile: 0
+          - ayther_extensions: 1
+            sound_probe: 1
+            legacy_profile: 0
+          - ayther_extensions: 1
+            sound_probe: 1
+            legacy_profile: 1
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Build libretro core
+        run: >-
+          make -f Makefile.libretro platform=osx
+          AYTHER_EXTENSIONS=${{ matrix.ayther_extensions }}
+          AYTHER_LEGACY_PROFILE=${{ matrix.legacy_profile }}
+          SOUND_PROBE=${{ matrix.sound_probe }} -j3
+
+      - name: Report the built dylib
+        run: |
+          set -euo pipefail
+          test -f genesis_plus_gx_libretro.dylib
+          file genesis_plus_gx_libretro.dylib
+          otool -L genesis_plus_gx_libretro.dylib
+
+      - name: Run unit and golden-trace tests
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: make -C tests check
+
+      - name: Replay generated ROM across save/load boundary
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -C tests check-full-core
+          CORE=../genesis_plus_gx_libretro.dylib
+
+      - name: Reject a savestate written by a different ABI
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -C tests check-state-guard
+          CORE=../genesis_plus_gx_libretro.dylib
+
+      - name: Report serialized struct layout
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: make -C tests state-layout
+
+      - name: Audio controls reach every FM core
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -C tests check-audio-controls
+          CORE=../genesis_plus_gx_libretro.dylib
+
+      - name: Frame delta survives a second reader
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -C tests check-frame-delta
+          CORE=../genesis_plus_gx_libretro.dylib
+
+      - name: Attribution answers a subscription that asks only for it
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -C tests check-attribution-scene
+          CORE=../genesis_plus_gx_libretro.dylib
+
+      - name: Plane tile suppression hides one plane at a time
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -C tests check-plane-suppress
+          CORE=../genesis_plus_gx_libretro.dylib
+
+      - name: The five recomposition layers match their golden
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -C tests check-multilayer
+          CORE=../genesis_plus_gx_libretro.dylib
+
+      - name: Per-scanline state matches the ROM's own scroll table
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -C tests check-line-state
+          CORE=../genesis_plus_gx_libretro.dylib
+
+      - name: Video modes match their per-scene golden
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -C tests check-scenes
+          CORE=../genesis_plus_gx_libretro.dylib
+
+      - name: Build a metrics core
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -B -f Makefile.libretro platform=osx
+          AYTHER_EXTENSIONS=1 SOUND_PROBE=1 AYTHER_METRICS=1 -j3
+
+      - name: Idle does exactly zero work
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -C tests check-idle-metrics
+          CORE=../genesis_plus_gx_libretro.dylib
+
+      - name: Preserve macOS diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ayther-macos-extensions-${{ matrix.ayther_extensions }}-probe-${{ matrix.sound_probe }}-legacy-${{ matrix.legacy_profile }}-diagnostics
+          path: |
+            ayther-artifacts/
+            tests/artifacts/
+          if-no-files-found: ignore
+          retention-days: 14

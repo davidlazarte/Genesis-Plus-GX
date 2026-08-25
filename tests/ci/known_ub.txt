@@ -32,3 +32,11 @@
 # casos conocidos sean el MISMO patron upstream; si aparece uno de otra
 # naturaleza en este archivo, hay que partir la entrada.
 vdp_render.c|store to misaligned address
+
+# Mismo patron, otro archivo: #43.4 saco `ayther_draw_col` de vdp_render.c a su
+# propio header. El codigo no cambio -- la DLL quedo byte a byte del mismo
+# tamanio-- pero UBSan reporta por archivo, asi que el gate lo vio como UB
+# nuevo. Es el store de 32 bits de DRAW_COLUMN sobre `0x10 + shift`, el mismo
+# que describe la entrada de arriba y con la misma condicion de salida: se
+# arregla cuando macOS arm64 entre al matrix (#35).
+ayther_draw_column.h|store to misaligned address

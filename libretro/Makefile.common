@@ -28,6 +28,12 @@ ifeq ($(AYTHER_EXTENSIONS), 1)
    ifeq ($(AYTHER_LEGACY_PROFILE), 1)
       FLAGS += -DAYTHER_LEGACY_PROFILE
    endif
+   # #36: contadores de instrumentacion. Build de diagnostico, NO se publica:
+   # exporta ayther_metrics_read/reset para que el harness pueda afirmar
+   # "cero trabajo en idle" contando en vez de cronometrando.
+   ifeq ($(AYTHER_METRICS), 1)
+      FLAGS += -DAYTHER_METRICS
+   endif
 else ifeq ($(SOUND_PROBE), 1)
    $(error SOUND_PROBE=1 requires AYTHER_EXTENSIONS=1)
 endif

@@ -46,6 +46,7 @@
 #ifdef AYTHER_EXTENSIONS
 #include "ayther/ayther_api.h"
 #include "ayther/ayther_runtime.h"
+#include "ayther/ayther_metrics.h"
 #ifdef AYTHER_EXTENSIONS
 #include "ayther/ayther_sprite_capture.h"
 #endif
@@ -129,6 +130,7 @@ extern uint8 ayther_layer_dim;             /* atenuar capas no-sprite al 25% (id
    chain_pos = posición en la CADENA de links al parsear = prioridad real de dibujo
    del VDP entre sprites (menor = más al frente). */
 extern uint8 ayther_sprite_suppress[16];   /* slots SAT suprimidos (id 0x103) */
+extern uint8 ayther_sprite_suppress_active; /* #36: 1 = hay algun slot suprimido */
 extern uint8 ayther_tile_suppress[512];    /* celdas de tile suprimidas (id 0x104, 64x64) */
 extern uint8 ayther_plane_tile_suppress[3 * 1024]; /* tiles de plano suprimidos (id 0x105) */
 extern uint8 ayther_plane_suppress_active;  /* id 0x106: 1 = hay algún tile de plano oculto */

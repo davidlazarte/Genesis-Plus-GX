@@ -5,5 +5,6 @@
       audio_probe_get_transport_stats; audio_probe_reset_transport_stats;
       audio_probe_get_context; audio_probe_set_channel_gain;
       audio_probe_get_channel_gain;
+      ayther_metrics_read; ayther_metrics_reset;
    local: *;
 };

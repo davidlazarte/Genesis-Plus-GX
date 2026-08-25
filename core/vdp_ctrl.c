@@ -64,7 +64,24 @@ static void vdp_set_all_vram(const uint8 *src);
    cambiado entera sin que corriera un solo frame. */
 #ifdef AYTHER_EXTENSIONS
 uint8 ayther_vram_dirty[0x800];
-#define AYTHER_MARK_VRAM_DIRTY(n, bits) ayther_vram_dirty[(n)] |= (uint8)(bits)
+/* #36: la marca corre SOLO si alguien mira. Antes corria en CADA escritura a
+   VRAM con extensions compilado -- un `|=` por write, en un path que un juego
+   recorre miles de veces por frame-- aunque no hubiera un solo subscriber, y
+   eso contradecia la promesa de "cero trabajo en idle" que el fork vende.
+
+   El estado previo no se pierde: al ACTIVAR la suscripcion se marca todo sucio
+   (ver ayther_begin_frame en libretro.c), igual que ya se hacia en load y en
+   reset. El primer delta despues de suscribirse dice "todo", que es la
+   respuesta correcta para quien no estaba mirando antes. */
+#define AYTHER_MARK_VRAM_DIRTY(n, bits)                             \
+  do {                                                              \
+    if (AYTHER_SUBSCRIBED(AYTHER_SUB_VDP_MEMORY |                    \
+                          AYTHER_SUB_RASTER_TRACKING))              \
+    {                                                               \
+      ayther_vram_dirty[(n)] |= (uint8)(bits);                      \
+      AYTHER_METRIC_INC(vram_dirty_marks);                          \
+    }                                                               \
+  } while (0)
 #else
 #define AYTHER_MARK_VRAM_DIRTY(n, bits) do {} while (0)
 #endif

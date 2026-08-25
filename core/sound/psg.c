@@ -287,6 +287,12 @@ void psg_write(unsigned int clocks, unsigned int data)
   audio_probe_psg_raw(clocks, data);
 #endif
 
+#ifdef AYTHER_EXTENSIONS
+  /* #29: el PSG escribe comandos de un byte, sin registro separado, asi que
+     `addr` va en 0: el dato ES el comando. */
+  ayther_audio_write_log((uint32)clocks, 0u, (uint8)data, AYTHER_AUDIO_CHIP_PSG);
+#endif
+
   if (data & 0x80)
   {
     /* latch register index (1xxx----) */

@@ -91,6 +91,12 @@ static ym3438_t ym3438;
 static short ym3438_accm[24][2];
 static int ym3438_sample[2];
 static int ym3438_cycles;
+#ifdef AYTHER_EXTENSIONS
+/* #29: latch de direccion propio del log de la ABI. El de audio_probe vive bajo
+   SOUND_PROBE, y el log NO puede depender del probe: la capability se anuncia
+   con extensions=1 aunque probe este apagado. */
+static int ayther_fm_addr_latch;
+#endif
 #ifdef SOUND_PROBE
 /* latched register address for the Nuked core's audio_probe tap (OPN2_Write
    only exposes the bus port, not the internal address latch) */
@@ -155,13 +161,20 @@ static void YM2612_Write(unsigned int cycles, unsigned int a, unsigned int v)
     }
   }
 
-  /* AYTHER fork delta: registrar la escritura cruda al bus FM (orden temporal).
-     Loguea address-port (a=0/2) y data-port (a=1/3); el host replica el latch de
-     dirección de YM2612Write para reconstruir el registro (p.ej. 0x28 key-on). */
-  /* El log lo produce audio_probe.c, no esta ruta: por eso este hook quedo
-     vacio. Consecuencia todavia abierta (#29): con SOUND_PROBE=0 la region
-     AUDIO_WRITES existe y siempre viene vacia, aunque la capability se
-     anuncie igual. */
+#ifdef AYTHER_EXTENSIONS
+  /* #29: el log de escrituras crudas al bus FM, en orden temporal. Se guarda el
+     registro DECODIFICADO (part << 8) | reg y no el puerto, que es lo que el
+     consumidor necesita para leer un key-on sin reconstruir el latch. */
+  if (a & 1)
+  {
+    ayther_audio_write_log((uint32)cycles, (uint16)ayther_fm_addr_latch,
+                           (uint8)v, AYTHER_AUDIO_CHIP_FM);
+  }
+  else
+  {
+    ayther_fm_addr_latch = (int)v | ((a & 2) ? 0x100 : 0);
+  }
+#endif
 
   /* write FM register */
   YM2612Write(a, v);
@@ -256,11 +269,18 @@ static void YM3438_Write(unsigned int cycles, unsigned int a, unsigned int v)
   /* synchronize FM chip with CPU */
   fm_update(cycles);
 
-  /* AYTHER fork delta: registrar la escritura cruda al bus FM (core enhanced). */
-  /* El log lo produce audio_probe.c, no esta ruta: por eso este hook quedo
-     vacio. Consecuencia todavia abierta (#29): con SOUND_PROBE=0 la region
-     AUDIO_WRITES existe y siempre viene vacia, aunque la capability se
-     anuncie igual. */
+#ifdef AYTHER_EXTENSIONS
+  /* #29: mismo protocolo de registro que el YM2612; ver YM2612_Write. */
+  if (a & 1)
+  {
+    ayther_audio_write_log((uint32)cycles, (uint16)ayther_fm_addr_latch,
+                           (uint8)(v & 0xff), AYTHER_AUDIO_CHIP_FM);
+  }
+  else
+  {
+    ayther_fm_addr_latch = (int)(v & 0xff) | ((a & 2) ? 0x100 : 0);
+  }
+#endif
 
   /* write FM register */
   OPN2_Write(&ym3438, a, v);

@@ -91,7 +91,7 @@ static int16_t input_cb(unsigned a,unsigned b,unsigned c,unsigned d){(void)a;(vo
 /* Una corrida completa: carga el DLL, opcionalmente mutea FM, y devuelve
    hash y energia del audio. DLL nuevo por corrida: sin estado que se filtre. */
 static int run_once(const char *dll, const char *fm_core, uint32_t mute_mask,
-                    uint64_t *out_hash, uint64_t *out_energy)
+                    uint64_t *out_hash, uint64_t *out_energy, uint32_t *out_writes)
 {
   library_t lib = open_library(dll);
   if (!lib) { fprintf(stderr, "no carga %s\n", dll); return 0; }
@@ -127,7 +127,7 @@ static int run_once(const char *dll, const char *fm_core, uint32_t mute_mask,
 
   const ayther_interface_v1 *api = p_iface(0);
   if (!api) { fprintf(stderr, "sin ABI\n"); close_library(lib); return 0; }
-  api->set_subscriptions(AYTHER_SUB_RENDER_CONTROLS);
+  api->set_subscriptions(AYTHER_SUB_RENDER_CONTROLS | AYTHER_SUB_AUDIO_WRITES);
   p_run();  /* la suscripcion se activa al inicio del frame siguiente */
 
   if (mute_mask) {
@@ -143,6 +143,17 @@ static int run_once(const char *dll, const char *fm_core, uint32_t mute_mask,
   int f;
   for (f = 0; f < FRAMES; f++) p_run();
 
+  /* #29: la region tiene que traer eventos con extensions=1, con o sin probe.
+     Se lee ANTES de cerrar el DLL y despues del ultimo frame. */
+  if (out_writes)
+  {
+    uint32_t n = 0; uint64_t gen = 0;
+    if (api->read_region(AYTHER_REGION_AUDIO_WRITE_COUNT, 0, &n, sizeof(n),
+                         AYTHER_GENERATION_ANY, &gen) != AYTHER_STATUS_OK)
+      n = 0;
+    *out_writes = n;
+  }
+
   *out_hash = g_audio_hash; *out_energy = g_audio_energy;
   close_library(lib);
   return 1;
@@ -157,8 +168,9 @@ int main(int argc, char **argv)
 
   for (i = 0; i < 2; i++) {
     uint64_t h_open = 0, e_open = 0, h_mute = 0, e_mute = 0;
-    if (!run_once(dll, cores[i], 0u, &h_open, &e_open)) { fail = 1; continue; }
-    if (!run_once(dll, cores[i], 0x3Fu, &h_mute, &e_mute)) { fail = 1; continue; }
+    uint32_t w_open = 0;
+    if (!run_once(dll, cores[i], 0u, &h_open, &e_open, &w_open)) { fail = 1; continue; }
+    if (!run_once(dll, cores[i], 0x3Fu, &h_mute, &e_mute, NULL)) { fail = 1; continue; }
 
     int changed  = (h_open != h_mute);
     int quieter  = (e_mute < e_open);
@@ -167,6 +179,14 @@ int main(int argc, char **argv)
            changed ? (quieter ? "MUTE APLICADO" : "cambia pero NO baja")
                    : "NO-OP (el mute no llega al chip)");
     if (!changed || !quieter) fail = 1;
+
+    /* #29: la capability AUDIO_WRITES se anuncia con extensions=1, asi que la
+       region TIENE que producir. Que venga vacia con la capability anunciada es
+       peor que no anunciarla: el consumidor no puede distinguir "no hubo
+       escrituras" de "esta build no las produce". */
+    printf("%-16s  escrituras en AUDIO_WRITES: %u -> %s\n",
+           cores[i], (unsigned)w_open, w_open > 0 ? "OK" : "VACIA (sin productor)");
+    if (w_open == 0) fail = 1;
   }
 
   printf("\n%s\n", fail ? "FALLO" : "TODO OK");

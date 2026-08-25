@@ -457,6 +457,8 @@ void vdp_ayther_begin_frame(void)
      eventos fósiles del arranque a cada línea que recomponía. */
   ayther_raster_journal_count = 0;
   ayther_raster_journal_dropped = 0;
+  /* #42: lo que sigue pertenece a ESTE frame. */
+  ayther_line_state_begin_frame();
   if (AYTHER_SUBSCRIBED(AYTHER_SUB_RASTER_TRACKING))
     ayther_raster_dirty = ayther_recompose_mode_supported()
       ? 0u : AYTHER_RASTER_REASON_UNSUPPORTED_MODE;

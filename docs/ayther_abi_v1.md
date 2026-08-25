@@ -59,6 +59,7 @@ frame, so two consumers of the same frame read the same thing. Before, the
 second one read zero. |
 | 1.2 | **Additive.** Appends `recompose_multilayer` to the descriptor and adds the `AYTHER_REGION_WORD_SWAPPED_LE` region flag (#32). The standalone `ayther_recompose_multilayer` export is now **deprecated** and is emitted only in the legacy profile. |
 | 1.5 | **Additive.** Adds the `SYSTEM` region and `AYTHER_CAP_SYSTEM_V1` (#39.B), plus the `AYTHER_STATUS_UNSUPPORTED_MODE` status and `AYTHER_CAP_MODE4_CONTROLS` (#40). No existing field moved. Controls that only exist in Mode 5 now say so instead of accepting the write and doing nothing. |
+| 1.6 | **Additive.** Adds the `LINE_REGS` and `LINE_CRAM` regions, the `AYTHER_SUB_LINE_STATE` / `AYTHER_SUB_LINE_CRAM` subscriptions and `AYTHER_CAP_LINE_STATE_V1` (#42). `AYTHER_SUB_ALL` widens from `0xFF` to `0x3FF`; the eight existing bits keep their positions. |
 
 Two earlier changes were shipped inside 1.0 without a bump, which is what this
 table exists to prevent from recurring:
@@ -455,3 +456,48 @@ check every return value.
 
 `AYTHER_CAP_MODE4_CONTROLS` announces that the rows above have become "yes".
 While the bit is absent, the table is the contract.
+
+## Per-scanline render state (#42)
+
+`LINE_REGS` and `LINE_CRAM` give the state the VDP actually used **on each
+scanline**: the resolved horizontal and vertical scroll, the resolved table
+bases, the registers that matter for reconstruction, the window clip, and the
+palette in force on that line.
+
+It is captured on the **read** side — where the renderer consumes it — not
+reconstructed from the write side. Reconstructing it from writes is what the
+raster journal does, and that is approximate by construction: you have to guess
+which cycle of which line each write landed on and what it affected. Capturing
+it where the renderer uses it is exact — it is literally the value it used — and
+cheaper, because there is nothing to rebuild.
+
+What it unlocks: the screen cell a frontend can hide today (`0x104`) is
+frame-space, and with per-line scroll it never lines up with a plane tile. With
+`xscroll_a` for the line, "cell (x,y) of the screen" maps to "this tile of plane
+A" — which is what an HD substitution pipeline needs in order to key an asset.
+
+### Layout
+
+Both regions are a header followed by entries, in one contiguous buffer. The
+header is *inside* because a consumer needs the line count and the frame
+generation in the **same** read: two separate reads can land on either side of a
+frame boundary.
+
+`LINE_CRAM` costs 128 bytes per line, so it does not pay it when nobody changed
+the palette: a frame with no mid-frame CRAM writes returns **one** entry and the
+`AYTHER_LINES_CRAM_UNIFORM` flag — 128 bytes instead of 30 KB.
+
+### Cost
+
+The capture lives in the observed clone of `render_bg_m5*` and runs only under
+subscription: with no subscribers, nothing executes. The `-DAYTHER_METRICS`
+counters confirm it, and the CRAM copy is skipped entirely until the palette
+actually changes.
+
+### The predicate that decides the clone
+
+`AYTHER_OBSERVED_ACTIVE` must list **every** subscription whose data is captured
+inside the observed clone. Forgetting one does not raise an error: it produces a
+region that answers `OK` and comes back empty. That is how #41 was found, and it
+happened again while adding these regions. Any future region filled in there
+gets its bit added to that list.

@@ -677,8 +677,16 @@ uint8 ayther_layer_mask = 0xFF;
    Peor todavia con el clon rapido de render_bg, que usa `merge_fast` -- sin
    el hook--: ni siquiera las capas salian, y el frame entero decia
    "backdrop". */
-#define AYTHER_OBSERVED_ACTIVE \
-  AYTHER_SUBSCRIBED(AYTHER_SUB_RENDER_CONTROLS | AYTHER_SUB_ATTRIBUTION)
+/* La lista tiene que llevar TODA suscripción cuyo dato se capture adentro del
+   clon observado. Olvidar una no da un error: da una región que contesta OK y
+   viene vacía, que es como se descubrió esto en #41 y como volvió a pasar al
+   agregar el estado por línea en #42. Si mañana entra otra región que se llene
+   ahí adentro, su bit va en esta lista. */
+#define AYTHER_OBSERVED_ACTIVE                    \
+  AYTHER_SUBSCRIBED(AYTHER_SUB_RENDER_CONTROLS |  \
+                    AYTHER_SUB_ATTRIBUTION |      \
+                    AYTHER_SUB_LINE_STATE |       \
+                    AYTHER_SUB_LINE_CRAM)
 #define AYTHER_HIDE_A \
   (AYTHER_CONTROLS_ACTIVE && !(ayther_layer_mask & AYTHER_LAYER_A))
 #define AYTHER_HIDE_B \
@@ -820,6 +828,116 @@ static int ayther_peel_vx     = 0;   /* desplazamiento del borde izquierdo (view
  * La capa se decide replicando la regla de prioridad de la LUT, no comparando
  * bytes: dos capas pueden producir el mismo valor y ahí comparar da una
  * respuesta arbitraria justo en los píxeles donde importa. */
+/* AYTHER (#42): el estado de render POR SCANLINE.
+
+   El raster journal lo aproxima desde el lado de la ESCRITURA: hay que adivinar
+   en que ciclo de que linea cayo cada write y que efecto tuvo. Capturarlo donde
+   el renderer lo CONSUME es exacto -- es literalmente el valor que uso-- y ademas
+   mas barato: no hay nada que reconstruir.
+
+   240 lineas es el maximo que este core emite (PAL con overscan). El buffer es
+   estatico y del tamanio del peor caso: 240 x 32 B de registros mas 240 x 128 B
+   de CRAM son 38 KB, del mismo orden que el buffer de atribucion que ya existe,
+   y evita una asignacion en un camino que corre por linea. */
+#define AYTHER_LINE_MAX 240u
+ayther_line_regs_v1 ayther_line_regs[AYTHER_LINE_MAX];
+uint8 ayther_line_cram[AYTHER_LINE_MAX][128];
+uint32 ayther_line_count = 0;
+uint32 ayther_line_flags = 0;
+static uint8 ayther_line_cram_first[128];
+static int ayther_line_cram_dirty = 0;
+
+#define AYTHER_LINE_STATE_ACTIVE AYTHER_SUBSCRIBED(AYTHER_SUB_LINE_STATE)
+#define AYTHER_LINE_CRAM_ACTIVE  AYTHER_SUBSCRIBED(AYTHER_SUB_LINE_CRAM)
+
+/* Se llama al empezar el frame: lo que sigue pertenece a ESTE frame y no al
+   anterior. `lines` queda en cero hasta que las lineas se dibujen, asi que un
+   consumidor que lea a mitad de camino ve lo que hay y no basura vieja. */
+void ayther_line_state_begin_frame(void)
+{
+  ayther_line_count = 0;
+  ayther_line_flags = 0;
+  ayther_line_cram_dirty = 0;
+}
+
+/* La CRAM se copia entera por linea solo si CAMBIO a mitad de frame. En un
+   frame sin writes de paleta -- que es la mayoria- se guarda una sola copia y se
+   marca CRAM_UNIFORM: 128 B en vez de 30 KB, y el consumidor sabe leerlo. */
+static void ayther_line_capture_cram(uint32 line)
+{
+  if (!ayther_line_cram_dirty)
+  {
+    if (line == 0)
+    {
+      memcpy(ayther_line_cram_first, cram, sizeof(ayther_line_cram_first));
+      memcpy(ayther_line_cram[0], cram, sizeof(ayther_line_cram[0]));
+      return;
+    }
+    if (!memcmp(ayther_line_cram_first, cram, sizeof(ayther_line_cram_first)))
+      return;                      /* sigue igual: no hay nada que guardar */
+    /* Cambio: hay que rellenar hacia atras lo que se venia salteando. */
+    {
+      uint32 i;
+      for (i = 1; i < line; ++i)
+        memcpy(ayther_line_cram[i], ayther_line_cram_first,
+               sizeof(ayther_line_cram[0]));
+    }
+    ayther_line_cram_dirty = 1;
+  }
+  memcpy(ayther_line_cram[line], cram, sizeof(ayther_line_cram[0]));
+}
+
+/* Capturado a la ENTRADA de render_bg_m5*, con los valores ya resueltos: el
+   scroll de la linea, las bases de las tablas y los recortes de la ventana. */
+static void ayther_line_capture(uint32 line, uint32 xscroll,
+                                                uint32 yscroll)
+{
+  ayther_line_regs_v1 *r;
+
+  if (line >= AYTHER_LINE_MAX)
+  {
+    ayther_line_flags |= AYTHER_LINES_OVERFLOW;
+    return;
+  }
+  r = &ayther_line_regs[line];
+#ifdef LSB_FIRST
+  r->xscroll_a = (uint16)(xscroll & 0x3FF);
+  r->xscroll_b = (uint16)((xscroll >> 16) & 0x3FF);
+  r->yscroll_a = (uint16)(yscroll & 0x3FF);
+  r->yscroll_b = (uint16)((yscroll >> 16) & 0x3FF);
+#else
+  r->xscroll_a = (uint16)((xscroll >> 16) & 0x3FF);
+  r->xscroll_b = (uint16)(xscroll & 0x3FF);
+  r->yscroll_a = (uint16)((yscroll >> 16) & 0x3FF);
+  r->yscroll_b = (uint16)(yscroll & 0x3FF);
+#endif
+  r->ntab = ntab; r->ntbb = ntbb; r->ntwb = ntwb;
+  r->hscb = hscb; r->satb = satb;
+  r->reg1 = reg[1]; r->reg7 = reg[7]; r->reg11 = reg[11]; r->reg12 = reg[12];
+  r->reg13 = reg[13]; r->reg16 = reg[16]; r->reg17 = reg[17]; r->reg18 = reg[18];
+  r->clip_a_start = (uint8)clip[0].left;
+  r->clip_a_end   = (uint8)clip[0].right;
+  r->clip_w_start = (uint8)clip[1].left;
+  r->clip_w_end   = (uint8)clip[1].right;
+  r->flags = (uint8)((clip[1].enable ? AYTHER_LINE_WINDOW_ACTIVE : 0) |
+                     ((reg[11] & 0x04) ? AYTHER_LINE_VSCROLL_COLUMN : 0));
+  r->reserved0 = 0;
+
+  if (AYTHER_LINE_CRAM_ACTIVE)
+  {
+    ayther_line_capture_cram(line);
+    /* Mientras la CRAM no haya cambiado, la region entrega UNA entrada y este
+       flag; el consumidor sabe leerlo. 128 B en vez de 30 KB. */
+    if (ayther_line_cram_dirty)
+      ayther_line_flags &= ~AYTHER_LINES_CRAM_UNIFORM;
+    else
+      ayther_line_flags |= AYTHER_LINES_CRAM_UNIFORM;
+  }
+
+  if (line + 1u > ayther_line_count)
+    ayther_line_count = line + 1u;
+}
+
 uint8 ayther_attrib[320 * 240];
 uint32 ayther_attrib_width = 0;
 uint32 ayther_attrib_height = 0;
@@ -2092,6 +2210,13 @@ AYTHER_HOT_INLINE void render_bg_m5_impl(int line, int ayther_observed)
   uint32 pf_col_mask  = playfield_col_mask;
   uint32 pf_row_mask  = playfield_row_mask;
   uint32 pf_shift     = playfield_shift;
+
+#ifdef AYTHER_EXTENSIONS
+  /* #42: el estado de esta línea, con el scroll ya resuelto. Sólo en el clon
+     observado y sólo bajo suscripción: sin subscribers no corre nada. */
+  if (ayther_observed && AYTHER_LINE_STATE_ACTIVE)
+    ayther_line_capture((uint32)line, xscroll, yscroll);
+#endif
 
   /* AYTHER: máscaras de supresión por plano (id 0x105); NULL = fast path. */
   const uint8 *psupA = ayther_observed ? AYTHER_PSUP(0) : (const uint8 *)0;

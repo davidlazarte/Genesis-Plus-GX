@@ -60,8 +60,10 @@ int main(void)
         "ABI 1.4 is a minor bump over 1.3");
   CHECK(AYTHER_ABI_VERSION_1_5 == UINT32_C(0x00010005),
         "ABI 1.5 is a minor bump over 1.4");
-  CHECK(AYTHER_ABI_VERSION_LATEST == AYTHER_ABI_VERSION_1_5,
-        "latest ABI is 1.5");
+  CHECK(AYTHER_ABI_VERSION_1_6 == UINT32_C(0x00010006),
+        "ABI 1.6 is a minor bump over 1.5");
+  CHECK(AYTHER_ABI_VERSION_LATEST == AYTHER_ABI_VERSION_1_6,
+        "latest ABI is 1.6");
 
   /* #30: la 1.4 es ADITIVA. Lo que hay que fijar no es que los campos nuevos
      existan -- eso lo dice el compilador-- sino que los viejos NO se movieron:
@@ -109,10 +111,12 @@ int main(void)
   CHECK(AYTHER_STATUS_RC_JOURNAL_OVERFLOW == -24 &&
         AYTHER_RC_ERR_JOURNAL_OVERFLOW == -5,
         "the journal-overflow status codes are stable");
-  CHECK(AYTHER_REGION_COUNT == 19, "every region is inventoried");
+  CHECK(AYTHER_REGION_COUNT == 21, "every region is inventoried");
   /* #41/#39: la region nueva va al FINAL del enum. Meterla en el medio
      correria los ids de todas las siguientes, y los ids viajan por la ABI. */
-  CHECK(AYTHER_REGION_SYSTEM == AYTHER_REGION_COUNT - 1 &&
+  CHECK(AYTHER_REGION_LINE_CRAM == AYTHER_REGION_COUNT - 1 &&
+        AYTHER_REGION_LINE_REGS == AYTHER_REGION_LINE_CRAM - 1 &&
+        AYTHER_REGION_SYSTEM == AYTHER_REGION_LINE_REGS - 1 &&
         AYTHER_REGION_ATTRIBUTION == AYTHER_REGION_SYSTEM - 1 &&
         AYTHER_REGION_RASTER_FALLBACK_REASONS == AYTHER_REGION_ATTRIBUTION - 1,
         "region ids are append-only");
@@ -133,6 +137,22 @@ int main(void)
   CHECK(AYTHER_SYSTEM_HW_MD == 0x80 && AYTHER_SYSTEM_HW_MCD == 0x84 &&
         AYTHER_SYSTEM_HW_GG == 0x40 && AYTHER_SYSTEM_HW_SMS == 0x20,
         "system_hw uses the core SYSTEM_* values");
+
+  /* #42: el estado por linea. Los offsets se congelan porque el struct viaja
+     por la ABI: agregar campos al final es aditivo, moverlos no lo es. */
+  CHECK(sizeof(ayther_line_regs_v1) == 32,
+        "one scanline of register state fits in 32 bytes");
+  CHECK(offsetof(ayther_line_regs_v1, xscroll_a) == 0 &&
+        offsetof(ayther_line_regs_v1, yscroll_a) == 4 &&
+        offsetof(ayther_line_regs_v1, ntab) == 8 &&
+        offsetof(ayther_line_regs_v1, reg1) == 18 &&
+        offsetof(ayther_line_regs_v1, clip_a_start) == 26 &&
+        offsetof(ayther_line_regs_v1, flags) == 30,
+        "line register fields are at frozen offsets");
+  CHECK(sizeof(ayther_line_header_v1) == 24 &&
+        offsetof(ayther_line_header_v1, lines) == 8 &&
+        offsetof(ayther_line_header_v1, frame_generation) == 16,
+        "the per-line header is frozen");
   CHECK(AYTHER_LEGACY_MEMORY_CRAM == 0x100,
         "legacy memory IDs remain stable");
   CHECK(AYTHER_LEGACY_MEMORY_RASTER_DIRTY == 0x10E,
@@ -148,8 +168,14 @@ int main(void)
   CHECK(AYTHER_CAP_FRAME_DELTA_V1 == (UINT64_C(1) << 11) &&
         AYTHER_CAP_RECOMPOSE_STATS_V1 == (UINT64_C(1) << 12),
         "capability bits added after v1 keep their positions");
-  CHECK(AYTHER_SUB_ALL == UINT32_C(0xFF),
+  /* #42: dos bits nuevos al final. Los ocho de antes no se mueven: los ids de
+     suscripcion viajan por la ABI igual que los de region. */
+  CHECK(AYTHER_SUB_ALL == UINT32_C(0x3FF),
         "all subscription bits are accounted for");
+  CHECK(AYTHER_SUB_LINE_STATE == (UINT32_C(1) << 8) &&
+        AYTHER_SUB_LINE_CRAM == (UINT32_C(1) << 9) &&
+        AYTHER_SUB_ATTRIBUTION == (UINT32_C(1) << 7),
+        "subscription bits are append-only");
   CHECK((AYTHER_SUB_ALL & UINT32_C(0x7F)) == UINT32_C(0x7F) &&
         AYTHER_SUB_ATTRIBUTION == (UINT32_C(1) << 7),
         "the v1 subscription bits keep their positions");

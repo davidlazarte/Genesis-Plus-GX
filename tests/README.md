@@ -366,3 +366,162 @@ is not a defect (the per-line case is `LINE_CRAM`), but it is a property that
 has to be measured where it holds, so the palette check runs on the S/H fixture,
 which has no H-int. The contract is now written down in `ayther_api.h` and in
 `docs/ayther_abi_v1.md` instead of being folklore.
+## LTO: measured, not adopted (#43.5)
+
+The issue asked for a CI job that builds with `-flto` and compares, adopting it
+if it improves by >= 3% without breaking goldens. Measured on Linux/gcc:
+
+| | `.so` total | `.text` |
+|---|---:|---:|
+| without LTO | 12,917,992 | 1,211,647 |
+| with LTO | 11,224,584 | 1,267,191 |
+
+The total drops 13%, but that is almost entirely symbols and debug info, which
+are never loaded. What actually runs -- `.text` -- **grows 4.6%**: LTO inlines
+across translation units and i-cache pressure goes up. On speed there is no
+honest verdict available from this harness: the bench carries +-3% noise and the
+issue's threshold is exactly 3%, so any answer would be noise shaped like a
+conclusion.
+
+So it is **not adopted by default**. It stays as `AYTHER_LTO=1`, and the
+`lto-build` job keeps it working -- an LTO build is where cross-unit UB shows up
+-- and asserts the 14 fast/observed clones are still separate functions. If LTO
+merged them, the pattern the whole "zero cost when idle" claim rests on would
+quietly collapse.
+## Fuzzing (#34)
+
+Five libFuzzer targets in `tests/fuzz/`, over the surfaces that receive bytes
+the core did not choose: `write_control`, `retro_unserialize`, recomposition,
+the synthetic ROM, and the audio event ring.
+
+Each target is a `LLVMFuzzerTestOneInput` and nothing else. **Who calls it
+depends on how it was built**, and both paths matter:
+
+- `make -C tests/fuzz fuzz-<name>` builds it with libFuzzer (clang) and searches.
+  That runs nightly, not on PRs: fuzzing is a search, so the same commit can go
+  green once and red the next time depending on where the budget lands.
+- `make -C tests check-fuzz` builds it **without** a fuzzer, with any C compiler,
+  and replays the seed corpus plus `regressions/` under ASan/UBSan. That one is
+  deterministic and does gate merges.
+
+Without the second path a broken target would only surface in the nightly job,
+and nobody could tell whether the target or the core broke. Without the first,
+nothing new is ever found.
+
+Inputs are **mutation lists over something valid**, not raw blobs. A savestate
+is ~1 MB and a cartridge 4 MB; starting from noise would spend the whole budget
+rediscovering "this is a Mega Drive header" instead of exploring what happens
+when one field is wrong. The corpus stays in the tens of bytes.
+
+The invariants are what make these more than crash detectors:
+
+- **write_control**: a *rejected* write must leave the region byte-identical. A
+  partial write followed by an error is the worst possible outcome, and it does
+  not crash — so it is only found by looking for it.
+- **unserialize**: if the state is *accepted*, the core must survive running.
+  Accepting and then dying is worse than rejecting, because the frontend moved on.
+- **recompose**: canaries around the output buffer, and the serialized state hash
+  must be identical before and after. That is the operational definition of "does
+  not perturb emulation", which the deterministic replay depends on.
+- **audio_ring**: what comes out must be strictly increasing (drops leave
+  legitimate gaps; reordering and duplication do not), and delivered + dropped
+  must equal pushed. A ring that hands back garbage without crashing is exactly
+  what a "does not crash" test cannot see.
+
+When the nightly job finds something it uploads the reproducer and opens one
+issue with the crash hash in the title — twenty nights finding the same bug must
+produce one issue, not twenty. The fix lands together with the reproducer in
+`tests/fuzz/regressions/<target>/`, and from then on `check-fuzz` replays it.
+
+On Windows the replay build runs without sanitizers: the llvm-mingw toolchain
+this fork uses ships no ASan runtime for `x86_64-w64-windows-gnu`. It still
+catches aborts and crashes there; the magnifying glass is on Linux, which is
+where the nightly job runs.
+## Why each sprite drew or did not (#39.C)
+
+`make -C tests check-sprite-outcome CORE=...`. `PARSED_SPRITES` says which
+sprites the parser saw. It does not say what happened to them afterwards, and
+"is in the list" is not "was drawn": the VDP can still drop it for the
+per-line sprite limit, for the pixel budget, or hide it behind the x=0 mask.
+
+The fixture is the oracle. 24 sprites on the **same line** -- four more than the
+20 H40 draws -- with slot 12 at x=0. That makes both acceptance criteria exact
+rather than approximate, and the measured result is what the hardware rules
+predict:
+
+```
+ 0..11  parsed drawn
+   12   parsed masked-x0     <- the one at x=0
+13..19  parsed masked-x0     <- everything below it in the chain
+20..23  drop-line            <- never entered the list
+```
+
+A third assertion is not in the issue but is the one most used in practice:
+suppressing a slot through mask `0x103` must report `suppressed`, not a hardware
+drop. "It did not draw because you asked" and "it did not draw because the VDP
+ran out" are different answers, and a frontend debugging its own overlay needs
+to tell them apart.
+## Timing gates and local-ROM validation (#35.3, #35.4)
+
+**What still fails the build, and what only reports.** `bench_sprite_capture`
+used to fail if *either* of two things did not hold. One of them is a wall-clock
+comparison between two implementations that are close together; on a shared
+runner that inverts by itself, and the effect of such a gate is not to protect
+the code, it is to teach people to ignore red.
+
+What stays blocking is the **structural** claim, which does not depend on which
+machine drew the job: the hash path performs fewer probes than the linear scan
+performs comparisons (currently 96 vs 207,280). If that inverts, the data
+structure stopped doing what it exists for, and the clock is irrelevant. The
+timing is still measured and published — the time series is useful — but an
+inversion prints a warning instead of breaking the run.
+
+**`make -C tests validate-roms CORE=... ROM_DIR=... [FRAMES=1800]`** runs the
+raster probe over a local collection and writes
+`docs/validation/raster-roms-<date>.md`. No ROM byte is stored, only the
+contract result. It is opt-in and does not run in CI, but it is now
+*reproducible*: the August report had been generated by hand, so nobody else
+could redo it or even know which command produced it.
+
+Wiring that target immediately found something: **the probe had been broken**.
+Recomposition has required a subscription since subscriptions exist, and the
+probe never subscribed — it asked on frame 0 and got `NOT_SUBSCRIBED`, so it
+failed against *any* ROM. And the subscription has to happen **after**
+`retro_load_game`, because loading content resets the session: subscribing
+before compiles, runs, and does nothing, which is the worst of the three. A
+probe that only ever runs by hand can stay broken for a long time without
+anyone noticing.
+## The UCRT build does not fail (#45.A)
+
+#38 left this bounded but unproven: the UCRT build died with
+`STATUS_STACK_BUFFER_OVERRUN` (0xC0000409). That code is **not** stack
+exhaustion -- that is 0xC00000FD -- it is what `__fastfail` produces, and in
+UCRT both `abort()` and the *invalid parameter handler* are built on it. MSVCRT
+has no such handler: it was never that MSVCRT worked, it is that MSVCRT does not
+validate.
+
+Closing it needed a stack, and `__fastfail` terminates the process **without**
+going through the unhandled-exception filter, so nothing was left behind.
+`tests/ci/ucrt_diag.h` hooks in earlier instead:
+`_set_invalid_parameter_handler` names the CRT call that failed, a `SIGABRT`
+handler catches an explicit `abort()`, and the exception filter stays as a net.
+Exit codes tell the three paths apart: 3 abort, 4 invalid parameter, 0xC0000409
+raw.
+
+**Measured result: it does not fail.** The UCRT build loads, runs the full
+120-frame replay and produces the *same* golden as msvcrt, Linux and macOS
+(`video_hash 4d39e98fa62d8b4e`), exit 0, with none of the handlers firing. The
+`__fastfail` #38 saw is gone.
+
+Two things that fell out of building the job, both real:
+
+- A mingw UCRT build does **not** import `ucrtbase.dll`. It imports the *API
+  sets* (`api-ms-win-crt-runtime-l1-1-0.dll` and friends), which is how Windows
+  has exposed the UCRT since Windows 10. `verify-windows-core.ps1` had been
+  forbidding UCRT by matching only the DLL name -- a guard that could not fire.
+  It was harmless in practice because the positive `msvcrt.dll` check covered
+  it, but a guard that cannot fail on its own terms is not a guard.
+- The job started as a diagnosis with `continue-on-error` and is now a **gate**.
+  A diagnosis that already answered its question and is left in informative mode
+  is a job nobody reads. The handlers stay installed: if it ever comes back, the
+  log will say why instead of leaving an unexplained exit code.

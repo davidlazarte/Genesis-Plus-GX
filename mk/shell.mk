@@ -24,6 +24,27 @@ EXE_EXT :=
 THREAD_FLAGS := -pthread
 endif
 
+# `require_core` vive aca por la misma razon que lo demas: tests/ lo tenia y
+# tests/fuzz/ lo necesita igual (#34). Copiarlo habria sido la tercera copia
+# de un bloque que este archivo existe para no tener repetido.
+ifeq ($(findstring sh,$(notdir $(SHELL))),sh)
+define require_core
+	@test -n "$(CORE)" || (echo "CORE=/path/to/libretro core is required" >&2; exit 2)
+endef
+define require_profile_cores
+	@test -n "$(PROFILE_OFF_CORE)" || (echo "PROFILE_OFF_CORE is required" >&2; exit 2)
+	@test -n "$(PROFILE_IDLE_CORE)" || (echo "PROFILE_IDLE_CORE is required" >&2; exit 2)
+endef
+else
+define require_core
+	@if "$(CORE)"=="" (echo CORE=path-to-libretro-core is required 1>&2 & exit /B 2)
+endef
+define require_profile_cores
+	@if "$(PROFILE_OFF_CORE)"=="" (echo PROFILE_OFF_CORE is required 1>&2 & exit /B 2)
+	@if "$(PROFILE_IDLE_CORE)"=="" (echo PROFILE_IDLE_CORE is required 1>&2 & exit /B 2)
+endef
+endif
+
 ifeq ($(findstring sh,$(notdir $(SHELL))),sh)
 define make_dir
 	@mkdir -p "$1"

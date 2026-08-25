@@ -26,6 +26,13 @@ size_t ayther_build_generated_rom_fm(uint8_t *rom, size_t capacity);
  * encontraba igual y el arreglo no se distinguiria de lo que ya habia. */
 size_t ayther_build_generated_rom_sh(uint8_t *rom, size_t capacity);
 
+/* #39.C: 24 sprites en la misma linea -- cuatro mas que los 20 que el VDP
+   dibuja en H40-- y uno en x=0 en el slot 12. */
+#define AYTHER_SPR_FIXTURE_COUNT     24u
+#define AYTHER_SPR_FIXTURE_MASK_SLOT 12u
+#define AYTHER_SPR_FIXTURE_LIMIT     20u
+size_t ayther_build_generated_rom_sprites(uint8_t *rom, size_t capacity);
+
 /* Coordenadas de pantalla de los dos sprites de esa escena. */
 #define AYTHER_SH_SPRITE_X 64
 #define AYTHER_SH_SPRITE_Y 8

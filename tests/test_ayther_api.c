@@ -60,11 +60,13 @@ int main(void)
         "ABI 1.4 is a minor bump over 1.3");
   CHECK(AYTHER_ABI_VERSION_1_5 == UINT32_C(0x00010005),
         "ABI 1.5 is a minor bump over 1.4");
+  CHECK(AYTHER_ABI_VERSION_1_8 == UINT32_C(0x00010008),
+        "ABI 1.8 keeps its encoding");
   CHECK(AYTHER_ABI_VERSION_1_7 == UINT32_C(0x00010007),
         "ABI 1.7 keeps its encoding");
   CHECK(AYTHER_ABI_VERSION_1_6 == UINT32_C(0x00010006),
         "ABI 1.6 is a minor bump over 1.5");
-  CHECK(AYTHER_ABI_VERSION_LATEST == AYTHER_ABI_VERSION_1_7,
+  CHECK(AYTHER_ABI_VERSION_LATEST == AYTHER_ABI_VERSION_1_8,
         "latest ABI is 1.6");
 
   /* #30: la 1.4 es ADITIVA. Lo que hay que fijar no es que los campos nuevos
@@ -113,10 +115,11 @@ int main(void)
   CHECK(AYTHER_STATUS_RC_JOURNAL_OVERFLOW == -24 &&
         AYTHER_RC_ERR_JOURNAL_OVERFLOW == -5,
         "the journal-overflow status codes are stable");
-  CHECK(AYTHER_REGION_COUNT == 25, "every region is inventoried");
+  CHECK(AYTHER_REGION_COUNT == 26, "every region is inventoried");
   /* #41/#39: la region nueva va al FINAL del enum. Meterla en el medio
      correria los ids de todas las siguientes, y los ids viajan por la ABI. */
-  CHECK(AYTHER_REGION_PALETTE == AYTHER_REGION_COUNT - 1 &&
+  CHECK(AYTHER_REGION_SPRITE_OUTCOME == AYTHER_REGION_COUNT - 1 &&
+        AYTHER_REGION_PALETTE == AYTHER_REGION_SPRITE_OUTCOME - 1 &&
         AYTHER_REGION_FRAME_HASH == AYTHER_REGION_PALETTE - 1 &&
         AYTHER_REGION_RASTER_JOURNAL == AYTHER_REGION_FRAME_HASH - 1 &&
         AYTHER_REGION_LINE_CELLS == AYTHER_REGION_RASTER_JOURNAL - 1 &&
@@ -195,8 +198,13 @@ int main(void)
   CHECK(sizeof(ayther_frame_hash_v1) == 56 &&
         AYTHER_PALETTE_ENTRIES == 256,
         "frame hash and palette keep their layout");
-  CHECK(AYTHER_CAP_OBSERVABILITY_V1 == (UINT64_C(1) << 18),
-        "the observability capability keeps its bit");
+  CHECK(AYTHER_CAP_OBSERVABILITY_V1 == (UINT64_C(1) << 18) &&
+        AYTHER_CAP_SPRITE_OUTCOME_V1 == (UINT64_C(1) << 19),
+        "the observability capabilities keep their bits");
+  /* #39.C: 80 slots es el maximo de la SAT en H40; si cambia, la region entera
+     cambia de tamanio y el consumidor lo tiene que saber. */
+  CHECK(AYTHER_SPRITE_SAT_SLOTS == 80,
+        "the sprite outcome region keeps its size");
   /* #42.C: el par de celdas se entrega tal como el renderer lo cargo, que en
      little-endian significa con los bytes dados vuelta. Congelar el tamanio
      evita que una entrada crezca sin bump. */

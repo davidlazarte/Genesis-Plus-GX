@@ -15,6 +15,9 @@ concurrency:
 env:
   LLVM_MINGW_VERSION: "20260519"
   LLVM_MINGW_SHA256: "2fa481d30909cbdcf740c6dce11a3f1e72224070cde76c0683289f0bb44f4dd9"
+  # #45.A: el mismo release, la otra CRT. Sale del digest que publica la API
+  # de releases de GitHub, no de bajarlo y confiar.
+  LLVM_MINGW_UCRT_SHA256: "72dbd6e64614e3b3401998992d1bd9c8ace29e74611d71c80309ea71c3fb26f9"
 
 jobs:
   source-quality:
@@ -792,3 +795,160 @@ jobs:
             tests/artifacts/
           if-no-files-found: ignore
           retention-days: 14
+  # #43 punto 5: LTO. El issue pedia un job que compile con -flto y compare, y
+  # que se adopte si mejora >= 3% sin romper goldens. Medido en Linux/gcc:
+  #
+  #   sin LTO   .so 12.917.992   .text 1.211.647
+  #   con LTO   .so 11.224.584   .text 1.267.191
+  #
+  # El .so total baja 13%, pero eso es casi todo simbolos y debug, que no se
+  # cargan. Lo que corre -- .text-- CRECE 4,6%: LTO inlinea entre unidades y la
+  # presion sobre la i-cache sube. Sobre velocidad no se puede decidir con este
+  # harness: el bench tiene +-3% de ruido y el umbral del issue es exactamente
+  # 3%, asi que cualquier veredicto seria ruido con forma de conclusion.
+  #
+  # Conclusion: NO se adopta por defecto. Queda como `AYTHER_LTO=1`, y este job
+  # existe para que siga funcionando -- un build con LTO es donde aparece el UB
+  # entre unidades- y para que los 14 clones fast/observed sigan separados: si
+  # LTO los fusionara, el patron que sostiene el "cero costo en idle" se cae.
+  lto-build:
+    name: LTO build (opt-in, no adoptado)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Build with and without LTO
+        run: |
+          set -euo pipefail
+          make -B -f Makefile.libretro platform=unix AYTHER_EXTENSIONS=1 SOUND_PROBE=1 -j2
+          cp genesis_plus_gx_libretro.so base.so
+          make -B -f Makefile.libretro platform=unix AYTHER_EXTENSIONS=1 SOUND_PROBE=1 \
+            AYTHER_LTO=1 -j2
+
+      - name: Report both sizes
+        run: |
+          set -euo pipefail
+          for f in base.so genesis_plus_gx_libretro.so; do
+            printf '%-28s total=%-10s .text=%s\n' "$f" "$(stat -c%s "$f")" \
+              "$(size -A "$f" | awk '$1==".text"{print $2}')"
+          done
+
+      # Lo que este job protege de verdad: que LTO no deshaga el patron
+      # fast/observed. Son 7 pares; si aparecen menos, alguno se fusiono.
+      - name: The fast/observed clones survive LTO
+        run: |
+          set -euo pipefail
+          n=$(nm genesis_plus_gx_libretro.so | grep -cE '_(fast|observed)_path')
+          echo "clones separados: $n"
+          test "$n" -eq 14
+
+      - name: Verify shared-library exports
+        run: |
+          set -euo pipefail
+          nm -D --defined-only genesis_plus_gx_libretro.so | sed 's/.* //' > exports.txt
+          bash tests/ci/check_exports.sh exports.txt 1 0 1
+
+      - name: Goldens hold under LTO
+        run: |
+          set -euo pipefail
+          make -C tests check
+          for t in check-full-core check-scenes check-line-state check-determinism \
+                   check-abi-dynamic check-multilayer check-observability; do
+            make -C tests "$t" CORE=../genesis_plus_gx_libretro.so
+          done
+  # #45.A: el fallo con UCRT, reproducido y con nombre.
+  #
+  # #38 dejo la causa acotada pero no demostrada: el build UCRT muere con
+  # STATUS_STACK_BUFFER_OVERRUN (0xC0000409), que NO es agotamiento de pila
+  # -- eso es 0xC00000FD-- sino lo que produce `__fastfail`. En UCRT `abort()`
+  # y el *invalid parameter handler* estan implementados sobre el, y MSVCRT no
+  # tiene ese handler: no es que MSVCRT funcione, es que no valida.
+  #
+  # El problema para cerrarlo era que `__fastfail` mata el proceso sin pasar por
+  # el filtro de excepciones, asi que sin depurador no quedaba ni un mensaje. El
+  # harness ahora se engancha ANTES (tests/ci/ucrt_diag.h): si el fallo llega por
+  # un parametro invalido, el log dice que funcion y que expresion.
+  #
+  # RESULTADO (2026-08-25): el build UCRT NO falla. Carga, corre el replay
+  # completo y produce el MISMO golden que msvcrt, Linux y macOS
+  # (video_hash 4d39e98fa62d8b4e), con exit 0 y sin que ninguno de los handlers
+  # se dispare. El `__fastfail` que #38 observo ya no esta.
+  #
+  # Por eso el job nacio como diagnostico con `continue-on-error` y hoy es una
+  # PUERTA: lo que empezo como "averiguar por que muere" termino en "no muere", y
+  # lo unico que queda por cuidar es que no vuelva a morir. Un diagnostico que ya
+  # dio su respuesta y se deja en modo informativo es un job que nadie lee.
+  #
+  # Los handlers de tests/ci/ucrt_diag.h siguen puestos: si alguna vez vuelve,
+  # el log va a decir por que -- abort, parametro invalido o fastfail crudo-- en
+  # vez de dejar un codigo de salida sin explicacion.
+  windows-ucrt:
+    name: Windows UCRT (#45.A)
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned llvm-mingw UCRT toolchain
+        shell: pwsh
+        run: >-
+          ./.github/scripts/setup-llvm-mingw.ps1
+          -Version $env:LLVM_MINGW_VERSION
+          -Sha256 $env:LLVM_MINGW_UCRT_SHA256
+          -Crt ucrt
+
+      - name: Build the core with UCRT
+        shell: pwsh
+        run: >-
+          make -f Makefile.libretro platform=win64
+          AYTHER_EXTENSIONS=1 SOUND_PROBE=1 -j2
+
+      # Un build UCRT de mingw NO importa ucrtbase.dll directamente: importa los
+      # *API sets* (api-ms-win-crt-runtime-l1-1-0.dll y companiia), que es como
+      # Windows expone la UCRT desde Windows 10. Buscar el nombre del DLL a secas
+      # da un falso negativo, y este job lo encontro en su primera corrida.
+      - name: Confirm it really links against the UCRT
+        shell: pwsh
+        run: |
+          $out = & llvm-readobj --coff-imports genesis_plus_gx_libretro.dll |
+                 Select-String -Pattern 'ucrtbase|api-ms-win-crt|msvcrt'
+          $out
+          if (-not ($out -match 'ucrtbase|api-ms-win-crt')) {
+            throw 'este build no usa la UCRT: el diagnostico no aplica'
+          }
+          if ($out -match 'msvcrt\.dll') {
+            throw 'este build importa msvcrt: el toolchain elegido no es el UCRT'
+          }
+
+      # El harness con los handlers puestos. Si el proceso muere igual, el codigo
+      # de salida y el log dicen por donde: 3 = abort(), 4 = parametro invalido,
+      # 0xC0000409 crudo = fastfail por otro camino.
+      - name: Run the full replay under UCRT, with the handlers installed
+        shell: pwsh
+        run: |
+          # El mismo target que usa el resto de CI: el harness necesita cinco
+          # rutas de salida, no solo el core, y pasarselas a mano fue un error de
+          # uso disfrazado de fallo del core en la primera corrida.
+          make -C tests check-full-core CC=clang CPPFLAGS=-DAYTHER_UCRT_DIAG `
+            CORE=../genesis_plus_gx_libretro.dll 2>&1 |
+            Tee-Object -FilePath ucrt-replay.log
+          $code = $LASTEXITCODE
+          Write-Host "exit code: $code (0x$('{0:X8}' -f $code))"
+          Write-Host "3 = abort(), 4 = parametro invalido, 0xC0000409 = fastfail crudo"
+          "UCRT_EXIT=$code" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Upload the UCRT diagnosis
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ayther-ucrt-diagnosis
+          path: |
+            ucrt-replay.log
+            genesis_plus_gx_libretro.dll
+          if-no-files-found: warn
+          retention-days: 30

@@ -22,24 +22,6 @@ SPRITE_CAPTURE_HEADERS := $(CORE_DIR)/core/ayther/ayther_sprite_capture.h \
 # estaba copiado en tres Makefiles y se corrigio dos veces por separado.
 include $(CORE_DIR)/mk/shell.mk
 
-ifeq ($(findstring sh,$(notdir $(SHELL))),sh)
-define require_core
-	@test -n "$(CORE)" || (echo "CORE=/path/to/libretro core is required" >&2; exit 2)
-endef
-define require_profile_cores
-	@test -n "$(PROFILE_OFF_CORE)" || (echo "PROFILE_OFF_CORE is required" >&2; exit 2)
-	@test -n "$(PROFILE_IDLE_CORE)" || (echo "PROFILE_IDLE_CORE is required" >&2; exit 2)
-endef
-else
-define require_core
-	@if "$(CORE)"=="" (echo CORE=path-to-libretro-core is required 1>&2 & exit /B 2)
-endef
-define require_profile_cores
-	@if "$(PROFILE_OFF_CORE)"=="" (echo PROFILE_OFF_CORE is required 1>&2 & exit /B 2)
-	@if "$(PROFILE_IDLE_CORE)"=="" (echo PROFILE_IDLE_CORE is required 1>&2 & exit /B 2)
-endef
-endif
-
 UNIT_BIN  := $(BUILD_DIR)/test_audio_probe$(EXE_EXT)
 CONCURRENCY_BIN := $(BUILD_DIR)/test_audio_probe_concurrency$(EXE_EXT)
 API_BIN := $(BUILD_DIR)/test_ayther_api$(EXE_EXT)
@@ -58,6 +40,8 @@ ATTRIB_SCENE_BIN := $(BUILD_DIR)/attribution_scene$(EXE_EXT)
 PLANE_SUP_BIN := $(BUILD_DIR)/plane_suppress$(EXE_EXT)
 MULTILAYER_BIN := $(BUILD_DIR)/multilayer$(EXE_EXT)
 OBSERVABILITY_BIN := $(BUILD_DIR)/observability$(EXE_EXT)
+SPR_OUTCOME_BIN := $(BUILD_DIR)/sprite_outcome$(EXE_EXT)
+MODE4_BIN := $(BUILD_DIR)/mode4_controls$(EXE_EXT)
 ABI_DYNAMIC_BIN := $(BUILD_DIR)/verify_ayther_api$(EXE_EXT)
 SCENES_BIN := $(BUILD_DIR)/scenes$(EXE_EXT)
 LINE_STATE_BIN := $(BUILD_DIR)/line_state$(EXE_EXT)
@@ -91,7 +75,8 @@ PROFILE_COMPARISON := $(ARTIFACT_DIR)/feature_gate_profiles.json
 .PHONY: all check check-unit check-concurrency check-determinism \
 	check-full-core check-profile-comparison raster-rom-probe \
 	full-core-replay check-idle-metrics check-attribution-scene check-plane-suppress check-multilayer \
-	check-observability check-abi-dynamic \
+	check-observability check-abi-dynamic check-fuzz check-fuzz-ring validate-roms check-mode4 \
+	check-sprite-outcome \
 	regen-multilayer check-scenes regen-scenes check-line-state clean
 
 all: $(UNIT_BIN) $(CONCURRENCY_BIN) $(API_BIN) $(RASTER_BIN) \
@@ -148,10 +133,24 @@ $(ROM_PROBE_BIN): ayther/raster_rom_probe.c | $(BUILD_DIR)
 
 raster-rom-probe: $(ROM_PROBE_BIN)
 
+# #35 punto 4: la validacion con ROMs comerciales, reproducible.
+#
+# Los ROMs no estan en el repo ni pueden estarlo, asi que esto es opt-in y no
+# corre en CI. Lo que si tiene que ser es REHACIBLE: el informe de agosto
+# existia desde hace meses generado a mano, o sea que nadie mas podia
+# reproducirlo ni saber con que comando habia salido.
+#
+#   make -C tests validate-roms CORE=<core> ROM_DIR=<directorio> [FRAMES=1800]
+FRAMES ?= 1800
+validate-roms: $(ROM_PROBE_BIN)
+	$(call require_core)
+	@test -n "$(ROM_DIR)" || (echo "ROM_DIR=<directorio-de-roms> es obligatorio" >&2; exit 2)
+	bash ci/validate_roms.sh "$(abspath $(CORE))" "$(ROM_DIR)" $(FRAMES)
+
 $(FULL_CORE_BIN): ayther/full_core_replay.c ayther/generated_rom.c \
 		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core \
-		-I$(CORE_DIR)/libretro/libretro-common/include -Iayther \
+		-I$(CORE_DIR)/libretro/libretro-common/include -Iayther -Ici \
 		-o $@ ayther/full_core_replay.c ayther/generated_rom.c \
 		$(LDFLAGS) $(ROM_PROBE_LIBS)
 
@@ -247,6 +246,32 @@ check-abi-dynamic: $(ABI_DYNAMIC_BIN)
 	$(call require_core)
 	$(ABI_DYNAMIC_BIN) "$(CORE)"
 
+$(SPR_OUTCOME_BIN): ayther/sprite_outcome.c ayther/generated_rom.c \
+		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther \
+		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include \
+		-Iayther -o $@ ayther/sprite_outcome.c ayther/generated_rom.c \
+		$(LDFLAGS) $(ROM_PROBE_LIBS)
+
+$(MODE4_BIN): ayther/mode4_controls.c $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther \
+		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include \
+		-o $@ ayther/mode4_controls.c $(LDFLAGS) $(ROM_PROBE_LIBS)
+
+# #40 fase 2: los controles del fork en Mode 4, contra un cartucho real.
+# OPT-IN: sin AYTHER_SMS_ROM apuntando a un .sms, el test se saltea y lo dice.
+# Un ROM comercial no puede estar en el repo, y mientras no exista un fixture
+# SMS -- el generador emite 68000 y un cartucho de Master System corre Z80--
+# esto es lo que hay, y es mucho mejor que nada.
+check-mode4: $(MODE4_BIN)
+	$(call require_core)
+	$(MODE4_BIN) "$(CORE)"
+
+# #39.C: por que cada sprite se dibujo o no.
+check-sprite-outcome: $(SPR_OUTCOME_BIN)
+	$(call require_core)
+	$(SPR_OUTCOME_BIN) "$(CORE)"
+
 # #39 A/D/E: journal raster, hashes del frame y paleta resuelta.
 check-observability: $(OBSERVABILITY_BIN)
 	$(call require_core)
@@ -309,7 +334,21 @@ check-profile-comparison: $(FULL_CORE_BIN) | $(ARTIFACT_DIR)
 $(TRACE_BIN): ayther/audio_probe_trace.c $(PROBE_SRC) $(PROBE_HEADERS) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(COMMON_CPPFLAGS) -o $@ ayther/audio_probe_trace.c $(PROBE_SRC) $(LDFLAGS)
 
-check: check-unit check-determinism
+# #34: `check-fuzz-ring` entra en el `check` pelado porque es el unico target
+# de fuzzing que no necesita un core cargado. Los otros cuatro van en
+# `check-fuzz`, que si lo pide.
+check: check-unit check-determinism check-fuzz-ring
+
+# #34: reproducir el corpus y las regresiones de los targets de fuzzing.
+# Esto NO fuzzea -- no necesita clang-: replaya entradas conocidas bajo
+# ASan/UBSan, que es lo que evita que un crash arreglado vuelva sin que
+# nadie se entere.
+check-fuzz:
+	$(call require_core)
+	$(MAKE) -C fuzz replay-all CC=$(CC) CORE="$(abspath $(CORE))"
+
+check-fuzz-ring:
+	$(MAKE) -C fuzz replay-audio_ring CC=$(CC) CORE=no-hace-falta
 
 check-unit: $(UNIT_BIN) $(CONCURRENCY_BIN) $(API_BIN) $(RASTER_BIN) \
 		$(SPRITE_CAPTURE_BIN) $(DIM_BIN) $(SPRITE_RULE_BIN) $(ROM_PROBE_BIN)

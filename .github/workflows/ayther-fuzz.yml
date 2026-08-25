@@ -1,0 +1,136 @@
+name: AYTHER fuzz
+
+# #34: los targets de fuzzing corren de noche, no en cada PR.
+#
+# Fuzzear es una busqueda: no tiene sentido bloquear un merge con ella, porque
+# el mismo commit puede salir verde una vez y rojo la siguiente segun donde
+# llegue el fuzzer con su presupuesto. Lo que SI bloquea un merge es
+# `make -C tests check-fuzz`, que reproduce el corpus y las regresiones y es
+# deterministico.
+#
+# Cuando este job encuentra algo, el hallazgo no se pierde: el crash sube como
+# artefacto y se abre un issue con el hash en el titulo, que es lo que evita
+# tener veinte issues del mismo bug.
+
+on:
+  schedule:
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: 'Segundos por target'
+        required: false
+        default: '600'
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: ayther-fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    name: ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [write_control, unserialize, recompose, generated_rom, audio_ring]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # El core va con los MISMOS sanitizers que el target: si el core se
+      # compila sin ASan, el fuzzer solo encuentra los crashes que ya matan al
+      # proceso, y se pierde justo lo que ASan existe para ver.
+      - name: Build the core with sanitizers
+        env:
+          CC: clang
+        run: >-
+          make -B -f Makefile.libretro platform=unix
+          AYTHER_EXTENSIONS=1 SOUND_PROBE=1
+          CC="clang -fsanitize=address,undefined -shared-libsan -fno-omit-frame-pointer -g"
+          -j2
+
+      - name: Fuzz ${{ matrix.target }}
+        env:
+          FUZZ_SECONDS: ${{ github.event.inputs.seconds || '600' }}
+        run: |
+          set -uo pipefail
+          export LD_LIBRARY_PATH="$(clang -print-runtime-dir):${LD_LIBRARY_PATH:-}"
+          mkdir -p tests/fuzz/artifacts
+          cd tests/fuzz
+          make fuzz-${{ matrix.target }} \
+            CORE="$(cd ../.. && pwd)/genesis_plus_gx_libretro.so" \
+            FUZZ_SECONDS="$FUZZ_SECONDS" \
+            2>&1 | tee artifacts/${{ matrix.target }}.log
+          echo "FUZZ_STATUS=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+
+      # libFuzzer deja el caso que rompio como `crash-<sha1>` en el cwd. Ese
+      # archivo ES la reproduccion: se sube tal cual para poder meterlo en
+      # tests/fuzz/regressions/ y que quede cubierto para siempre.
+      - name: Collect the crash, if any
+        if: always()
+        run: |
+          set -euo pipefail
+          cd tests/fuzz
+          mkdir -p artifacts
+          mv crash-* leak-* timeout-* oom-* artifacts/ 2>/dev/null || true
+          ls -la artifacts/ || true
+
+      - name: Upload corpus and findings
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ayther-fuzz-${{ matrix.target }}
+          path: |
+            tests/fuzz/artifacts/
+            tests/fuzz/corpus/${{ matrix.target }}/
+          if-no-files-found: warn
+          retention-days: 30
+
+      # Un issue por hallazgo, con el hash del crash en el titulo. El hash es lo
+      # que deduplica: veinte noches encontrando el mismo bug tienen que producir
+      # UN issue, no veinte, o el ruido hace que nadie lea ninguno.
+      - name: Open an issue for a new crash
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET: ${{ matrix.target }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          cd tests/fuzz/artifacts
+          file=$(ls crash-* timeout-* oom-* leak-* 2>/dev/null | head -1 || true)
+          if [ -z "$file" ]; then
+            echo "el job fallo sin dejar un caso: hay que leer el log a mano" >&2
+            exit 0
+          fi
+          hash=${file#*-}
+          existing=$(gh issue list --state all --search "$hash in:title" --json number --jq 'length')
+          if [ "$existing" != "0" ]; then
+            echo "ya existe un issue para $hash"
+            exit 0
+          fi
+          {
+            echo "El job nocturno de fuzzing encontro un caso en el target \`$TARGET\`."
+            echo
+            echo "El archivo esta en los artefactos de la corrida, como \`$file\`."
+            echo "Para reproducirlo sin fuzzer y con ASan/UBSan puestos:"
+            echo
+            echo '```'
+            echo "make -C tests/fuzz .build/replay_$TARGET"
+            echo "tests/fuzz/.build/replay_$TARGET <core.so> <ruta-al-archivo>"
+            echo '```'
+            echo
+            echo "Cuando este arreglado, el archivo va a \`tests/fuzz/regressions/$TARGET/\`:"
+            echo "ahi lo reproduce \`make -C tests check-fuzz\` en cada PR y el bug no"
+            echo "puede volver en silencio."
+            echo
+            echo "Corrida: $RUN_URL"
+          } > body.md
+          gh issue create --title "[fuzz][$TARGET] hallazgo $hash" --label ci --body-file body.md

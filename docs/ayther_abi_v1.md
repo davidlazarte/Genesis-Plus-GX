@@ -61,6 +61,7 @@ second one read zero. |
 | 1.5 | **Additive.** Adds the `SYSTEM` region and `AYTHER_CAP_SYSTEM_V1` (#39.B), plus the `AYTHER_STATUS_UNSUPPORTED_MODE` status and `AYTHER_CAP_MODE4_CONTROLS` (#40). No existing field moved. Controls that only exist in Mode 5 now say so instead of accepting the write and doing nothing. |
 | 1.6 | **Additive.** Adds the `LINE_REGS`, `LINE_CRAM` and `LINE_CELLS` regions, the `AYTHER_SUB_LINE_STATE` / `AYTHER_SUB_LINE_CRAM` / `AYTHER_SUB_LINE_CELLS` subscriptions and `AYTHER_CAP_LINE_STATE_V1` (#42). `AYTHER_SUB_ALL` widens from `0xFF` to `0x7FF`; the eight existing bits keep their positions. |
 | 1.7 | **Additive.** Adds the `RASTER_JOURNAL`, `FRAME_HASH` and `PALETTE` regions, the `AYTHER_SUB_FRAME_HASH` subscription and `AYTHER_CAP_OBSERVABILITY_V1` (#39 A/D/E). `AYTHER_SUB_ALL` widens to `0xFFF`. No existing structure changes size or order. |
+| 1.8 | **Additive.** Adds the `SPRITE_OUTCOME` region and `AYTHER_CAP_SPRITE_OUTCOME_V1` (#39.C). Deliberately a parallel region rather than new fields on `ayther_sprite_v1`: that struct travels with its size announced in the descriptor, and a 1.0 consumer that transcribed it with its own types would read the array shifted from the second element on. |
 
 Two earlier changes were shipped inside 1.0 without a bump, which is what this
 table exists to prevent from recurring:
@@ -172,6 +173,7 @@ single-byte commands and report `addr = 0`.
 | `RASTER_JOURNAL` | `ayther_journal_v1` | 1 / 2,064 | frame read | — |
 | `FRAME_HASH` | `ayther_frame_hash_v1` | 1 / 56 | frame read | — |
 | `PALETTE` | build pixel type | 256 / 512 (16bpp) | read | — |
+| `SPRITE_OUTCOME` | `uint8_t` bitfield | 80 / 80 | frame read | — |
 
 The public ABI treats emulated memory and frame counters as read-only. The
 legacy pointers preserve their historical mutability for the transition.
@@ -442,21 +444,46 @@ do not simply returned `AYTHER_STATUS_OK` and did nothing, which is the worst
 contract available: a frontend believes it hid a sprite and draws its HD
 replacement on top of the original.
 
+Phase 2 implemented most of what phase 1 could only report. The remaining
+`UNSUPPORTED_MODE` rows are the ones that still have no referent or no
+implementation — and saying so is still better than accepting and doing nothing.
+
 | Control | Mode 5 (MD) | Mode 4 (SMS/GG/PBC) |
 |---|---|---|
 | `LAYER_MASK` sprite bit | yes | yes — resolved in `render_line`, shared by both |
-| `LAYER_MASK` A/B/W bits | yes | **`UNSUPPORTED_MODE`** — one background plane, the bits have no referent |
-| `SPRITE_SUPPRESS` (0x103) | yes | **`UNSUPPORTED_MODE`** — `parse_satb_m4` has no suppression |
-| `TILE_SUPPRESS` / peel (0x104) | yes | **`UNSUPPORTED_MODE`** — `render_bg_m4` has no hooks and does not merge |
-| `PLANE_TILE_SUPPRESS` (0x105/0x106) | yes | **`UNSUPPORTED_MODE`** — same reason |
+| `LAYER_MASK` A bit | yes — plane A | yes — **reinterpreted as *the* background**, the only one Mode 4 has |
+| `LAYER_MASK` B/W bits | yes | **`UNSUPPORTED_MODE`** — those planes do not exist, the bits have no referent |
+| `SPRITE_SUPPRESS` (0x103) | yes | yes — same mask; the Mode 4 SAT has 64 entries and the mask holds 128 |
+| `TILE_SUPPRESS` / peel (0x104) | yes | **`UNSUPPORTED_MODE`** — `render_bg_m4` does not go through the merge where the peel lives |
+| `PLANE_TILE_SUPPRESS` (0x105/0x106) | yes | yes — same key shape (pattern, palette); in Mode 4 the fields are 9 and 1 bits instead of 11 and 2 |
 | `LAYER_DIM` (0x108) | yes | yes — `remap_line` is shared |
 | Audio mute and gain (0x10D) | yes | yes |
 | `ATTRIBUTION` | yes | background layer only |
-| Recomposition | yes | `AYTHER_STATUS_RC_NOT_MODE5` |
+| `SPRITE_OUTCOME` (#39.C) | six bits | `PARSED`, `DRAWN`, `DROP_LINE`, `SUPPRESSED` — Mode 4 has no x=0 mask and no pixel budget |
+| Recomposition | yes | yes — pixel-perfect, measured |
+| Sprite capture | yes | yes — same layout; in Mode 4 height is 8 or 16, width is always 8, and the palette is one of **two** of 16 |
 
 A rejected write also raises `AYTHER_RASTER_REASON_UNSUPPORTED_CONTROLS` in
 `0x10E`, so a frontend polling the fallback reasons sees it without having to
 check every return value.
+
+**Measured, not assumed.** `tests/ayther/mode4_controls.c` runs against a real
+Master System cartridge: the system descriptor reports mode 4 at 256×192, hiding
+the background changes the frame, hiding plane B is rejected, 9 sprites are
+captured, suppressing a drawn slot changes the frame and reports `SUPPRESSED`
+rather than `DRAWN`, and recomposition returns **0 differing pixels out of
+49,152**. `tests/ci/validate_roms.sh` extends that to 300 consecutive frames,
+all `clean_equal` with no fallback reason at all.
+
+That last part also fixed a lie: `ayther_recompose_mode_supported()` rejected
+everything that was not Mode 5, so the core was recomposing an SMS frame
+pixel-perfect *while* flagging it as an unsupported mode. A frontend trusting
+the mask would have skipped a recomposition that works.
+
+The test is opt-in (`AYTHER_SMS_ROM`) because a commercial ROM cannot live in
+the repository, and it skips in CI. Closing that gap needs a synthetic SMS
+fixture, and the generator emits **68000** while a Master System cartridge runs
+**Z80** — a new emitter, not a parameter.
 
 `AYTHER_CAP_MODE4_CONTROLS` announces that the rows above have become "yes".
 While the bit is absent, the table is the contract.

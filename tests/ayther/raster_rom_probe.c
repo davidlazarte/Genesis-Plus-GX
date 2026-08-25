@@ -288,6 +288,7 @@ static int load_api(library_t library, struct core_api *api)
     fprintf(stderr, "AYTHER ABI v1 lacks snapshot/recomposition capabilities\n");
     return 0;
   }
+
   return 1;
 }
 
@@ -450,6 +451,26 @@ static int probe_rom(const struct core_api *api, const char *path, int frames,
     goto cleanup;
   }
   loaded = 1;
+
+  /* #35.4: recomponer pasa por suscripcion desde que las suscripciones
+     existen, y este probe no se habia enterado: pedia la recomposicion en
+     el frame 0 y se comia un NOT_SUBSCRIBED, o sea que fallaba con
+     CUALQUIER ROM. El informe que hay en docs/validation es de antes de
+     ese cambio.
+
+     Y va DESPUES de load_game, no al negociar la ABI: cargar contenido
+     reinicia la sesion y con ella las suscripciones. Suscribirse antes
+     compila, corre, y no sirve para nada -- que es la peor de las tres
+     cosas-.
+
+     Un probe que solo se corre a mano puede quedarse roto mucho tiempo sin
+     que nadie lo note; por eso `make -C tests validate-roms` lo ejercita
+     ahora con el ROM sintetico. */
+  if (AYTHER_IFACE_HAS(api->ayther, set_subscriptions) &&
+      api->ayther->set_subscriptions)
+    api->ayther->set_subscriptions(AYTHER_SUB_RECOMPOSITION |
+                                   AYTHER_SUB_RASTER_TRACKING |
+                                   AYTHER_SUB_VDP_MEMORY);
   if (api->get_memory_size(AYTHER_MEMORY_RASTER_DIRTY) != sizeof(uint32_t))
   {
     fprintf(stderr, "private memory id 0x10E is not four bytes\n");
@@ -531,11 +552,36 @@ static int probe_rom(const struct core_api *api, const char *path, int frames,
     stats->recompose_height = out_height;
     if (!available)
     {
-      if (abi_status != AYTHER_STATUS_UNSUPPORTED)
+      /* #40: "no puedo con este modo" es una RESPUESTA, no un fallo. El
+         probe solo conocia AYTHER_STATUS_UNSUPPORTED, que era el unico
+         codigo que existia cuando se escribio; desde entonces la ABI
+         desglosa el motivo, y con un cartucho de Master System devuelve
+         RC_NOT_MODE5. Tratar eso como violacion del contrato hacia que el
+         probe se negara a validar el modo entero -- justo el que #40
+         viene a cubrir-. Lo que SI es una violacion es no poder recomponer
+         y no decir por que, y eso se sigue contando aparte. */
+      if (abi_status != AYTHER_STATUS_UNSUPPORTED &&
+          abi_status != AYTHER_STATUS_UNSUPPORTED_MODE &&
+          abi_status != AYTHER_STATUS_RC_NOT_MODE5 &&
+          abi_status != AYTHER_STATUS_RC_INTERLACE2 &&
+          abi_status != AYTHER_STATUS_RC_NTSC_FILTER &&
+          abi_status != AYTHER_STATUS_RC_JOURNAL_OVERFLOW)
       {
         fprintf(stderr, "ABI recomposition failed in %s frame %d: %d\n",
                 path, frame, (int)abi_status);
         goto cleanup;
+      }
+      /* Los motivos que la ABI nombra explicitamente ya vienen guardados
+         por su propio codigo: no hace falta que ademas esten en la mascara
+         de raster, que es del frame y no de la llamada. */
+      if (abi_status == AYTHER_STATUS_RC_NOT_MODE5 ||
+          abi_status == AYTHER_STATUS_RC_INTERLACE2 ||
+          abi_status == AYTHER_STATUS_RC_NTSC_FILTER ||
+          abi_status == AYTHER_STATUS_RC_JOURNAL_OVERFLOW ||
+          abi_status == AYTHER_STATUS_UNSUPPORTED_MODE)
+      {
+        ++stats->unsupported_guarded;
+        continue;
       }
       if (mask & AYTHER_RASTER_REASON_UNSUPPORTED_MODE)
         ++stats->unsupported_guarded;

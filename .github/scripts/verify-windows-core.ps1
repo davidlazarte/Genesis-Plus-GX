@@ -27,7 +27,11 @@ if ($LASTEXITCODE -ne 0) {
     throw 'llvm-readobj failed while reading PE imports.'
 }
 $imports | Set-Content -Encoding utf8 (Join-Path $artifactRoot 'imports.txt')
-if ($imports -match '(?i)ucrtbase\.dll') {
+# A mingw UCRT build does not import ucrtbase.dll directly: it imports the *API
+# sets* (api-ms-win-crt-runtime-l1-1-0.dll and friends), which is how Windows has
+# exposed the UCRT since Windows 10. Matching only the DLL name is a false
+# negative -- #45.A found exactly that while building the UCRT diagnosis job.
+if ($imports -match '(?i)ucrtbase\.dll|api-ms-win-crt') {
     throw 'The Windows target imported UCRT instead of MSVCRT.'
 }
 if ($imports -notmatch '(?i)msvcrt\.dll') {

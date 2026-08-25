@@ -222,5 +222,34 @@ int main(int argc, char **argv)
          legacy.p50, hashed.p50,
          legacy.p50 ? (1.0 - (hashed.p50 / legacy.p50)) * 100.0 : 0.0,
          comparison_count, probe_count);
-  return (hashed.p50 < legacy.p50 && probe_count < comparison_count) ? 0 : 1;
+
+  /* #35 punto 3: que falla y que solo se informa.
+
+     Antes este bench fallaba si CUALQUIERA de las dos cosas no se cumplia, y
+     una de ellas es una comparacion de reloj entre dos implementaciones que se
+     parecen. En un runner compartido eso se invierte solo, y el efecto de un
+     gate asi no es cuidar el codigo: es ensenar a ignorar el rojo.
+
+     Lo que queda bloqueante es la afirmacion ESTRUCTURAL, que no depende de en
+     que maquina toco correr: el camino con hash hace menos sondeos que
+     comparaciones hace el barrido lineal. Si eso se invierte, la estructura de
+     datos dejo de servir para lo que existe, y da igual el reloj.
+
+     El tiempo se sigue midiendo y publicando -- la serie temporal es util-,
+     pero si se invierte se avisa y no se rompe la corrida. */
+  if (probe_count >= comparison_count)
+  {
+    fprintf(stderr,
+            "REGRESION ESTRUCTURAL: el hash hace %u sondeos y el barrido lineal\n"
+            "%" PRIu64 " comparaciones. La estructura dejo de ahorrar trabajo.\n",
+            probe_count, comparison_count);
+    return 1;
+  }
+  if (!(hashed.p50 < legacy.p50))
+    fprintf(stderr,
+            "AVISO: el p50 con hash (%.3f ns) no quedo debajo del lineal (%.3f ns).\n"
+            "No falla la corrida: dos implementaciones parecidas medidas en un\n"
+            "runner compartido se invierten por ruido. El dato queda en el JSON.\n",
+            hashed.p50, legacy.p50);
+  return 0;
 }

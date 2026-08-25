@@ -60,7 +60,7 @@ static uint8 ayther_rc_effective_mask(unsigned int flags)
                                                       : ayther_layer_mask);
 }
 
-/* Cache MULTICAPA (#406). El de arriba es de `ayther_recompose_frame` y
+/* Cache MULTICAPA (tracker viejo 406). El de arriba es de `ayther_recompose_frame` y
  * multilayer no lo tocaba: pedir el mismo frame dos veces costaba lo mismo las
  * dos veces (medido desde el frontend: 0,28 → 0,29 ms). El frontend hace
  * exactamente eso cada vez que el emulador esta en pausa y la UI repinta.
@@ -259,6 +259,7 @@ int ayther_recompose_frame(uint16 *out, int cap, unsigned int flags,
 #else
   ayther_render_ctx ctx;
   int    l, w, h, vs, ste, sh_rebuilt;
+  int    ayther_mode4;
   uint64_t rc_controls;
   uint8  rc_mask;
   void (*rbg)(int);
@@ -267,9 +268,19 @@ int ayther_recompose_frame(uint16 *out, int cap, unsigned int flags,
   w = bitmap.viewport.w;
   h = bitmap.viewport.h;
 
-  if (!(reg[1] & 0x04)) return AYTHER_RC_ERR_NOT_MODE5;
-  if ((reg[12] & 0x06) == 0x06) return AYTHER_RC_ERR_INTERLACE2;
-  if (interlaced && config.render) return AYTHER_RC_ERR_INTERLACE2;
+  /* AYTHER (#40 fase 2): Mode 4 deja de ser un rechazo y pasa a ser un camino.
+     Se sigue rechazando lo que de verdad no se puede reproducir -- interlace 2,
+     el filtro NTSC-, pero "es un cartucho de Master System" ya no es una razon.
+
+     El modo se decide UNA vez y viaja en `m4`: mezclar los dos caminos con
+     `reg[1] & 0x04` repartido por el cuerpo es como se construye un renderer
+     que funciona en un modo y en el otro no, en silencio. */
+  ayther_mode4 = !(reg[1] & 0x04);
+  if (!ayther_mode4)
+  {
+    if ((reg[12] & 0x06) == 0x06) return AYTHER_RC_ERR_INTERLACE2;
+    if (interlaced && config.render) return AYTHER_RC_ERR_INTERLACE2;
+  }
   if (config.ntsc) return AYTHER_RC_ERR_NTSC_FILTER;
   if (!out || w <= 0 || h <= 0 || cap < w * h) return AYTHER_RC_ERR_INVALID_PARAMS;
 
@@ -341,10 +352,18 @@ int ayther_recompose_frame(uint16 *out, int cap, unsigned int flags,
     sh_rebuilt = 1;
   }
 
-  rbg  = vs ? (config.enhanced_vscroll ? render_bg_m5_vs_enhanced
-                                       : render_bg_m5_vs)
-            : render_bg_m5;
-  robj = ste ? render_obj_m5_ste : render_obj_m5;
+  if (ayther_mode4)
+  {
+    rbg  = render_bg_m4;
+    robj = render_obj_m4;
+  }
+  else
+  {
+    rbg  = vs ? (config.enhanced_vscroll ? render_bg_m5_vs_enhanced
+                                         : render_bg_m5_vs)
+              : render_bg_m5;
+    robj = ste ? render_obj_m5_ste : render_obj_m5;
+  }
 
   /* ---- el frame se escribe al buffer del caller ---- */
   bitmap.data  = (uint8 *)out;
@@ -355,7 +374,10 @@ int ayther_recompose_frame(uint16 *out, int cap, unsigned int flags,
   /* obj_info de la línea 0, parseado del estado final (line=-1 → offset
      0x81-1 = 0x80, el Y crudo de la línea 0 — mismo camino que el parse
      de fin de vblank) */
-  parse_satb_m5(-1);
+  if (ayther_mode4)
+    parse_satb_m4(-1);
+  else
+    parse_satb_m5(-1);
 
   for (l = 0; l < h; l++)
   {
@@ -373,7 +395,12 @@ int ayther_recompose_frame(uint16 *out, int cap, unsigned int flags,
 
       /* sprites de la línea siguiente, del mismo estado final */
       if (l < h - 1)
-        parse_satb_m5(l);
+      {
+        if (ayther_mode4)
+          parse_satb_m4(l);
+        else
+          parse_satb_m5(l);
+      }
     }
     else
     {
@@ -463,7 +490,7 @@ int ayther_core_recompose_multilayer(
   if (ayther_raster_journal_dropped > 0)
     return AYTHER_RC_ERR_JOURNAL_OVERFLOW;
 
-  /* ---- cache (#406): mismo frame, misma configuracion ---- */
+  /* ---- cache (tracker viejo 406): mismo frame, misma configuracion ---- */
   {
     const uint8 want = (uint8)((out_bg_a     ? AYTHER_ML_A    : 0) |
                                (out_bg_b     ? AYTHER_ML_B    : 0) |
@@ -677,7 +704,7 @@ int ayther_core_recompose_multilayer(
   }
   ayther_render_ctx_restore(&ctx, 0);
 
-  /* ---- guardar en el cache (#406) ----
+  /* ---- guardar en el cache (tracker viejo 406) ----
      Si la clave cambio, lo guardado antes ya no vale y `have` arranca de cero:
      acumular sobre datos de otro frame es exactamente el bug que este cache
      podria introducir. Si la clave es la misma, se SUMAN las capas nuevas a las

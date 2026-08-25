@@ -365,6 +365,135 @@ static uint32_t emit_vertical_handler(struct rom_builder *builder)
   return address;
 }
 
+/* #31/#41: la escena que hace falta para PROBAR que el bit de sprite es exacto.
+ *
+ * El fixture de siempre no sirve para eso: sus sprites caen sobre un fondo de
+ * otro indice, asi que el diff viejo los encontraba igual y el arreglo no se
+ * distinguiria de lo que ya habia. Lo que hace falta son los dos casos que el
+ * diff contesta MAL:
+ *
+ *   Sprite 0 -- pattern 1, paleta 0, prioridad 0-- sobre un fondo que es
+ *   EXACTAMENTE lo mismo. El byte del linebuf no cambia al dibujarlo, asi que
+ *   para el diff ese sprite no existe: un agujero adentro del sprite.
+ *
+ *   Sprite 1 -- pattern 3 (indice 14), paleta 3-- que con S/H activo es un
+ *   OPERADOR de brillo, no color. El byte del linebuf si cambia, asi que el
+ *   diff lo marcaba como sprite. No lo es.
+ *
+ * El fondo es uniforme (pattern 1 en todas las celdas de A y B) a proposito:
+ * hace que la posicion de los sprites sea lo unico que distingue una zona de
+ * otra, y el test puede afirmar cosas por coordenada. */
+#define SH_SPRITE_SCREEN_X 64u
+#define SH_SPRITE_SCREEN_Y 8u
+#define SH_OPERATOR_SCREEN_X 128u
+#define SH_OPERATOR_SCREEN_Y 8u
+
+static void emit_fixture_data_sh(struct rom_builder *builder)
+{
+  static const uint16_t palette[16] =
+  {
+    0x0000u, 0x000eu, 0x00e0u, 0x0e00u,
+    0x00eeu, 0x0e0eu, 0x0ee0u, 0x0eeeu,
+    0x0008u, 0x0080u, 0x0800u, 0x0088u,
+    0x0808u, 0x0880u, 0x0444u, 0x0aaau
+  };
+  uint16_t words[512];
+  size_t index;
+
+  emit_move_long_immediate_absolute(builder, cram_write_command(0),
+                                    VDP_CONTROL);
+  for (index = 0; index < 16u; ++index)
+    emit_move_word_immediate_absolute(builder, palette[index], VDP_DATA);
+
+  /* Paleta 3: la que el operador de S/H usa (indices 14 y 15). El argumento
+     de cram_write_command es una direccion en BYTES, no un indice de palabra:
+     la paleta 3 empieza en el byte 96. */
+  emit_move_long_immediate_absolute(builder, cram_write_command(96),
+                                    VDP_CONTROL);
+  for (index = 0; index < 16u; ++index)
+    emit_move_word_immediate_absolute(builder, palette[index], VDP_DATA);
+
+  /* pattern 1 = indice 1 en los 64 pixeles; pattern 2 = indice 2;
+     pattern 3 = indice 14, que con paleta 3 es el operador de sombra. */
+  for (index = 0; index < 16u; ++index)
+    words[index] = 0x1111u;
+  for (index = 16u; index < 32u; ++index)
+    words[index] = 0x2222u;
+  for (index = 32u; index < 48u; ++index)
+    words[index] = 0xeeeeu;
+  emit_vdp_words(builder, 0x0020u, words, 48u);
+
+  for (index = 0; index < 256u; ++index)
+    words[index] = 1u;
+  emit_vdp_words(builder, 0xc000u, words, 256u);
+  emit_vdp_words(builder, 0xe000u, words, 256u);
+
+  for (index = 0; index < 224u; ++index)
+  {
+    words[index * 2u] = (uint16_t)(0u - (uint16_t)(index & 31u));
+    words[index * 2u + 1u] = (uint16_t)(index & 31u);
+  }
+  emit_vdp_words(builder, 0xf000u, words, 448u);
+
+  /* Dos sprites de 8x8, los dos sobre el fondo uniforme.
+
+     Sprite 0: pattern 1, paleta 0, prioridad 0 -- EXACTAMENTE lo mismo que el
+     fondo. Su byte en el linebuf no cambia al dibujarlo, asi que para un diff
+     contra el fondo ese sprite no existe.
+
+     Sprite 1: pattern 3 (indice 14) con paleta 3. Con S/H activo eso es un
+     OPERADOR de brillo, no color: el byte SI cambia, y el diff lo contaba como
+     sprite aunque no lo sea. */
+  words[0] = (uint16_t)(128u + SH_SPRITE_SCREEN_Y);
+  words[1] = 1u;                            /* 8x8, link -> sprite 1     */
+  words[2] = 1u;                            /* pattern 1, paleta 0, p0   */
+  words[3] = (uint16_t)(128u + SH_SPRITE_SCREEN_X);
+  words[4] = (uint16_t)(128u + SH_OPERATOR_SCREEN_Y);
+  words[5] = 0u;                            /* 8x8, fin de la cadena     */
+  words[6] = 3u;
+  words[7] = (uint16_t)(128u + SH_OPERATOR_SCREEN_X);
+  emit_vdp_words(builder, 0xd800u, words, 8u);
+}
+
+static void emit_reset_program_sh(struct rom_builder *builder)
+{
+  emit_u16(builder, 0x46fcu); /* move.w #$2700,sr */
+  emit_u16(builder, 0x2700u);
+  emit_move_long_immediate_absolute(builder, 0x53454741u, TMSS);
+  emit_move_word_immediate_absolute(builder, 0x0100u, Z80_BUS_REQUEST);
+  emit_move_word_immediate_absolute(builder, 0x0100u, Z80_RESET);
+  emit_move_word_immediate_absolute(builder, 0u, RAM_FRAME);
+  emit_move_word_immediate_absolute(builder, 0u, RAM_LINE);
+
+  emit_vdp_register(builder, 0, 0x04u);
+  emit_vdp_register(builder, 1, 0x14u);
+  emit_vdp_register(builder, 2, 0x30u);
+  emit_vdp_register(builder, 3, 0x3eu);
+  emit_vdp_register(builder, 4, 0x07u);
+  emit_vdp_register(builder, 5, 0x6cu);
+  emit_vdp_register(builder, 7, 0x00u);
+  emit_vdp_register(builder, 10, 0x00u);
+  emit_vdp_register(builder, 11, 0x00u);   /* sin scroll por linea */
+  /* bit 3 = shadow/highlight, que es lo que convierte la paleta 3 indices
+     14/15 en operadores de brillo en vez de color. */
+  emit_vdp_register(builder, 12, 0x89u);
+  emit_vdp_register(builder, 13, 0x3cu);
+  emit_vdp_register(builder, 15, 0x02u);
+  emit_vdp_register(builder, 16, 0x01u);
+  emit_vdp_register(builder, 17, 0x00u);
+  emit_vdp_register(builder, 18, 0x00u);
+
+  emit_fixture_data_sh(builder);
+
+  emit_move_word_immediate_absolute(builder, 0x0000u, Z80_BUS_REQUEST);
+  emit_vdp_register(builder, 0, 0x14u);
+  emit_vdp_register(builder, 1, 0x74u);
+
+  emit_u16(builder, 0x4e72u); /* stop #$2300 */
+  emit_u16(builder, 0x2300u);
+  emit_u16(builder, 0x60fau);
+}
+
 static void write_header(uint8_t *rom)
 {
   static const char console[] = "SEGA MEGA DRIVE ";
@@ -439,4 +568,9 @@ size_t ayther_build_generated_rom(uint8_t *rom, size_t capacity)
 size_t ayther_build_generated_rom_fm(uint8_t *rom, size_t capacity)
 {
   return build_rom(rom, capacity, emit_reset_program_fm);
+}
+
+size_t ayther_build_generated_rom_sh(uint8_t *rom, size_t capacity)
+{
+  return build_rom(rom, capacity, emit_reset_program_sh);
 }

@@ -350,6 +350,14 @@ jobs:
           CC=clang
           CORE=../genesis_plus_gx_libretro.so
 
+      # #41: la region de atribucion con una suscripcion que pide SOLO
+      # atribucion. Ese caso devolvia cero bytes y un OK.
+      - name: Attribution answers a subscription that asks only for it
+        run: >-
+          make -C tests check-attribution-scene
+          CC=clang
+          CORE=../genesis_plus_gx_libretro.so
+
       # El core de metricas queda en el arbol; los pasos que siguen necesitan el
       # normal de vuelta.
       - name: Rebuild the telemetry core

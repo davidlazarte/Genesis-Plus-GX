@@ -630,6 +630,17 @@ uint16 spr_col;
 uint8 ayther_layer_mask = 0xFF;
 #define AYTHER_CONTROLS_ACTIVE \
   AYTHER_SUBSCRIBED(AYTHER_SUB_RENDER_CONTROLS)
+/* #41: que render_line tome el clon OBSERVADO no es lo mismo que que los
+   controles esten activos. La atribucion no controla nada -- solo mira-- pero
+   se captura adentro de ese clon, asi que suscribirse SOLO a ATTRIBUTION
+   dejaba la region vacia para siempre y sin ningun error de por medio: el
+   frontend pedia el dato, el core contestaba OK, y devolvia cero bytes.
+
+   Peor todavia con el clon rapido de render_bg, que usa `merge_fast` -- sin
+   el hook--: ni siquiera las capas salian, y el frame entero decia
+   "backdrop". */
+#define AYTHER_OBSERVED_ACTIVE \
+  AYTHER_SUBSCRIBED(AYTHER_SUB_RENDER_CONTROLS | AYTHER_SUB_ATTRIBUTION)
 #define AYTHER_HIDE_A \
   (AYTHER_CONTROLS_ACTIVE && !(ayther_layer_mask & AYTHER_LAYER_A))
 #define AYTHER_HIDE_B \
@@ -811,6 +822,7 @@ uint64_t ayther_controls_fingerprint(void)
 #else
 
 #define AYTHER_CONTROLS_ACTIVE 0
+#define AYTHER_OBSERVED_ACTIVE 0
 #define AYTHER_HIDE_A 0
 #define AYTHER_HIDE_B 0
 #define AYTHER_HIDE_W 0
@@ -2165,7 +2177,8 @@ static AYTHER_NOINLINE void render_bg_m5_observed_path(int line)
 void render_bg_m5(int line)
 {
 #ifdef AYTHER_EXTENSIONS
-  if (AYTHER_CONTROLS_ACTIVE)
+  /* #41: OBSERVED, no CONTROLS: ver la nota en AYTHER_OBSERVED_ACTIVE. */
+  if (AYTHER_OBSERVED_ACTIVE)
     render_bg_m5_observed_path(line);
   else
     render_bg_m5_fast_path(line);
@@ -2412,7 +2425,8 @@ static AYTHER_NOINLINE void render_bg_m5_vs_observed_path(int line)
 void render_bg_m5_vs(int line)
 {
 #ifdef AYTHER_EXTENSIONS
-  if (AYTHER_CONTROLS_ACTIVE)
+  /* #41: OBSERVED, no CONTROLS: ver la nota en AYTHER_OBSERVED_ACTIVE. */
+  if (AYTHER_OBSERVED_ACTIVE)
     render_bg_m5_vs_observed_path(line);
   else
     render_bg_m5_vs_fast_path(line);
@@ -5856,7 +5870,7 @@ static AYTHER_NOINLINE void render_line_observed_path(int line)
 void render_line(int line)
 {
 #ifdef AYTHER_EXTENSIONS
-  if (AYTHER_CONTROLS_ACTIVE)
+  if (AYTHER_OBSERVED_ACTIVE)
     render_line_observed_path(line);
   else
     render_line_fast_path(line);

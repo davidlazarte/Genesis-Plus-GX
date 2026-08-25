@@ -1,3 +1,16 @@
+/* AYTHER (#12/#270): el recompositor del fork -- vuelve a renderizar el frame
+ * desde el estado FINAL del VDP, con el mismo renderer del core-.
+ *
+ * #43.2: hasta aca esto entraba al build con un `#include` de este .c al final
+ * de vdp_render.c, porque necesitaba sus estaticos. Ahora es una unidad de
+ * compilacion propia y el estado compartido se declara en
+ * `vdp_render_internal.h`, que es el contrato entre los dos archivos.
+ */
+#include "shared.h"
+#include "vdp_render_internal.h"
+#include "ayther_runtime.h"
+#include "ayther_metrics.h"
+
 #ifdef AYTHER_EXTENSIONS
 
 extern uint64_t ayther_core_frame_generation;

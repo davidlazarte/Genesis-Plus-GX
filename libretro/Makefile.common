@@ -84,10 +84,10 @@ endif
 
 SOURCES_C += $(foreach dir,$(GENPLUS_SRC_DIR),$(wildcard $(dir)/*.c))
 
-# AYTHER: ayther_core.c NO se compila suelto — se incluye desde vdp_render.c
-# porque necesita los estaticos del VDP (border, reg, v_counter...). El wildcard
-# de arriba lo tomaba igual y el build moria con "unknown type name 'uint8'".
-SOURCES_C := $(filter-out %/ayther/ayther_core.c,$(SOURCES_C))
+# AYTHER (#43.2): ayther_core.c YA se compila suelto. Antes se filtraba de aca
+# y entraba por un #include al final de vdp_render.c para alcanzar sus
+# estaticos; ahora esos estaticos los declara core/vdp_render_internal.h y el
+# archivo aparece en el grafo de make como cualquier otro.
 
 ifneq ($(STATIC_LINKING), 1)
 SOURCES_C += \

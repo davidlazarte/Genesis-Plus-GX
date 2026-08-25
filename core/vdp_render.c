@@ -59,14 +59,10 @@ extern md_ntsc_t *md_ntsc;
 extern sms_ntsc_t *sms_ntsc;
 
 
-/* Output pixels type*/
-#if defined(USE_8BPP_RENDERING)
-#define PIXEL_OUT_T uint8
-#elif defined(USE_32BPP_RENDERING)
-#define PIXEL_OUT_T uint32
-#else
-#define PIXEL_OUT_T uint16
-#endif
+/* #43.2: el tipo del pixel de salida y `object_info_t` viven en el header
+   interno, porque el recompositor tambien los necesita y ya no se compila
+   pegado adentro de este archivo. */
+#include "vdp_render_internal.h"
 
 
 /* Pixel priority look-up tables information */
@@ -528,13 +524,8 @@ INLINE void WRITE_LONG(void *address, uint32 data)
 #define MAKE_PIXEL(r,g,b) ((0xff << 24) | (r) << 20 | (r) << 16 | (g) << 12 | (g)  << 8 | (b) << 4 | (b))
 #endif
 
-/* Window & Plane A clipping */
-static struct clip_t
-{
-  uint8 left;
-  uint8 right;
-  uint8 enable;
-} clip[2];
+/* Window & Plane A clipping. #43.2: el tipo lo declara el header interno. */
+struct clip_t clip[2];
 
 /* Pattern attribute (priority + palette bits) expansion table */
 static const uint32 atex_table[] =
@@ -619,7 +610,7 @@ static uint32 bp_lut[0x10000];
 static uint8 lut[LUT_MAX][LUT_SIZE];
 
 /* Output pixel data look-up tables*/
-static PIXEL_OUT_T pixel[0x100];
+PIXEL_OUT_T pixel[0x100];
 
 #ifdef AYTHER_EXTENSIONS
 /* #39.E: la tabla de color YA resuelta -- conversion 9-bit al formato del
@@ -638,32 +629,17 @@ static PIXEL_OUT_T pixel_lut[3][0x200];
 static PIXEL_OUT_T pixel_lut_m4[0x40];
 
 /* Background & Sprite line buffers */
-static uint8 linebuf[2][0x200];
+uint8 linebuf[2][0x200];
 
 /* Sprite limit flag */
-static uint8 spr_ovr;
+uint8 spr_ovr;
 
-/* Sprite parsing lists */
-typedef struct
-{
-  uint16 ypos;
-  uint16 xpos;
-  uint16 attr;
-  uint16 size;
-} object_info_t;
-
-/* AYTHER (#270): 80 en vez de MAX_SPRITES_PER_LINE (20) — headroom para la
-   recomposición con límite de sprites desactivado (ayther_rc_nolimit). El
-   render normal sigue acotado por MODE5_MAX_SPRITES_PER_LINE (bounds por
-   `max`, no por la capacidad del array): cero cambio de comportamiento. */
-#ifdef AYTHER_EXTENSIONS
-static object_info_t obj_info[2][80];
-#else
-static object_info_t obj_info[2][MAX_SPRITES_PER_LINE];
-#endif
+/* Sprite parsing lists. #43.2: el tipo y el tamanio los declara
+   vdp_render_internal.h; aca solo viven las definiciones. */
+object_info_t obj_info[2][AYTHER_OBJ_INFO_SLOTS];
 
 /* Sprite Counter */
-static uint8 object_count[2];
+uint8 object_count[2];
 
 /* Sprite Collision Info */
 uint16 spr_col;
@@ -785,8 +761,8 @@ uint8 ayther_sprite_suppress_active = 0;
 /* AYTHER (#270): toggles de la recomposición (ayther_recompose_frame). Sólo esa
    función los enciende, y los apaga antes de volver: el render normal corre
    SIEMPRE con ambos en 0 (cero cambio de comportamiento). */
-static uint8 ayther_rc_nolimit = 0;  /* sin límite de sprites por línea (20/línea + presupuesto de px) */
-static uint8 ayther_rc_nomask  = 0;  /* sin máscara de sprites (sprite en x=0 no tapa los siguientes) */
+uint8 ayther_rc_nolimit = 0;  /* sin límite de sprites por línea (20/línea + presupuesto de px) */
+uint8 ayther_rc_nomask  = 0;  /* sin máscara de sprites (sprite en x=0 no tapa los siguientes) */
 
 /* AYTHER fork delta: máscara de celdas de tile suprimidas (id de memoria 0x104,
    escribible). Grilla de 8x8 px en coordenadas del frame que ve el frontend
@@ -6590,5 +6566,4 @@ void remap_line(int line)
  * It is safe to call immediately after a frame has finished emulating, and
  * guarantees that the VDP state is left completely identical to how it was found.
  */
-#include "ayther/ayther_core.c"
 

@@ -51,6 +51,7 @@ STATE_GUARD_BIN := $(BUILD_DIR)/state_guard$(EXE_EXT)
 STATE_LAYOUT_BIN := $(BUILD_DIR)/state_layout$(EXE_EXT)
 AUDIO_CTRL_BIN := $(BUILD_DIR)/audio_controls$(EXE_EXT)
 FRAME_DELTA_BIN := $(BUILD_DIR)/frame_delta$(EXE_EXT)
+IDLE_METRICS_BIN := $(BUILD_DIR)/idle_metrics$(EXE_EXT)
 TRACE_BIN := $(BUILD_DIR)/audio_probe_trace$(EXE_EXT)
 TRACE_GOLDEN := ayther/golden/audio_probe_trace.json
 TRACE_ACTUAL := $(ARTIFACT_DIR)/audio_probe_trace.actual.json
@@ -79,7 +80,7 @@ PROFILE_COMPARISON := $(ARTIFACT_DIR)/feature_gate_profiles.json
 
 .PHONY: all check check-unit check-concurrency check-determinism \
 	check-full-core check-profile-comparison raster-rom-probe \
-	full-core-replay clean
+	full-core-replay check-idle-metrics clean
 
 all: $(UNIT_BIN) $(CONCURRENCY_BIN) $(API_BIN) $(RASTER_BIN) \
 	$(SPRITE_CAPTURE_BIN) $(TRACE_BIN)
@@ -169,6 +170,15 @@ $(FRAME_DELTA_BIN): ayther/frame_delta.c ayther/generated_rom.c \
 check-frame-delta: $(FRAME_DELTA_BIN)
 	$(call require_core)
 	$(FRAME_DELTA_BIN) "$(CORE)"
+
+$(IDLE_METRICS_BIN): ayther/idle_metrics.c ayther/generated_rom.c 		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h 		$(CORE_DIR)/core/ayther/ayther_metrics.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -DAYTHER_METRICS -I$(CORE_DIR)/core/ayther 		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include 		-Iayther -o $@ ayther/idle_metrics.c ayther/generated_rom.c 		$(LDFLAGS) $(ROM_PROBE_LIBS)
+
+# #36: necesita un core compilado con AYTHER_METRICS=1. Con cualquier otro el
+# test se saltea en vez de fallar -- es un build de diagnostico, no publicado.
+check-idle-metrics: $(IDLE_METRICS_BIN)
+	$(call require_core)
+	$(IDLE_METRICS_BIN) "$(CORE)"
 
 full-core-replay: $(FULL_CORE_BIN)
 

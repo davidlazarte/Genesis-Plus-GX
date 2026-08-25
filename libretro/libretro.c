@@ -84,6 +84,7 @@
 #include "ayther/ayther_api.h"
 #ifdef AYTHER_EXTENSIONS
 #include "ayther/ayther_runtime.h"
+#include "ayther/ayther_metrics.h"
 #endif
 #include "md_ntsc.h"
 #include "sms_ntsc.h"
@@ -242,12 +243,32 @@ static void ayther_reset_session(bool content_loaded)
    ayther_invalidate_snapshot();
 }
 
+/* #36: las suscripciones que gatean el bitmap de VRAM sucia. Quien lee el
+   frame delta esta leyendo, por definicion, que cambio en la memoria del VDP. */
+#define AYTHER_SUB_DELTA_PRODUCERS \
+   (AYTHER_SUB_VDP_MEMORY | AYTHER_SUB_RASTER_TRACKING)
+
 static void ayther_begin_frame(void)
 {
+   uint32_t before = ayther_subscription_active_mask;
+
    if (ayther_subscription_begin_frame())
       ayther_snapshot_generation++;
+
+   /* #36: el bitmap de patterns sucios deja de acumularse sin subscribers, asi
+      que al ACTIVAR la suscripcion hay que darle al recien llegado todo lo que
+      no vio. Todo sucio es la unica respuesta correcta: el consumidor necesita
+      un SUPERCONJUNTO de lo que cambio, y "no se" no es un valor que el bitmap
+      pueda expresar. Es la misma politica que load y reset ya aplicaban. */
+   if (!(before & AYTHER_SUB_DELTA_PRODUCERS) &&
+       (ayther_subscription_active_mask & AYTHER_SUB_DELTA_PRODUCERS))
+   {
+      memset(ayther_vram_dirty, 0xFF, sizeof(ayther_vram_dirty));
+   }
+
    ayther_clear_frame_capture();
    ayther_frame_active = true;
+   AYTHER_METRIC_INC(begin_frame_calls);
 }
 
 static void ayther_end_frame(void)
@@ -4194,9 +4215,13 @@ static int32_t AYTHER_CALL ayther_read_region_v1(uint32_t region_id,
    if ((offset > mapping.byte_size) ||
        (byte_count > (mapping.byte_size - offset)))
       return AYTHER_STATUS_OUT_OF_BOUNDS;
-   if (ayther_region_subscription(region_id) &&
-       !AYTHER_SUBSCRIBED(ayther_region_subscription(region_id)))
-      return AYTHER_STATUS_NOT_SUBSCRIBED;
+   /* #36: una sola consulta. Eran dos por lectura, y la funcion es un switch
+      sobre el id: barato, pero pagado por cada region leida de cada frame. */
+   {
+      uint32_t required = ayther_region_subscription(region_id);
+      if (required && !AYTHER_SUBSCRIBED(required))
+         return AYTHER_STATUS_NOT_SUBSCRIBED;
+   }
    if (!byte_count)
       return AYTHER_STATUS_OK;
 
@@ -4211,6 +4236,16 @@ static int32_t AYTHER_CALL ayther_read_region_v1(uint32_t region_id,
    }
 
    return AYTHER_STATUS_OK;
+}
+
+static int ayther_range_nonzero(const void *data, size_t n)
+{
+   const uint8_t *p = (const uint8_t *)data;
+   size_t i;
+   for (i = 0; i < n; ++i)
+      if (p[i])
+         return 1;
+   return 0;
 }
 
 static int ayther_plane_suppress_nonzero(void)
@@ -4283,8 +4318,29 @@ static int32_t AYTHER_CALL ayther_write_control_v1(uint32_t region_id,
    if (byte_count)
       memcpy((uint8_t *)mapping.data + offset, data, byte_count);
 
+   /* #36: el barrido de 3 KB corria en CADA escritura a la region. Poner un
+      bit no necesita barrer nada -- si lo escrito trae algo distinto de cero,
+      la respuesta ya es 1--; solo BORRAR obliga a revisar el resto. El caso
+      caro queda para el caso raro. */
    if (region_id == AYTHER_REGION_PLANE_TILE_SUPPRESS)
-      ayther_plane_suppress_active = ayther_plane_suppress_nonzero() ? 1 : 0;
+   {
+      if (!ayther_plane_suppress_active && ayther_range_nonzero(data, byte_count))
+         ayther_plane_suppress_active = 1;
+      else
+         ayther_plane_suppress_active = ayther_plane_suppress_nonzero() ? 1 : 0;
+   }
+   /* #36: mismo criterio para la mascara de sprites, que hasta ahora no tenia
+      ningun resumen: parse_satb_m5 tomaba el parser completo por estar
+      suscrito a RENDER_CONTROLS aunque no hubiera un solo slot suprimido. */
+   if (region_id == AYTHER_REGION_SPRITE_SUPPRESS)
+   {
+      if (!ayther_sprite_suppress_active && ayther_range_nonzero(data, byte_count))
+         ayther_sprite_suppress_active = 1;
+      else
+         ayther_sprite_suppress_active =
+            ayther_range_nonzero(ayther_sprite_suppress,
+                                 sizeof(ayther_sprite_suppress)) ? 1 : 0;
+   }
 
    ayther_snapshot_generation++;
    if (new_generation)
@@ -4364,14 +4420,27 @@ static int32_t AYTHER_CALL ayther_recompose_frame_v1(uint16_t *out_pixels,
    if (!AYTHER_SUBSCRIBED(AYTHER_SUB_RECOMPOSITION))
       return AYTHER_STATUS_NOT_SUBSCRIBED;
 
-   memcpy(saved_sprites, ayther_sprites, sizeof(saved_sprites));
-   saved_sprite_n = ayther_sprite_n;
-   saved_sprite_overflow = ayther_sprite_overflow;
-   supported = ayther_recompose_frame(out_pixels, (int)pixel_capacity, flags,
-         &width, &height);
-   memcpy(ayther_sprites, saved_sprites, sizeof(saved_sprites));
-   ayther_sprite_n = saved_sprite_n;
-   ayther_sprite_overflow = saved_sprite_overflow;
+   /* #36: los 1280 B de sprites se salvan y restauran porque recomponer
+      re-parsea la SAT y pisaria la captura del frame. Sin suscripcion a
+      SPRITE_CAPTURE no hay captura que proteger, y la copia era 2560 B por
+      llamada a cambio de nada. */
+   {
+      const int keep_sprites = AYTHER_SUBSCRIBED(AYTHER_SUB_SPRITE_CAPTURE);
+      if (keep_sprites)
+      {
+         memcpy(saved_sprites, ayther_sprites, sizeof(saved_sprites));
+         saved_sprite_n = ayther_sprite_n;
+         saved_sprite_overflow = ayther_sprite_overflow;
+      }
+      supported = ayther_recompose_frame(out_pixels, (int)pixel_capacity, flags,
+            &width, &height);
+      if (keep_sprites)
+      {
+         memcpy(ayther_sprites, saved_sprites, sizeof(saved_sprites));
+         ayther_sprite_n = saved_sprite_n;
+         ayther_sprite_overflow = saved_sprite_overflow;
+      }
+   }
 
    if (supported <= 0)
       return ayther_rc_status(supported);
@@ -4673,6 +4742,30 @@ AYTHER_API const ayther_interface_v1 *AYTHER_CALL ayther_get_interface(
       return &ayther_interface_1;
    return NULL;
 }
+
+#ifdef AYTHER_METRICS
+/* #36: los contadores de instrumentacion. Existen SOLO en builds con
+   -DAYTHER_METRICS, que no se publican: son para que el harness pueda afirmar
+   "cero trabajo en idle" contando en vez de cronometrando. Un bench cuyo ruido
+   es del mismo orden que lo que mide no puede distinguir "no hace nada" de
+   "hace poco"; un contador en cero si. */
+AYTHER_API int32_t AYTHER_CALL ayther_metrics_read(ayther_metrics_v1 *out,
+      uint32_t out_size)
+{
+   if (!out || out_size < sizeof(*out))
+      return AYTHER_STATUS_BUFFER_TOO_SMALL;
+   *out = ayther_metrics;
+   out->struct_size = (uint32_t)sizeof(*out);
+   return AYTHER_STATUS_OK;
+}
+
+AYTHER_API void AYTHER_CALL ayther_metrics_reset(void)
+{
+   uint32_t size = ayther_metrics.struct_size;
+   memset(&ayther_metrics, 0, sizeof(ayther_metrics));
+   ayther_metrics.struct_size = size;
+}
+#endif /* AYTHER_METRICS */
 #endif /* AYTHER_EXTENSIONS */
 
 void *retro_get_memory_data(unsigned id)

@@ -1,6 +1,12 @@
 /* Runtime subscription state shared by the core and libretro adapter. */
 
 #include "ayther_runtime.h"
+#include "ayther_metrics.h"
+
+#ifdef AYTHER_METRICS
+ayther_metrics_v1 ayther_metrics = { (uint32_t)sizeof(ayther_metrics_v1), 0,
+                                     0, 0, 0, 0 };
+#endif
 
 #ifdef SOUND_PROBE
 #include "audio_probe.h"

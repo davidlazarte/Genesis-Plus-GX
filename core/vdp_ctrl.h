@@ -45,6 +45,7 @@
 #ifdef AYTHER_EXTENSIONS
 #include "ayther_raster.h"
 #include "ayther/ayther_runtime.h"
+#include "ayther/ayther_metrics.h"
 #endif
 
 /* VDP context */

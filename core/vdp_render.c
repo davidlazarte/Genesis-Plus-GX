@@ -668,6 +668,11 @@ static uint8 ayther_sprite_px[0x200];  /* 1 = ese pixel es de sprite (sólo dim 
    sprite por hash en el Lab). El frontend lo setea SÓLO para el frame visible
    (produce) y lo vacía para la re-simulación bare → status del VDP intacto. */
 uint8 ayther_sprite_suppress[16] = {0};
+/* #36: resumen de la mascara de arriba, mantenido en write_control. Sin esto,
+   estar suscrito a RENDER_CONTROLS bastaba para que parse_satb_m5 tomara el
+   parser completo linea por linea aunque no hubiera un solo slot suprimido --
+   se pagaba la capacidad de suprimir, no la supresion-. */
+uint8 ayther_sprite_suppress_active = 0;
 #define AYTHER_SPR_SUPPRESSED_ACTIVE(active, slot) \
   ((active) && \
    (ayther_sprite_suppress[((slot) >> 3) & 0x0F] & (1 << ((slot) & 7))))
@@ -5144,13 +5149,21 @@ static void parse_satb_m5_fast(int line, int im2)
 void parse_satb_m5(int line)
 {
 #ifdef AYTHER_EXTENSIONS
-  if (!AYTHER_SUBSCRIBED(AYTHER_SUB_SPRITE_CAPTURE |
-                         AYTHER_SUB_RENDER_CONTROLS) &&
+  /* #36: la suscripcion habilita, pero lo que obliga al parser completo es que
+     haya ALGO que hacer. SPRITE_CAPTURE si obliga -- el frontend pidio los
+     sprites-. RENDER_CONTROLS no: sin un solo slot suprimido, el parser rapido
+     produce exactamente lo mismo, y `test_satb_equiv` (#33) es lo que sostiene
+     esa afirmacion. Antes se pagaba la CAPACIDAD de suprimir en cada linea de
+     cada frame, estuviera o no suprimido algo. */
+  if (!AYTHER_SUBSCRIBED(AYTHER_SUB_SPRITE_CAPTURE) &&
+      !(AYTHER_SUBSCRIBED(AYTHER_SUB_RENDER_CONTROLS) &&
+        ayther_sprite_suppress_active) &&
       !ayther_rc_nolimit)
   {
     parse_satb_m5_fast(line, 0);
     return;
   }
+  AYTHER_METRIC_INC(satb_slow_path);
 #endif
   /* Sprite Y position */
   int ypos;
@@ -5274,13 +5287,21 @@ void parse_satb_m5(int line)
 void parse_satb_m5_im2(int line)
 {
 #ifdef AYTHER_EXTENSIONS
-  if (!AYTHER_SUBSCRIBED(AYTHER_SUB_SPRITE_CAPTURE |
-                         AYTHER_SUB_RENDER_CONTROLS) &&
+  /* #36: la suscripcion habilita, pero lo que obliga al parser completo es que
+     haya ALGO que hacer. SPRITE_CAPTURE si obliga -- el frontend pidio los
+     sprites-. RENDER_CONTROLS no: sin un solo slot suprimido, el parser rapido
+     produce exactamente lo mismo, y `test_satb_equiv` (#33) es lo que sostiene
+     esa afirmacion. Antes se pagaba la CAPACIDAD de suprimir en cada linea de
+     cada frame, estuviera o no suprimido algo. */
+  if (!AYTHER_SUBSCRIBED(AYTHER_SUB_SPRITE_CAPTURE) &&
+      !(AYTHER_SUBSCRIBED(AYTHER_SUB_RENDER_CONTROLS) &&
+        ayther_sprite_suppress_active) &&
       !ayther_rc_nolimit)
   {
     parse_satb_m5_fast(line, 1);
     return;
   }
+  AYTHER_METRIC_INC(satb_slow_path);
 #endif
   /* Sprite Y position */
   int ypos;

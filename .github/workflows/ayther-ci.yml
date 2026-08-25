@@ -924,9 +924,12 @@ jobs:
         shell: pwsh
         continue-on-error: true
         run: |
-          make -C tests full-core-replay CC=clang CPPFLAGS=-DAYTHER_UCRT_DIAG
-          $core = (Resolve-Path genesis_plus_gx_libretro.dll).Path
-          & tests/.build/full_core_replay.exe $core 2>&1 | Tee-Object -FilePath ucrt-replay.log
+          # El mismo target que usa el resto de CI: el harness necesita cinco
+          # rutas de salida, no solo el core, y pasarselas a mano fue un error de
+          # uso disfrazado de fallo del core en la primera corrida.
+          make -C tests check-full-core CC=clang CPPFLAGS=-DAYTHER_UCRT_DIAG `
+            CORE=../genesis_plus_gx_libretro.dll 2>&1 |
+            Tee-Object -FilePath ucrt-replay.log
           $code = $LASTEXITCODE
           Write-Host "exit code: $code (0x$('{0:X8}' -f $code))"
           Write-Host "3 = abort(), 4 = parametro invalido, 0xC0000409 = fastfail crudo"

@@ -84,6 +84,7 @@
 #include "ayther/ayther_api.h"
 #ifdef AYTHER_EXTENSIONS
 #include "ayther/ayther_runtime.h"
+#include "ayther/ayther_metrics.h"
 #endif
 #include "md_ntsc.h"
 #include "sms_ntsc.h"
@@ -172,6 +173,30 @@ static bool is_running = 0;
 #ifdef AYTHER_EXTENSIONS
 static bool ayther_content_loaded = false;
 static bool ayther_frame_active = false;
+
+/* #30: el delta era consume-on-poll -- leerlo lo vaciaba--, asi que solo servia
+   para UN consumidor por frame. Con el Lab de debug y el motor HD leyendo el
+   mismo frame, el segundo recibia un bitmap vacio y no invalidaba sus assets.
+   No es un caso raro: es el uso previsto.
+
+   Doble buffer: lo que se acumula durante el frame se CONGELA al terminarlo, y
+   la lectura devuelve el congelado sin tocarlo. Leerlo N veces da lo mismo N
+   veces. Ademas cada frame entra en un ring, para que `frame_delta_since`
+   pueda contestar "que cambio desde la generacion X". */
+static uint8_t ayther_delta_frozen[2048];
+static uint8_t ayther_delta_ring[AYTHER_FRAME_DELTA_HISTORY][2048];
+static uint64_t ayther_delta_ring_gen[AYTHER_FRAME_DELTA_HISTORY];
+static bool ayther_delta_ring_valid[AYTHER_FRAME_DELTA_HISTORY];
+
+static void ayther_delta_freeze(uint64_t completed_generation)
+{
+   size_t slot = (size_t)(completed_generation % AYTHER_FRAME_DELTA_HISTORY);
+   memcpy(ayther_delta_frozen, ayther_vram_dirty, sizeof(ayther_delta_frozen));
+   memcpy(ayther_delta_ring[slot], ayther_vram_dirty, sizeof(ayther_delta_frozen));
+   ayther_delta_ring_gen[slot] = completed_generation;
+   ayther_delta_ring_valid[slot] = true;
+   memset(ayther_vram_dirty, 0, sizeof(ayther_vram_dirty));
+}
 static uint64_t ayther_frame_generation = 0;
 static uint64_t ayther_snapshot_generation = 1;
 #endif
@@ -201,6 +226,13 @@ static void ayther_invalidate_snapshot(void)
    ayther_clear_frame_capture();
    ayther_raster_dirty = 0;
    ayther_snapshot_generation++;
+
+   /* #30: esto es lo que el consume-on-poll compraba y hay que conservar. Un
+      unserialize puede cambiar la VRAM ENTERA sin que corra un solo frame, y
+      vdp_ctrl.c marca todo sucio al cargar el contexto. Sin esto, el consumidor
+      no se enteraria hasta el proximo end_frame y pintaria un frame con assets
+      viejos. El congelado se actualiza sin esperar al fin de frame. */
+   memcpy(ayther_delta_frozen, ayther_vram_dirty, sizeof(ayther_delta_frozen));
 }
 
 static void ayther_reset_session(bool content_loaded)
@@ -211,17 +243,245 @@ static void ayther_reset_session(bool content_loaded)
    ayther_invalidate_snapshot();
 }
 
-static void ayther_begin_frame(void)
+/* AYTHER (#39.B): descriptor del sistema emulado.
+
+   Se rellena AL LEERLO y no una vez por frame, a proposito: son unos cuarenta
+   bytes que nadie mira en la mayoria de los frames, y rellenarlos siempre seria
+   exactamente el tipo de trabajo-en-idle que #36 saco de otros seis lugares.
+   Entre frames -- que es cuando el frontend puede leer-- el estado del VDP es
+   el del frame que acaba de terminar, que es la respuesta correcta. */
+static ayther_system_v1 ayther_system_desc;
+
+/* #42: las regiones por linea se entregan como CABECERA + ENTRADAS en un solo
+   buffer contiguo. La cabecera va adentro y no aparte porque el consumidor
+   necesita saber cuantas lineas trae y de que frame son EN EL MISMO read: dos
+   lecturas separadas pueden caer a los dos lados de un frame. */
+static uint8_t ayther_line_regs_buf[sizeof(ayther_line_header_v1) +
+                                    AYTHER_LINE_MAX * sizeof(ayther_line_regs_v1)];
+static uint8_t ayther_line_cram_buf[sizeof(ayther_line_header_v1) +
+                                    AYTHER_LINE_MAX * 128];
+static uint8_t ayther_line_cells_buf[sizeof(ayther_line_header_v1) +
+                                     AYTHER_LINE_MAX * sizeof(ayther_line_cells_v1)];
+static uint32_t ayther_line_cells_bytes;
+static uint32_t ayther_line_regs_bytes;
+static uint32_t ayther_line_cram_bytes;
+
+static void ayther_fill_line_header(void *dst, uint32_t entry_size,
+                                    uint32_t lines, uint32_t flags)
 {
-   if (ayther_subscription_begin_frame())
-      ayther_snapshot_generation++;
-   ayther_clear_frame_capture();
-   ayther_frame_active = true;
+   ayther_line_header_v1 h;
+   memset(&h, 0, sizeof(h));
+   h.struct_size = (uint32_t)sizeof(h);
+   h.entry_size = entry_size;
+   h.lines = lines;
+   h.flags = flags;
+   h.frame_generation = ayther_frame_generation;
+   memcpy(dst, &h, sizeof(h));
 }
 
-static void ayther_end_frame(void)
+static void ayther_fill_line_regs(void)
+{
+   uint32_t lines = ayther_line_count;
+   if (lines > AYTHER_LINE_MAX) lines = AYTHER_LINE_MAX;
+   ayther_fill_line_header(ayther_line_regs_buf,
+                           (uint32_t)sizeof(ayther_line_regs_v1),
+                           lines, ayther_line_flags);
+   memcpy(ayther_line_regs_buf + sizeof(ayther_line_header_v1),
+          ayther_line_regs, lines * sizeof(ayther_line_regs_v1));
+   ayther_line_regs_bytes = (uint32_t)(sizeof(ayther_line_header_v1) +
+                                       lines * sizeof(ayther_line_regs_v1));
+}
+
+static void ayther_fill_line_cells(void)
+{
+   uint32_t lines = ayther_line_count;
+   if (lines > AYTHER_LINE_MAX) lines = AYTHER_LINE_MAX;
+   ayther_fill_line_header(ayther_line_cells_buf,
+                           (uint32_t)sizeof(ayther_line_cells_v1),
+                           lines, ayther_line_flags);
+   memcpy(ayther_line_cells_buf + sizeof(ayther_line_header_v1),
+          ayther_line_cells, lines * sizeof(ayther_line_cells_v1));
+   ayther_line_cells_bytes = (uint32_t)(sizeof(ayther_line_header_v1) +
+                                        lines * sizeof(ayther_line_cells_v1));
+}
+
+static void ayther_fill_line_cram(void)
+{
+   /* Un frame sin writes de paleta a mitad de camino entrega UNA entrada y el
+      flag CRAM_UNIFORM, no 240 copias iguales: 128 B contra 30 KB. */
+   uint32_t lines = ayther_line_count;
+   uint32_t flags = ayther_line_flags;
+   if (lines > AYTHER_LINE_MAX) lines = AYTHER_LINE_MAX;
+   if (ayther_line_flags & AYTHER_LINES_CRAM_UNIFORM)
+      lines = lines ? 1u : 0u;
+   ayther_fill_line_header(ayther_line_cram_buf, 128u, lines, flags);
+   memcpy(ayther_line_cram_buf + sizeof(ayther_line_header_v1),
+          ayther_line_cram, lines * 128u);
+   ayther_line_cram_bytes = (uint32_t)(sizeof(ayther_line_header_v1) + lines * 128u);
+}
+
+static void ayther_fill_system(void)
+{
+   memset(&ayther_system_desc, 0, sizeof(ayther_system_desc));
+   ayther_system_desc.struct_size = (uint32_t)sizeof(ayther_system_desc);
+   ayther_system_desc.layout_version = AYTHER_LAYOUT_SYSTEM_V1;
+
+   ayther_system_desc.system_hw = system_hw;
+   ayther_system_desc.region_pal = vdp_pal ? 1 : 0;
+   /* El VDP no elige modo hasta que el programa escribe reg 1; hasta entonces
+      decir "modo 4" seria inventar. 0 significa "todavia no". */
+   ayther_system_desc.vdp_mode = (reg[1] & 0x04) ? 5
+                               : ((system_hw & SYSTEM_PBC) == SYSTEM_MD ? 0 : 4);
+   ayther_system_desc.interlace = (uint8_t)(im2_flag ? 2 : (interlaced ? 1 : 0));
+   ayther_system_desc.h40 = (reg[12] & 0x01) ? 1 : 0;
+   ayther_system_desc.shadow_highlight = (reg[12] & 0x08) ? 1 : 0;
+   ayther_system_desc.lines_per_frame = (uint16_t)lines_per_frame;
+
+   ayther_system_desc.viewport_x = (uint16_t)bitmap.viewport.x;
+   ayther_system_desc.viewport_y = (uint16_t)bitmap.viewport.y;
+   ayther_system_desc.viewport_w = (uint16_t)bitmap.viewport.w;
+   ayther_system_desc.viewport_h = (uint16_t)bitmap.viewport.h;
+
+   ayther_system_desc.master_clock = system_clock;
+   ayther_system_desc.cpu_clock = ((system_hw & SYSTEM_PBC) == SYSTEM_MD)
+      ? (system_clock / 7) : (system_clock / 15);
+
+#if defined(HAVE_YM3438_CORE)
+   ayther_system_desc.fm_core = (config.ym2612 >= YM2612_ENHANCED) ? 1 : 0;
+#else
+   ayther_system_desc.fm_core = 0;
+#endif
+   ayther_system_desc.psg_present = 1;
+   ayther_system_desc.pcm_present = (system_hw == SYSTEM_MCD) ? 1 : 0;
+
+   ayther_system_desc.rom_crc32 = (uint32_t)rominfo.crc32;
+   ayther_system_desc.rom_bytes = (uint32_t)cart.romsize;
+}
+
+static ayther_journal_v1    ayther_journal_desc;
+static ayther_frame_hash_v1 ayther_frame_hash_desc;
+
+/* #39.A: el journal se copia EN LA CONSULTA, igual que el descriptor de
+   sistema. Copiarlo una vez por frame seria trabajo que casi siempre nadie
+   lee; la region es de solo lectura y el journal no se mueve entre el fin
+   del frame y la consulta. */
+static void ayther_fill_journal(void)
+{
+   int i;
+   int n = ayther_raster_journal_count;
+   if (n < 0) n = 0;
+   if (n > AYTHER_JOURNAL_MAX_EVENTS) n = AYTHER_JOURNAL_MAX_EVENTS;
+
+   memset(&ayther_journal_desc, 0, sizeof(ayther_journal_desc));
+   ayther_journal_desc.layout_version = AYTHER_LAYOUT_JOURNAL_V1;
+   ayther_journal_desc.struct_size = (uint32_t)sizeof(ayther_journal_desc);
+   ayther_journal_desc.count = (uint32_t)n;
+   ayther_journal_desc.dropped = (ayther_raster_journal_dropped > 0)
+      ? (uint32_t)ayther_raster_journal_dropped : 0u;
+   for (i = 0; i < n; ++i)
+   {
+      ayther_journal_desc.events[i].v_counter = ayther_raster_journal[i].v_counter;
+      ayther_journal_desc.events[i].reason    = ayther_raster_journal[i].reason;
+      ayther_journal_desc.events[i].address   = ayther_raster_journal[i].address;
+      ayther_journal_desc.events[i].data      = ayther_raster_journal[i].data;
+   }
+}
+
+/* #39.D: FNV-1a de 64 bits, el mismo que usa full_core_replay, para que el
+   frontend pueda recalcular y comparar en vez de tener que confiar. */
+#define AYTHER_FNV_OFFSET UINT64_C(1469598103934665603)
+#define AYTHER_FNV_PRIME  UINT64_C(1099511628211)
+
+static uint64_t ayther_hash_bytes(uint64_t h, const void *p, size_t n)
+{
+   const uint8_t *b = (const uint8_t *)p;
+   size_t i;
+   for (i = 0; i < n; ++i)
+   {
+      h ^= (uint64_t)b[i];
+      h *= AYTHER_FNV_PRIME;
+   }
+   return h;
+}
+
+/* Se calcula al CERRAR el frame, que es el unico momento en que el video y
+   el audio del frame estan los dos completos. Solo bajo suscripcion: son
+   ~100 KB recorridos, y cobrarselos a quien no los pidio contradice la
+   promesa del fork. */
+static void ayther_update_frame_hash(const int16 *samples, unsigned frames)
+{
+   uint64_t video = AYTHER_FNV_OFFSET;
+   const int rw = vwidth - vwoffset;
+   int y;
+
+   if (!AYTHER_SUBSCRIBED(AYTHER_SUB_FRAME_HASH))
+      return;
+
+   /* Exactamente el frame que el frontend recibe: el mismo puntero, el mismo
+      ancho y el mismo pitch que el video_cb de mas abajo, y fila por fila
+      -- el pitch cubre 720 px y el frame ocupa menos, asi que hashear de un
+      saque meteria relleno que nadie ve-. Es la misma cuenta que hace
+      `full_core_replay` desde afuera, y por eso los dos numeros se pueden
+      comparar: si no coinciden, uno de los dos esta mirando otra cosa. */
+   if (bitmap.data && rw > 0 && vheight > 0)
+   {
+      const uint8 *base = bitmap.data + bmdoffset;
+      for (y = 0; y < vheight; ++y)
+         video = ayther_hash_bytes(video,
+                                   base + (size_t)y * (size_t)bitmap.pitch,
+                                   (size_t)rw * sizeof(uint16_t));
+   }
+
+   ayther_frame_hash_desc.layout_version = AYTHER_LAYOUT_FRAME_HASH_V1;
+   ayther_frame_hash_desc.struct_size =
+      (uint32_t)sizeof(ayther_frame_hash_desc);
+   ayther_frame_hash_desc.frame_index = ayther_frame_generation;
+   ayther_frame_hash_desc.video_hash = video;
+   ayther_frame_hash_desc.audio_hash = (samples && frames)
+      ? ayther_hash_bytes(AYTHER_FNV_OFFSET, samples,
+                          (size_t)frames * 2u * sizeof(int16))
+      : AYTHER_FNV_OFFSET;
+   ayther_frame_hash_desc.vram_hash  = ayther_hash_bytes(AYTHER_FNV_OFFSET, vram, 0x10000);
+   ayther_frame_hash_desc.cram_hash  = ayther_hash_bytes(AYTHER_FNV_OFFSET, cram, 0x80);
+   ayther_frame_hash_desc.vsram_hash = ayther_hash_bytes(AYTHER_FNV_OFFSET, vsram, 0x80);
+}
+
+/* #36: las suscripciones que gatean el bitmap de VRAM sucia. Quien lee el
+   frame delta esta leyendo, por definicion, que cambio en la memoria del VDP. */
+#define AYTHER_SUB_DELTA_PRODUCERS \
+   (AYTHER_SUB_VDP_MEMORY | AYTHER_SUB_RASTER_TRACKING)
+
+static void ayther_begin_frame(void)
+{
+   uint32_t before = ayther_subscription_active_mask;
+
+   if (ayther_subscription_begin_frame())
+      ayther_snapshot_generation++;
+
+   /* #36: el bitmap de patterns sucios deja de acumularse sin subscribers, asi
+      que al ACTIVAR la suscripcion hay que darle al recien llegado todo lo que
+      no vio. Todo sucio es la unica respuesta correcta: el consumidor necesita
+      un SUPERCONJUNTO de lo que cambio, y "no se" no es un valor que el bitmap
+      pueda expresar. Es la misma politica que load y reset ya aplicaban. */
+   if (!(before & AYTHER_SUB_DELTA_PRODUCERS) &&
+       (ayther_subscription_active_mask & AYTHER_SUB_DELTA_PRODUCERS))
+   {
+      memset(ayther_vram_dirty, 0xFF, sizeof(ayther_vram_dirty));
+   }
+
+   ayther_clear_frame_capture();
+   ayther_frame_active = true;
+   AYTHER_METRIC_INC(begin_frame_calls);
+}
+
+static void ayther_end_frame(const int16 *samples, unsigned frames)
 {
    ayther_frame_active = false;
+   /* #39.D: antes de mover la generacion -- el hash es de ESTE frame. */
+   ayther_update_frame_hash(samples, frames);
+   /* Se congela ANTES de incrementar: el bitmap pertenece al frame que acaba
+      de correr, no al que viene. */
+   ayther_delta_freeze(ayther_frame_generation);
    ayther_frame_generation++;
    ayther_snapshot_generation++;
 }
@@ -229,7 +489,7 @@ static void ayther_end_frame(void)
 #define ayther_reset_session(content_loaded) ((void)(content_loaded))
 #define ayther_invalidate_snapshot() ((void)0)
 #define ayther_begin_frame() ((void)0)
-#define ayther_end_frame() ((void)0)
+#define ayther_end_frame(samples, frames) ((void)(samples), (void)(frames))
 #endif
 
 retro_log_printf_t log_cb;
@@ -4067,6 +4327,128 @@ static int32_t ayther_map_region(uint32_t region_id,
          mapping->access_flags = AYTHER_REGION_ACCESS_READ |
             AYTHER_REGION_FRAME_SCOPED | AYTHER_REGION_NATIVE_ENDIAN;
          break;
+      case AYTHER_REGION_LINE_REGS:
+         /* #42: se arma al leer, como el descriptor de sistema y por la misma
+            razon: son hasta 7,5 KB que nadie mira en la mayoria de los frames. */
+         ayther_fill_line_regs();
+         /* #42/#55: `byte_size == element_size * capacity` es una promesa
+            que la ABI publica para TODA region, y estas tres la rompian: el
+            buffer es una cabecera de 24 B seguida de N entradas, y ningun par
+            (tamanio, cantidad) describe eso. Un consumidor que dimensionara
+            su buffer con la multiplicacion se quedaba 24 bytes corto, y sin
+            suscripcion la region declaraba capacity=0 con byte_size=24.
+
+            Se declaran como bytes crudos, igual que VRAM: el LAYOUT lo dice
+            `data_version`, y `entry_size` y `lines` viajan DENTRO de la
+            cabecera, que es donde el consumidor ya los tenia que leer. No se
+            pierde informacion; se deja de mentir sobre la forma. */
+         mapping->data = ayther_line_regs_buf;
+         mapping->element_size = 1;
+         mapping->capacity = ayther_line_regs_bytes;
+         mapping->byte_size = ayther_line_regs_bytes;
+         mapping->data_version = AYTHER_LAYOUT_LINE_REGS_V1;
+         mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_NONE;
+         mapping->access_flags = AYTHER_REGION_ACCESS_READ |
+            AYTHER_REGION_FRAME_SCOPED | AYTHER_REGION_NATIVE_ENDIAN;
+         break;
+      case AYTHER_REGION_LINE_CRAM:
+         ayther_fill_line_cram();
+         /* #42/#55: `byte_size == element_size * capacity` es una promesa
+            que la ABI publica para TODA region, y estas tres la rompian: el
+            buffer es una cabecera de 24 B seguida de N entradas, y ningun par
+            (tamanio, cantidad) describe eso. Un consumidor que dimensionara
+            su buffer con la multiplicacion se quedaba 24 bytes corto, y sin
+            suscripcion la region declaraba capacity=0 con byte_size=24.
+
+            Se declaran como bytes crudos, igual que VRAM: el LAYOUT lo dice
+            `data_version`, y `entry_size` y `lines` viajan DENTRO de la
+            cabecera, que es donde el consumidor ya los tenia que leer. No se
+            pierde informacion; se deja de mentir sobre la forma. */
+         mapping->data = ayther_line_cram_buf;
+         mapping->element_size = 1;
+         mapping->capacity = ayther_line_cram_bytes;
+         mapping->byte_size = ayther_line_cram_bytes;
+         mapping->data_version = AYTHER_LAYOUT_LINE_CRAM_V1;
+         mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_NONE;
+         mapping->access_flags = AYTHER_REGION_ACCESS_READ |
+            AYTHER_REGION_FRAME_SCOPED | AYTHER_REGION_NATIVE_ENDIAN;
+         break;
+      case AYTHER_REGION_LINE_CELLS:
+         ayther_fill_line_cells();
+         /* #42/#55: `byte_size == element_size * capacity` es una promesa
+            que la ABI publica para TODA region, y estas tres la rompian: el
+            buffer es una cabecera de 24 B seguida de N entradas, y ningun par
+            (tamanio, cantidad) describe eso. Un consumidor que dimensionara
+            su buffer con la multiplicacion se quedaba 24 bytes corto, y sin
+            suscripcion la region declaraba capacity=0 con byte_size=24.
+
+            Se declaran como bytes crudos, igual que VRAM: el LAYOUT lo dice
+            `data_version`, y `entry_size` y `lines` viajan DENTRO de la
+            cabecera, que es donde el consumidor ya los tenia que leer. No se
+            pierde informacion; se deja de mentir sobre la forma. */
+         mapping->data = ayther_line_cells_buf;
+         mapping->element_size = 1;
+         mapping->capacity = ayther_line_cells_bytes;
+         mapping->byte_size = ayther_line_cells_bytes;
+         mapping->data_version = AYTHER_LAYOUT_LINE_CELLS_V1;
+         mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_NONE;
+         /* `name_pair` es la carga de 32 bits tal cual la hizo el renderer
+            sobre la VRAM, y en un host little-endian esa VRAM esta guardada
+            con los bytes intercambiados. Es la misma convencion que la region
+            VRAM ya declara con este flag: decirlo aca es lo que evita que un
+            consumidor la lea al reves y no se entere. */
+         mapping->access_flags = AYTHER_REGION_ACCESS_READ |
+            AYTHER_REGION_FRAME_SCOPED | AYTHER_REGION_WORD_SWAPPED_LE;
+         break;
+      case AYTHER_REGION_SYSTEM:
+         /* #39.B: descriptor de solo lectura. Se rellena aca, en la consulta,
+            y no una vez por frame: ver la nota en ayther_fill_system. */
+         ayther_fill_system();
+         mapping->data = &ayther_system_desc;
+         mapping->element_size = sizeof(ayther_system_desc);
+         mapping->capacity = 1;
+         mapping->byte_size = sizeof(ayther_system_desc);
+         mapping->data_version = AYTHER_LAYOUT_SYSTEM_V1;
+         mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_NONE;
+         mapping->access_flags = AYTHER_REGION_ACCESS_READ |
+            AYTHER_REGION_NATIVE_ENDIAN;
+         break;
+      case AYTHER_REGION_RASTER_JOURNAL:
+         /* #39.A: se copia aca, en la consulta. */
+         ayther_fill_journal();
+         mapping->data = &ayther_journal_desc;
+         mapping->element_size = sizeof(ayther_journal_desc);
+         mapping->capacity = 1;
+         mapping->byte_size = sizeof(ayther_journal_desc);
+         mapping->data_version = AYTHER_LAYOUT_JOURNAL_V1;
+         mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_NONE;
+         mapping->access_flags = AYTHER_REGION_ACCESS_READ |
+            AYTHER_REGION_FRAME_SCOPED | AYTHER_REGION_NATIVE_ENDIAN;
+         break;
+      case AYTHER_REGION_FRAME_HASH:
+         /* #39.D: ya calculado al cerrar el frame; aca solo se entrega. */
+         mapping->data = &ayther_frame_hash_desc;
+         mapping->element_size = sizeof(ayther_frame_hash_desc);
+         mapping->capacity = 1;
+         mapping->byte_size = sizeof(ayther_frame_hash_desc);
+         mapping->data_version = AYTHER_LAYOUT_FRAME_HASH_V1;
+         mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_NONE;
+         mapping->access_flags = AYTHER_REGION_ACCESS_READ |
+            AYTHER_REGION_FRAME_SCOPED | AYTHER_REGION_NATIVE_ENDIAN;
+         break;
+      case AYTHER_REGION_PALETTE:
+         /* #39.E: la LUT del renderer, tal cual. El ancho de la entrada lo
+            dice element_size porque depende del formato del build. */
+         mapping->data = (void *)ayther_palette_data();
+         mapping->element_size = ayther_palette_entry_size();
+         mapping->capacity = ayther_palette_entries();
+         mapping->byte_size = ayther_palette_entry_size() *
+                              ayther_palette_entries();
+         mapping->data_version = AYTHER_LAYOUT_PALETTE_V1;
+         mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_NONE;
+         mapping->access_flags = AYTHER_REGION_ACCESS_READ |
+            AYTHER_REGION_NATIVE_ENDIAN;
+         break;
       case AYTHER_REGION_RASTER_FALLBACK_REASONS:
          mapping->data = &ayther_raster_dirty;
          mapping->element_size = sizeof(ayther_raster_dirty);
@@ -4101,9 +4483,25 @@ static uint32_t ayther_region_subscription(uint32_t region_id)
       case AYTHER_REGION_PARSED_SPRITE_COUNT:
          return AYTHER_SUB_SPRITE_CAPTURE;
       case AYTHER_REGION_RASTER_FALLBACK_REASONS:
+      /* #39.A: el journal EXISTE porque alguien se suscribio al tracking
+         raster. Sin esa suscripcion no hay journal que devolver, y entregar
+         el del ultimo frame observado seria devolver un fosil. */
+      case AYTHER_REGION_RASTER_JOURNAL:
          return AYTHER_SUB_RASTER_TRACKING;
+      case AYTHER_REGION_FRAME_HASH:
+         return AYTHER_SUB_FRAME_HASH;
+      /* #39.E: la paleta es estado del VDP resuelto; quien pregunta por
+         colores esta preguntando por su memoria. */
+      case AYTHER_REGION_PALETTE:
+         return AYTHER_SUB_VDP_MEMORY;
       case AYTHER_REGION_ATTRIBUTION:
          return AYTHER_SUB_ATTRIBUTION;
+      case AYTHER_REGION_LINE_REGS:
+         return AYTHER_SUB_LINE_STATE;
+      case AYTHER_REGION_LINE_CRAM:
+         return AYTHER_SUB_LINE_CRAM;
+      case AYTHER_REGION_LINE_CELLS:
+         return AYTHER_SUB_LINE_CELLS;
       default:
          return 0;
    }
@@ -4160,9 +4558,13 @@ static int32_t AYTHER_CALL ayther_read_region_v1(uint32_t region_id,
    if ((offset > mapping.byte_size) ||
        (byte_count > (mapping.byte_size - offset)))
       return AYTHER_STATUS_OUT_OF_BOUNDS;
-   if (ayther_region_subscription(region_id) &&
-       !AYTHER_SUBSCRIBED(ayther_region_subscription(region_id)))
-      return AYTHER_STATUS_NOT_SUBSCRIBED;
+   /* #36: una sola consulta. Eran dos por lectura, y la funcion es un switch
+      sobre el id: barato, pero pagado por cada region leida de cada frame. */
+   {
+      uint32_t required = ayther_region_subscription(region_id);
+      if (required && !AYTHER_SUBSCRIBED(required))
+         return AYTHER_STATUS_NOT_SUBSCRIBED;
+   }
    if (!byte_count)
       return AYTHER_STATUS_OK;
 
@@ -4177,6 +4579,41 @@ static int32_t AYTHER_CALL ayther_read_region_v1(uint32_t region_id,
    }
 
    return AYTHER_STATUS_OK;
+}
+
+/* #40: el VDP esta en Mode 5. Es lo que decide si los controles de plano y de
+   sprite pueden cumplir lo que prometen. */
+/* #40/#55: los controles que solo existen en Mode 5 se rechazan en Mode 4.
+   Pero "el VDP todavia no eligio modo" NO es Mode 4, y esto los confundia:
+   con `reg[1]` en cero -- un core recien cargado, o un programa que todavia
+   no escribio ese registro-- cualquier escritura de control se iba con
+   UNSUPPORTED_MODE. Un frontend que arma su estado inicial antes de correr
+   el primer frame recibia un "no podes" sobre algo que si va a poder.
+
+   El criterio es el mismo que ya usa `ayther_fill_system` para contestar
+   `vdp_mode`, y por la misma razon: en una maquina de la familia Mega Drive
+   el bit apagado significa "todavia no", y decir 4 seria inventar. En Mode 4
+   de verdad -- SMS, GG, Mark III-- el rechazo sigue igual, que es lo que #40
+   vino a arreglar. */
+static int ayther_mode5_controls_supported(void)
+{
+   if (reg[1] & 0x04)
+      return 1;
+   /* Sin contenido cargado no hay modo que declarar -- `system_hw` recien se
+      fija al abrir la ROM-, asi que tampoco hay nada que rechazar. */
+   if (!system_hw)
+      return 1;
+   return ((system_hw & SYSTEM_PBC) == SYSTEM_MD);
+}
+
+static int ayther_range_nonzero(const void *data, size_t n)
+{
+   const uint8_t *p = (const uint8_t *)data;
+   size_t i;
+   for (i = 0; i < n; ++i)
+      if (p[i])
+         return 1;
+   return 0;
 }
 
 static int ayther_plane_suppress_nonzero(void)
@@ -4225,6 +4662,37 @@ static int32_t AYTHER_CALL ayther_write_control_v1(uint32_t region_id,
          return AYTHER_STATUS_INVALID_ARGUMENT;
    }
 
+   /* #40: los controles que solo existen en Mode 5, pedidos en Mode 4.
+      Hasta aca esto devolvia OK y no hacia nada: `parse_satb_m4` no tiene
+      supresion, `render_bg_m4` no tiene hooks y `merge` no participa de ese
+      path. Un exito que no hace nada es el peor contrato posible -- el
+      frontend cree que oculto el sprite y dibuja su reemplazo encima del
+      original-, asi que ahora se dice. */
+   if (!ayther_mode5_controls_supported())
+   {
+      switch (region_id)
+      {
+         case AYTHER_REGION_SPRITE_SUPPRESS:
+         case AYTHER_REGION_TILE_SUPPRESS:
+         case AYTHER_REGION_PLANE_TILE_SUPPRESS:
+         case AYTHER_REGION_PLANE_SUPPRESS_ACTIVE:
+            ayther_raster_dirty |= AYTHER_RASTER_REASON_UNSUPPORTED_CONTROLS;
+            return AYTHER_STATUS_UNSUPPORTED_MODE;
+         case AYTHER_REGION_LAYER_MASK:
+            /* Los bits A/B/W no significan nada con un solo plano de fondo; el
+               de sprites SI aplica, porque se resuelve en render_line, que es
+               comun a los dos modos. Se rechaza solo lo que no puede cumplir. */
+            if ((*(const uint8_t *)data & UINT8_C(0x07)) != UINT8_C(0x07))
+            {
+               ayther_raster_dirty |= AYTHER_RASTER_REASON_UNSUPPORTED_CONTROLS;
+               return AYTHER_STATUS_UNSUPPORTED_MODE;
+            }
+            break;
+         default:
+            break;
+      }
+   }
+
    if ((region_id == AYTHER_REGION_LAYER_MASK) &&
        ((*(const uint8_t *)data & UINT8_C(0xF0)) != 0))
       return AYTHER_STATUS_INVALID_ARGUMENT;
@@ -4249,8 +4717,31 @@ static int32_t AYTHER_CALL ayther_write_control_v1(uint32_t region_id,
    if (byte_count)
       memcpy((uint8_t *)mapping.data + offset, data, byte_count);
 
+   /* #36: el barrido de 3 KB corria en CADA escritura a la region. Poner un
+      bit no necesita barrer nada -- si lo escrito trae algo distinto de cero,
+      la respuesta ya es 1--; solo BORRAR obliga a revisar el resto. El caso
+      caro queda para el caso raro. */
    if (region_id == AYTHER_REGION_PLANE_TILE_SUPPRESS)
-      ayther_plane_suppress_active = ayther_plane_suppress_nonzero() ? 1 : 0;
+   {
+      if (!ayther_plane_suppress_active && ayther_range_nonzero(data, byte_count))
+         ayther_plane_suppress_active = 1;
+      else
+         ayther_plane_suppress_active = ayther_plane_suppress_nonzero() ? 1 : 0;
+      /* #37.4: y qué planos, no sólo si hay alguno. */
+      ayther_psup_refresh();
+   }
+   /* #36: mismo criterio para la mascara de sprites, que hasta ahora no tenia
+      ningun resumen: parse_satb_m5 tomaba el parser completo por estar
+      suscrito a RENDER_CONTROLS aunque no hubiera un solo slot suprimido. */
+   if (region_id == AYTHER_REGION_SPRITE_SUPPRESS)
+   {
+      if (!ayther_sprite_suppress_active && ayther_range_nonzero(data, byte_count))
+         ayther_sprite_suppress_active = 1;
+      else
+         ayther_sprite_suppress_active =
+            ayther_range_nonzero(ayther_sprite_suppress,
+                                 sizeof(ayther_sprite_suppress)) ? 1 : 0;
+   }
 
    ayther_snapshot_generation++;
    if (new_generation)
@@ -4330,14 +4821,27 @@ static int32_t AYTHER_CALL ayther_recompose_frame_v1(uint16_t *out_pixels,
    if (!AYTHER_SUBSCRIBED(AYTHER_SUB_RECOMPOSITION))
       return AYTHER_STATUS_NOT_SUBSCRIBED;
 
-   memcpy(saved_sprites, ayther_sprites, sizeof(saved_sprites));
-   saved_sprite_n = ayther_sprite_n;
-   saved_sprite_overflow = ayther_sprite_overflow;
-   supported = ayther_recompose_frame(out_pixels, (int)pixel_capacity, flags,
-         &width, &height);
-   memcpy(ayther_sprites, saved_sprites, sizeof(saved_sprites));
-   ayther_sprite_n = saved_sprite_n;
-   ayther_sprite_overflow = saved_sprite_overflow;
+   /* #36: los 1280 B de sprites se salvan y restauran porque recomponer
+      re-parsea la SAT y pisaria la captura del frame. Sin suscripcion a
+      SPRITE_CAPTURE no hay captura que proteger, y la copia era 2560 B por
+      llamada a cambio de nada. */
+   {
+      const int keep_sprites = AYTHER_SUBSCRIBED(AYTHER_SUB_SPRITE_CAPTURE);
+      if (keep_sprites)
+      {
+         memcpy(saved_sprites, ayther_sprites, sizeof(saved_sprites));
+         saved_sprite_n = ayther_sprite_n;
+         saved_sprite_overflow = ayther_sprite_overflow;
+      }
+      supported = ayther_recompose_frame(out_pixels, (int)pixel_capacity, flags,
+            &width, &height);
+      if (keep_sprites)
+      {
+         memcpy(ayther_sprites, saved_sprites, sizeof(saved_sprites));
+         ayther_sprite_n = saved_sprite_n;
+         ayther_sprite_overflow = saved_sprite_overflow;
+      }
+   }
 
    if (supported <= 0)
       return ayther_rc_status(supported);
@@ -4477,8 +4981,18 @@ static int32_t AYTHER_CALL ayther_set_subscriptions_v1(
    return AYTHER_STATUS_OK;
 }
 
+/* #55: este string decia 1.3 y el `abi_version` del descriptor 1.4, con el
+   header en 1.7. La negociacion de version es EL mecanismo por el que un
+   frontend descubre lo que el core sabe hacer: anunciar de menos es prometer
+   de menos, y un consumidor que exigiera >= 1.5 para usar SYSTEM concluia
+   que este core no la tiene, teniendola. Estuvo mal desde 1.5.
+
+   El campo numerico -- el que se usa para negociar-- sale ahora de
+   AYTHER_ABI_VERSION_LATEST y no de una constante copiada a mano, y
+   `verify_ayther_api` compara el descriptor contra el header. Este string es
+   informativo; si cambia la version, se cambia aca tambien. */
 static const char ayther_build_id[] =
-   "Genesis Plus GX AYTHER ABI 1.3; core v1.7.4" GIT_VERSION;
+   "Genesis Plus GX AYTHER ABI 1.7; core v1.7.4" GIT_VERSION;
 
 #if defined(LSB_FIRST) || defined(_WIN32) || defined(__LITTLE_ENDIAN__)
 #define AYTHER_HOST_ENDIANNESS AYTHER_ENDIAN_LITTLE
@@ -4515,13 +5029,47 @@ static int32_t AYTHER_CALL ayther_poll_frame_delta_v1(
       para cuando el frontend puede preguntar ya está vacío — medido desde el
       Engine: 0 patterns marcados en 240 frames contra 711 que habían cambiado.
 
-      CONSUME-ON-POLL: leer el delta lo vacía, así el poll siguiente trae lo
-      ensuciado DESDE ESTE. Eso lo hace válido para UN consumidor por frame, que
-      es el contrato del resto de la ABI (un hilo de emulación, un frontend), y
-      a cambio el dato sobrevive a un unserialize — donde la VRAM puede cambiar
-      entera sin que haya corrido un solo frame. */
-   memcpy(out->dirty_patterns, ayther_vram_dirty, sizeof(out->dirty_patterns));
-   memset(ayther_vram_dirty, 0, sizeof(ayther_vram_dirty));
+      #30: ya NO se consume al leer. Devuelve el bitmap CONGELADO del ultimo
+      frame terminado, sin tocarlo, asi que dos consumidores del mismo frame
+      reciben lo mismo. Antes el segundo recibia cero. */
+   memcpy(out->dirty_patterns, ayther_delta_frozen, sizeof(out->dirty_patterns));
+
+   return AYTHER_STATUS_OK;
+}
+
+/* #30: todo lo ensuciado desde `generation_from` inclusive. */
+static int32_t AYTHER_CALL ayther_frame_delta_since_v1(
+      uint64_t generation_from, ayther_frame_delta_v1 *out, uint32_t out_size)
+{
+   size_t i;
+   uint64_t oldest;
+   int32_t status;
+
+   status = ayther_poll_frame_delta_v1(out, out_size);
+   if (status != AYTHER_STATUS_OK)
+      return status;
+
+   oldest = (ayther_frame_generation > (uint64_t)AYTHER_FRAME_DELTA_HISTORY)
+      ? (ayther_frame_generation - (uint64_t)AYTHER_FRAME_DELTA_HISTORY)
+      : 0u;
+
+   if (generation_from < oldest)
+   {
+      /* Conservador a proposito: TODO sucio. Devolver el subconjunto que si
+         esta en el ring seria peor que inutil -- el consumidor creeria que vio
+         todo lo que cambio y dejaria assets viejos en pantalla. */
+      memset(out->dirty_patterns, 0xFF, sizeof(out->dirty_patterns));
+      return AYTHER_STATUS_DELTA_HISTORY_LOST;
+   }
+
+   for (i = 0; i < AYTHER_FRAME_DELTA_HISTORY; i++)
+   {
+      size_t b;
+      if (!ayther_delta_ring_valid[i] || ayther_delta_ring_gen[i] < generation_from)
+         continue;
+      for (b = 0; b < sizeof(out->dirty_patterns); b++)
+         out->dirty_patterns[b] |= ayther_delta_ring[i][b];
+   }
 
    return AYTHER_STATUS_OK;
 }
@@ -4546,7 +5094,7 @@ static int32_t AYTHER_CALL ayther_get_recompose_stats_v1(
 
 static const ayther_interface_v1 ayther_interface_1 =
 {
-   AYTHER_ABI_VERSION_1_3,
+   AYTHER_ABI_VERSION_LATEST,
    sizeof(ayther_interface_v1),
    AYTHER_CAP_LEGACY_MEMORY | AYTHER_CAP_REGION_QUERY |
       AYTHER_CAP_REGION_READ | AYTHER_CAP_CONTROL_WRITE |
@@ -4554,7 +5102,9 @@ static const ayther_interface_v1 ayther_interface_1 =
       AYTHER_CAP_AUDIO_WRITES_V1 | AYTHER_CAP_RASTER_FALLBACK_V1 |
       AYTHER_CAP_RECOMPOSE_V1 | AYTHER_CAP_SUBSCRIPTIONS_V1 |
       AYTHER_CAP_FRAME_DELTA_V1 | AYTHER_CAP_RECOMPOSE_STATS_V1 |
-      AYTHER_CAP_ATTRIBUTION_V1 |
+      AYTHER_CAP_ATTRIBUTION_V1 | AYTHER_CAP_FRAME_DELTA_SINCE_V1 |
+      AYTHER_CAP_SYSTEM_V1 | AYTHER_CAP_LINE_STATE_V1 |
+      AYTHER_CAP_OBSERVABILITY_V1 |
       AYTHER_AUDIO_PROBE_CAPABILITY,
    AYTHER_HOST_ENDIANNESS,
    sizeof(void *),
@@ -4583,7 +5133,8 @@ static const ayther_interface_v1 ayther_interface_1 =
    sizeof(ayther_recompose_stats_v1),
    0,
    ayther_get_recompose_stats_v1,
-   ayther_recompose_multilayer_v1
+   ayther_recompose_multilayer_v1,
+   ayther_frame_delta_since_v1
 };
 
 AYTHER_API const ayther_interface_v1 *AYTHER_CALL ayther_get_interface(
@@ -4604,6 +5155,30 @@ AYTHER_API const ayther_interface_v1 *AYTHER_CALL ayther_get_interface(
       return &ayther_interface_1;
    return NULL;
 }
+
+#ifdef AYTHER_METRICS
+/* #36: los contadores de instrumentacion. Existen SOLO en builds con
+   -DAYTHER_METRICS, que no se publican: son para que el harness pueda afirmar
+   "cero trabajo en idle" contando en vez de cronometrando. Un bench cuyo ruido
+   es del mismo orden que lo que mide no puede distinguir "no hace nada" de
+   "hace poco"; un contador en cero si. */
+AYTHER_API int32_t AYTHER_CALL ayther_metrics_read(ayther_metrics_v1 *out,
+      uint32_t out_size)
+{
+   if (!out || out_size < sizeof(*out))
+      return AYTHER_STATUS_BUFFER_TOO_SMALL;
+   *out = ayther_metrics;
+   out->struct_size = (uint32_t)sizeof(*out);
+   return AYTHER_STATUS_OK;
+}
+
+AYTHER_API void AYTHER_CALL ayther_metrics_reset(void)
+{
+   uint32_t size = ayther_metrics.struct_size;
+   memset(&ayther_metrics, 0, sizeof(ayther_metrics));
+   ayther_metrics.struct_size = size;
+}
+#endif /* AYTHER_METRICS */
 #endif /* AYTHER_EXTENSIONS */
 
 void *retro_get_memory_data(unsigned id)
@@ -4867,6 +5442,11 @@ void retro_deinit(void)
    g_rom_size = 0;
    is_running = false;
    ayther_reset_session(false);
+#ifdef AYTHER_EXTENSIONS
+   /* #36.7: los caches de recomposicion se piden al primer uso; lo que se pidio
+      se suelta. Un core que nunca recompuso no llego a reservarlos. */
+   ayther_recompose_release();
+#endif
 }
 
 void retro_reset(void)
@@ -4981,7 +5561,7 @@ void retro_run(void)
    }
 
    soundbuffer_size = audio_update(soundbuffer);
-   ayther_end_frame();
+   ayther_end_frame(soundbuffer, (unsigned)soundbuffer_size);
 
    /* Force viewport update when SMS border changes after startup undetected */
    if (     ((system_hw == SYSTEM_MARKIII) || (system_hw & SYSTEM_SMS) || (system_hw == SYSTEM_PBC))

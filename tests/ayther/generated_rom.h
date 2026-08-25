@@ -18,4 +18,39 @@ size_t ayther_build_generated_rom(uint8_t *rom, size_t capacity);
  * las dos plataformas sin necesidad. */
 size_t ayther_build_generated_rom_fm(uint8_t *rom, size_t capacity);
 
+/* Variante para el bit de sprite exacto (#31/#41). Fondo uniforme, un sprite
+ * INDISTINGUIBLE del fondo por su byte (mismo pattern, misma paleta, misma
+ * prioridad) y un sprite OPERADOR de shadow/highlight. Son los dos casos que
+ * el diff viejo contestaba mal, y ninguno de los dos existe en el fixture de
+ * siempre -- ahi todos los sprites caen sobre otro indice, asi que el diff los
+ * encontraba igual y el arreglo no se distinguiria de lo que ya habia. */
+size_t ayther_build_generated_rom_sh(uint8_t *rom, size_t capacity);
+
+/* Coordenadas de pantalla de los dos sprites de esa escena. */
+#define AYTHER_SH_SPRITE_X 64
+#define AYTHER_SH_SPRITE_Y 8
+#define AYTHER_SH_OPERATOR_X 128
+#define AYTHER_SH_OPERATOR_Y 8
+/* Rectangulo de fondo puro: dentro de las cuatro filas de celdas que el ROM
+   llena, y lejos de los dos sprites. */
+#define AYTHER_SH_BG_X 8
+#define AYTHER_SH_BG_Y 20
+
+/* #35: una escena por modo de video (#35 punto 1).
+ *
+ * El ROM de siempre ejercita Mode 5 H40 progresivo NTSC y nada mas, asi que los
+ * deltas del fork que tocan los otros modos no tenian con que probarse: #28
+ * arreglo las mascaras de render en interlace 2 y en vscroll enhanced sin un
+ * fixture que los ejercitara, y que hoy funcionen es una afirmacion que nadie
+ * puede rehacer.
+ *
+ * Cada escena es un ROM completo y estatico. Uno por escena, y no segmentos
+ * adentro de un solo ROM, porque asi no hace falta emitir un dispatcher en
+ * 68000 y porque lo que las escenas tienen que dar es un hash POR MODO: un
+ * golden agregado dice "algo se rompio", uno por escena dice cual. */
+size_t ayther_build_generated_rom_scene(uint8_t *rom, size_t capacity,
+                                        size_t scene);
+size_t ayther_scene_count(void);
+const char *ayther_scene_name(size_t index);
+
 #endif

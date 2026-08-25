@@ -18,28 +18,11 @@ SPRITE_CAPTURE_SRC := $(CORE_DIR)/core/ayther/ayther_sprite_capture.c
 SPRITE_CAPTURE_HEADERS := $(CORE_DIR)/core/ayther/ayther_sprite_capture.h \
 	$(CORE_DIR)/core/ayther/ayther_api.h
 
-# El nombre del binario depende del SISTEMA; las recetas, del SHELL. NO ES LA
-# MISMA PREGUNTA, y confundirlas es lo que rompia `make check` en el runner de
-# Windows: en Windows, si hay un `sh` en el PATH —Git for Windows lo instala y
-# los runners de GitHub lo traen— GNU make lo elige como SHELL, y entonces cada
-# receta escrita en sintaxis de cmd muere con «syntax error near unexpected
-# token». Decidir ambas cosas por $(OS) hacia que el Makefile hablara cmd a un
-# shell POSIX.
-ifeq ($(OS),Windows_NT)
-EXE_EXT := .exe
-THREAD_FLAGS :=
-else
-EXE_EXT :=
-THREAD_FLAGS := -pthread
-endif
+# EXE_EXT, make_dir y remove_build_dir viven en mk/shell.mk (#43): el bloque
+# estaba copiado en tres Makefiles y se corrigio dos veces por separado.
+include $(CORE_DIR)/mk/shell.mk
 
 ifeq ($(findstring sh,$(notdir $(SHELL))),sh)
-define make_dir
-	@mkdir -p "$1"
-endef
-define remove_build_dir
-	@rm -rf -- "$1"
-endef
 define require_core
 	@test -n "$(CORE)" || (echo "CORE=/path/to/libretro core is required" >&2; exit 2)
 endef
@@ -48,12 +31,6 @@ define require_profile_cores
 	@test -n "$(PROFILE_IDLE_CORE)" || (echo "PROFILE_IDLE_CORE is required" >&2; exit 2)
 endef
 else
-define make_dir
-	@if not exist "$(subst /,\,$1)" mkdir "$(subst /,\,$1)"
-endef
-define remove_build_dir
-	@if exist "$(subst /,\,$1)" rmdir /S /Q "$(subst /,\,$1)"
-endef
 define require_core
 	@if "$(CORE)"=="" (echo CORE=path-to-libretro-core is required 1>&2 & exit /B 2)
 endef
@@ -67,30 +44,45 @@ UNIT_BIN  := $(BUILD_DIR)/test_audio_probe$(EXE_EXT)
 CONCURRENCY_BIN := $(BUILD_DIR)/test_audio_probe_concurrency$(EXE_EXT)
 API_BIN := $(BUILD_DIR)/test_ayther_api$(EXE_EXT)
 RASTER_BIN := $(BUILD_DIR)/test_raster_guard$(EXE_EXT)
+DIM_BIN := $(BUILD_DIR)/test_dim_quarter$(EXE_EXT)
+SPRITE_RULE_BIN := $(BUILD_DIR)/test_sprite_px$(EXE_EXT)
 SPRITE_CAPTURE_BIN := $(BUILD_DIR)/test_sprite_capture$(EXE_EXT)
 ROM_PROBE_BIN := $(BUILD_DIR)/raster_rom_probe$(EXE_EXT)
 FULL_CORE_BIN := $(BUILD_DIR)/full_core_replay$(EXE_EXT)
 STATE_GUARD_BIN := $(BUILD_DIR)/state_guard$(EXE_EXT)
 STATE_LAYOUT_BIN := $(BUILD_DIR)/state_layout$(EXE_EXT)
 AUDIO_CTRL_BIN := $(BUILD_DIR)/audio_controls$(EXE_EXT)
+FRAME_DELTA_BIN := $(BUILD_DIR)/frame_delta$(EXE_EXT)
+IDLE_METRICS_BIN := $(BUILD_DIR)/idle_metrics$(EXE_EXT)
+ATTRIB_SCENE_BIN := $(BUILD_DIR)/attribution_scene$(EXE_EXT)
+PLANE_SUP_BIN := $(BUILD_DIR)/plane_suppress$(EXE_EXT)
+MULTILAYER_BIN := $(BUILD_DIR)/multilayer$(EXE_EXT)
+OBSERVABILITY_BIN := $(BUILD_DIR)/observability$(EXE_EXT)
+ABI_DYNAMIC_BIN := $(BUILD_DIR)/verify_ayther_api$(EXE_EXT)
+SCENES_BIN := $(BUILD_DIR)/scenes$(EXE_EXT)
+LINE_STATE_BIN := $(BUILD_DIR)/line_state$(EXE_EXT)
+SCENES_GOLDEN := ayther/golden/scenes.txt
 TRACE_BIN := $(BUILD_DIR)/audio_probe_trace$(EXE_EXT)
 TRACE_GOLDEN := ayther/golden/audio_probe_trace.json
 TRACE_ACTUAL := $(ARTIFACT_DIR)/audio_probe_trace.actual.json
-# UN GOLDEN POR PLATAFORMA, y no uno solo llamado "-x64". Linux y Windows corren
-# los DOS este mismo check, y con el mismo core dan hashes DISTINTOS de video,
-# audio y estado — medido: video 4d39e98f (Linux) contra dd112c2b (Windows). Con
-# un archivo unico era imposible que ambos jobs pasaran, y por eso este check
-# estuvo rojo sin que la causa se viera: parecia un golden desactualizado.
+# UN SOLO GOLDEN, y ya no uno por plataforma (#45).
 #
-# La telemetria SI coincide entre plataformas, asi que la divergencia esta en la
-# emulacion misma (compiladores distintos sobre el mismo codigo), no en lo que el
-# probe reporta. Que cada plataforma tenga su golden lo deja EXPLICITO en vez de
-# esconderlo detras de un rojo permanente.
-ifeq ($(OS),Windows_NT)
-FULL_CORE_GOLDEN := ayther/golden/full_core_replay-windows-x64.json
-else
-FULL_CORE_GOLDEN := ayther/golden/full_core_replay-linux-x64.json
-endif
+# Linux y Windows daban hashes distintos de video, audio y estado con el mismo
+# core, y se convivio con dos goldens sin saber por que. Eran DOS causas, las
+# dos ajenas a la emulacion:
+#
+#   1. `gen_reset` sacaba de `rand()` el punto del frame en que arranca el 68k
+#      tras un reset por boton. `rand()` es de la libc: glibc y MSVCRT no
+#      coinciden ni en el generador ni en RAND_MAX. Windows arrancaba en otro
+#      punto del frame y quedaba un frame entero por delante para siempre.
+#      Arreglado en core/genesis.c con un xorshift propio.
+#   2. El hash del estado incluia el tag de layout de AYTHER, que codifica los
+#      tamanios de las structs serializadas y difiere entre plataformas A
+#      PROPOSITO. Ahora queda fuera del hash (ver full_core_replay.c).
+#
+# Con las dos corregidas los cuatro hashes coinciden byte a byte entre Linux y
+# Windows, asi que un golden por plataforma ya no describe nada real.
+FULL_CORE_GOLDEN := ayther/golden/full_core_replay-x64.json
 FULL_CORE_ACTUAL := $(ARTIFACT_DIR)/full_core_replay.actual.json
 FULL_CORE_REPORT := $(ARTIFACT_DIR)/full_core_replay.frames.jsonl
 FULL_CORE_BENCHMARK := $(ARTIFACT_DIR)/full_core_benchmark.json
@@ -98,10 +90,12 @@ PROFILE_COMPARISON := $(ARTIFACT_DIR)/feature_gate_profiles.json
 
 .PHONY: all check check-unit check-concurrency check-determinism \
 	check-full-core check-profile-comparison raster-rom-probe \
-	full-core-replay clean
+	full-core-replay check-idle-metrics check-attribution-scene check-plane-suppress check-multilayer \
+	check-observability check-abi-dynamic \
+	regen-multilayer check-scenes regen-scenes check-line-state clean
 
 all: $(UNIT_BIN) $(CONCURRENCY_BIN) $(API_BIN) $(RASTER_BIN) \
-	$(SPRITE_CAPTURE_BIN) $(TRACE_BIN)
+	$(SPRITE_CAPTURE_BIN) $(DIM_BIN) $(TRACE_BIN)
 
 $(BUILD_DIR):
 	$(call make_dir,$@)
@@ -122,13 +116,28 @@ $(API_BIN): test_ayther_api.c $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR
 $(RASTER_BIN): test_raster_guard.c $(CORE_DIR)/core/ayther_raster.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core -o $@ test_raster_guard.c $(LDFLAGS)
 
+# #31: el atenuado del dim, en los tres formatos de pixel que el core compila.
+# Aritmetica pura: no necesita el core, solo el mismo header.
+$(DIM_BIN): test_dim_quarter.c $(CORE_DIR)/core/ayther/ayther_dim.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ test_dim_quarter.c $(LDFLAGS)
+
+# #31/#37/#41: que la regla de "el sprite gana" sea la misma que aplica la LUT.
+# Aritmetica pura sobre las combinaciones posibles: no necesita el core.
+$(SPRITE_RULE_BIN): test_sprite_px.c $(CORE_DIR)/core/ayther/ayther_sprite_px.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ test_sprite_px.c $(LDFLAGS)
+
 $(SPRITE_CAPTURE_BIN): test_sprite_capture.c $(SPRITE_CAPTURE_SRC) \
 		$(SPRITE_CAPTURE_HEADERS) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -DAYTHER_SPRITE_CAPTURE_METRICS \
 		-I$(CORE_DIR)/core -o $@ test_sprite_capture.c \
 		$(SPRITE_CAPTURE_SRC) $(LDFLAGS)
 
+# #35.2: en macOS `dlopen` vive en libSystem y no hay una libdl que
+# linkear; en Windows se usa LoadLibrary. Solo Linux (y los Unix con
+# libdl separada) necesitan el -ldl.
 ifeq ($(OS),Windows_NT)
+ROM_PROBE_LIBS :=
+else ifeq ($(shell uname -s),Darwin)
 ROM_PROBE_LIBS :=
 else
 ROM_PROBE_LIBS := -ldl
@@ -176,6 +185,115 @@ check-audio-controls: $(AUDIO_CTRL_BIN)
 	$(call require_core)
 	$(AUDIO_CTRL_BIN) "$(CORE)"
 
+$(FRAME_DELTA_BIN): ayther/frame_delta.c ayther/generated_rom.c \
+		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther \
+		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include \
+		-Iayther -o $@ ayther/frame_delta.c ayther/generated_rom.c \
+		$(LDFLAGS) $(ROM_PROBE_LIBS)
+
+# #30: necesita el core real. Lo que se verifica es que dos lecturas del
+# mismo frame devuelvan lo mismo, y eso solo lo contesta el binario.
+check-frame-delta: $(FRAME_DELTA_BIN)
+	$(call require_core)
+	$(FRAME_DELTA_BIN) "$(CORE)"
+
+$(IDLE_METRICS_BIN): ayther/idle_metrics.c ayther/generated_rom.c 		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h 		$(CORE_DIR)/core/ayther/ayther_metrics.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -DAYTHER_METRICS -I$(CORE_DIR)/core/ayther 		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include 		-Iayther -o $@ ayther/idle_metrics.c ayther/generated_rom.c 		$(LDFLAGS) $(ROM_PROBE_LIBS)
+
+# #36: necesita un core compilado con AYTHER_METRICS=1. Con cualquier otro el
+# test se saltea en vez de fallar -- es un build de diagnostico, no publicado.
+check-idle-metrics: $(IDLE_METRICS_BIN)
+	$(call require_core)
+	$(IDLE_METRICS_BIN) "$(CORE)"
+
+$(ATTRIB_SCENE_BIN): ayther/attribution_scene.c ayther/generated_rom.c 		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther 		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include 		-Iayther -o $@ ayther/attribution_scene.c ayther/generated_rom.c 		$(LDFLAGS) $(ROM_PROBE_LIBS)
+
+$(PLANE_SUP_BIN): ayther/plane_suppress.c ayther/generated_rom.c \
+		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther \
+		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include \
+		-Iayther -o $@ ayther/plane_suppress.c ayther/generated_rom.c \
+		$(LDFLAGS) $(ROM_PROBE_LIBS)
+
+$(MULTILAYER_BIN): ayther/multilayer.c ayther/generated_rom.c \
+		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther \
+		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include \
+		-Iayther -o $@ ayther/multilayer.c ayther/generated_rom.c \
+		$(LDFLAGS) $(ROM_PROBE_LIBS)
+
+$(OBSERVABILITY_BIN): ayther/observability.c ayther/generated_rom.c \
+		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther \
+		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include \
+		-Iayther -o $@ ayther/observability.c ayther/generated_rom.c \
+		$(LDFLAGS) $(ROM_PROBE_LIBS)
+
+# #55: el contrato dinamico de la ABI contra el core REAL. Vivia solo en el
+# workflow -- se compilaba a mano dentro del job de exports-, asi que no habia
+# forma de correrlo antes de pushear. Siete afirmaciones rotas viajaron hasta
+# CI por eso: las tres regiones de #42 declaraban byte_size != element_size *
+# capacity, y el rechazo de Mode 4 de #40 contestaba UNSUPPORTED_MODE con el
+# VDP todavia sin elegir modo. Un test que solo corre despues del push no es
+# una red, es un aviso tardio.
+$(ABI_DYNAMIC_BIN): $(CORE_DIR)/tests/ci/verify_ayther_api.c \
+		$(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core \
+		-o $@ ci/verify_ayther_api.c $(LDFLAGS) $(ROM_PROBE_LIBS)
+
+check-abi-dynamic: $(ABI_DYNAMIC_BIN)
+	$(call require_core)
+	$(ABI_DYNAMIC_BIN) "$(CORE)"
+
+# #39 A/D/E: journal raster, hashes del frame y paleta resuelta.
+check-observability: $(OBSERVABILITY_BIN)
+	$(call require_core)
+	$(OBSERVABILITY_BIN) "$(CORE)"
+
+# #37.6: las cinco capas de recompose_multilayer, pixel por pixel.
+check-multilayer: $(MULTILAYER_BIN)
+	$(call require_core)
+	$(MULTILAYER_BIN) "$(CORE)" ayther/golden/multilayer.txt
+
+regen-multilayer: $(MULTILAYER_BIN)
+	$(call require_core)
+	$(MULTILAYER_BIN) "$(CORE)" ayther/golden/multilayer.txt --regen
+
+# #37.4: la supresion de tiles por plano, plano por plano.
+check-plane-suppress: $(PLANE_SUP_BIN)
+	$(call require_core)
+	$(PLANE_SUP_BIN) "$(CORE)"
+
+# #41: la region de atribucion con una suscripcion que pide SOLO atribucion.
+check-attribution-scene: $(ATTRIB_SCENE_BIN)
+	$(call require_core)
+	$(ATTRIB_SCENE_BIN) "$(CORE)"
+
+$(SCENES_BIN): ayther/scenes.c ayther/generated_rom.c 		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther 		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include 		-Iayther -o $@ ayther/scenes.c ayther/generated_rom.c 		$(LDFLAGS) $(ROM_PROBE_LIBS)
+
+$(LINE_STATE_BIN): ayther/line_state.c ayther/generated_rom.c 		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther 		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include 		-Iayther -o $@ ayther/line_state.c ayther/generated_rom.c 		$(LDFLAGS) $(ROM_PROBE_LIBS)
+
+# #42: el estado de render por scanline, contra la tabla de hscroll del ROM.
+check-line-state: $(LINE_STATE_BIN)
+	$(call require_core)
+	$(LINE_STATE_BIN) "$(CORE)"
+
+# #35: un hash por modo de video. El golden es por escena y no agregado: eso es
+# lo que convierte "algo se rompio" en "se rompio el interlace 2".
+check-scenes: $(SCENES_BIN)
+	$(call require_core)
+	$(SCENES_BIN) "$(CORE)" $(SCENES_GOLDEN)
+
+# El golden se regenera con un comando y no a mano. Un golden que solo se puede
+# actualizar editandolo termina editado sin mirar, que es como deja de valer.
+regen-scenes: $(SCENES_BIN)
+	$(call require_core)
+	$(SCENES_BIN) "$(CORE)" $(SCENES_GOLDEN) --regen
+
 full-core-replay: $(FULL_CORE_BIN)
 
 check-full-core: $(FULL_CORE_BIN) | $(ARTIFACT_DIR)
@@ -194,12 +312,14 @@ $(TRACE_BIN): ayther/audio_probe_trace.c $(PROBE_SRC) $(PROBE_HEADERS) | $(BUILD
 check: check-unit check-determinism
 
 check-unit: $(UNIT_BIN) $(CONCURRENCY_BIN) $(API_BIN) $(RASTER_BIN) \
-		$(SPRITE_CAPTURE_BIN) $(ROM_PROBE_BIN)
+		$(SPRITE_CAPTURE_BIN) $(DIM_BIN) $(SPRITE_RULE_BIN) $(ROM_PROBE_BIN)
 	$(UNIT_BIN)
 	$(CONCURRENCY_BIN)
 	$(API_BIN)
 	$(RASTER_BIN)
 	$(SPRITE_CAPTURE_BIN)
+	$(DIM_BIN)
+	$(SPRITE_RULE_BIN)
 
 check-concurrency: $(CONCURRENCY_BIN)
 	$(CONCURRENCY_BIN)

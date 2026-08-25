@@ -73,20 +73,34 @@ make -f Makefile.libretro platform=unix SOUND_PROBE=1 -j2
 make -C tests check-full-core CORE=../genesis_plus_gx_libretro.so
 ```
 
-The golden summary is **per platform**: `ayther/golden/full_core_replay-linux-x64.json`
-and `-windows-x64.json`; the Makefile picks one by host OS.
+The golden summary is a single file: `ayther/golden/full_core_replay-x64.json`.
+Linux and Windows produce identical `video_hash`, `audio_hash`, `state_hash` and
+`replay_hash` from it.
 
-This used to be a single `-x64.json`, on the stated assumption that every hash
-was "byte-identical on Linux x64 and Windows x64 MSVCRT". **It is not.** Measured
-on the same core at the same commit: video `4d39e98f` on Linux against
-`dd112c2b` on Windows, and audio and serialized state differ too. Both platforms
-run this check, so one shared file made it impossible for both jobs to pass —
-which is why it sat red while looking like a merely stale golden.
+It was two files, one per platform, from the point where the hashes were
+measured to differ (video `4d39e98f` on Linux against `dd112c2b` on Windows) up
+to #45. The leading hypothesis was the worst one — a real emulation divergence
+between compilers. It was neither emulation nor the compiler. Two causes, both
+outside the emulated system:
 
-Input, configuration and **telemetry** hashes *are* identical across platforms.
-That narrows the divergence to emulation itself — the two are built by different
-compilers — and not to what the probe reports. Worth investigating on its own; a
-per-platform golden makes it visible instead of hiding it behind a permanent red.
+1. **`rand()` in `gen_reset`.** On a *button* reset the 68k starts at a random
+   point in the VDP frame (Bonkers, Eternal Champions, X-Men 2 depend on it).
+   That point came from the C library's `rand()`, and glibc and MSVCRT agree on
+   neither the generator nor `RAND_MAX` (2147483647 against 32767). Windows
+   started the CPU somewhere else and stayed exactly one emulated frame ahead
+   for the rest of the run. `core/genesis.c` now uses its own xorshift, reseeded
+   on power-on: same variety across resets, same numbers on every platform.
+2. **The layout tag in the state hash.** `retro_serialize` writes an AYTHER tag
+   in the last 16 bytes encoding the sizes of the serialized structs, so a
+   savestate from another ABI is rejected instead of silently corrupting. It
+   differs across platforms *on purpose*. Hashing it mixed "what the emulated
+   system did" with "how this build stores it", and made a shared golden
+   impossible even with byte-identical emulation. The harness now hashes the
+   state below the tag.
+
+That the compiler was *not* the variable came from a cheap check worth repeating
+in similar hunts: CI builds Linux with clang and this repo's local runs use gcc,
+and both matched the same golden. Whatever differed had to be the platform.
 
 The actual summary,
 per-frame JSONL trace, first-frame savestate diagnostic and p50/p95/p99 frame
@@ -233,3 +247,122 @@ types and uses it, the way a consumer from that era would.
 had been broken for a while: `cpuhook.h` *defined* `cpu_hook` instead of
 declaring it, which only linked under `-fcommon` (the default up to gcc 9 /
 clang 10).
+
+## Video mode scenes (#35)
+
+`make -C tests check-scenes CORE=...` runs eight ROMs, one per VDP
+configuration, and compares a per-scene video and audio hash against
+`ayther/golden/scenes.txt`.
+
+The deterministic fixture covers Mode 5, H40, progressive, NTSC, no window and
+no DMA — and nothing else. That is the gap these scenes close: #28 fixed the
+render masks for interlace 2 and enhanced vscroll *without a fixture that
+exercised either*, so "they work now" was a claim nobody could reproduce.
+
+Each scene is a complete, static ROM rather than a segment inside one. One ROM
+per scene avoids emitting a dispatcher in hand-written big-endian 68000, and it
+gives the thing the scenes exist for: a hash **per mode**. An aggregate golden
+says "something broke"; a per-scene golden says "interlace 2 broke".
+
+Regenerate with `make -C tests regen-scenes CORE=...`. A golden that can only be
+updated by editing it ends up edited without looking, which is how a golden
+stops meaning anything.
+
+The run ends with a distinctness count. A scene whose video hash equals
+another's does not discriminate: the mode it claims to cover could break and the
+golden would not notice. `interlace1` is currently such a scene — with
+`config.render` off, interlace 1 emits the same frame as progressive — and the
+warning keeps that visible instead of letting a useless scene sit there looking
+like coverage.
+
+The golden is **shared by Linux and Windows**, and all eight scenes match on
+both. That is an independent confirmation of the #45 fix above: eight different
+video modes, byte-identical across platforms.
+## Plane tile suppression (#37.4)
+
+`make -C tests check-plane-suppress CORE=...` is the first test to check that
+region `0x105` actually *hides* something. The two that touched it before write
+it to prove that writing it does not break determinism — a different claim.
+
+The S/H fixture is the oracle, and it needs no reimplementation of the renderer:
+planes A and B hold the same content and A covers B. So hiding the tile in A
+must leave the **image identical** and move the attribution to plane B; hiding
+it in B as well must leave the backdrop; clearing the mask must restore the
+original frame exactly.
+
+That middle state is also the case the per-plane gate introduced. Before #37.4,
+`ayther_plane_suppress_active` was one flag for all three planes: hiding a tile
+in A made B and Window lose the `DRAW_COLUMN` fast path and consult an entirely
+empty mask, once per column and per line. Now each plane decides on its own,
+and this test is what keeps a plane from being marked empty when it is not.
+
+## The five recomposition layers (#37.6)
+
+`make -C tests check-multilayer CORE=...` is the first test to look at what
+`recompose_multilayer` **returns**. The function has existed since #12C; the
+only test that called it asks for two layers and verifies something else — that
+recomposing does not perturb emulation.
+
+Two fixtures, because one is not enough. The S/H ROM has A and B with identical
+content, so it exercises the shadow/highlight operator but cannot tell one plane
+from the other; the `window` scene from #35 gives five distinct hashes, so
+confusing two layers shows up.
+
+Two of the assertions need no golden at all:
+
+- Asking for one layer alone must return exactly what asking for all five
+  returns. A frontend that draws its inspector layer by layer and one that asks
+  for them at once cannot see different images.
+- Where the attribution says "plane X won" and no sprite covers the pixel, layer
+  X and the composite must agree. The one measured exception is the 64 pixels of
+  the **brightness operator**: it carries no sprite bit — it is not a visible
+  sprite, and counting it as one was the #31 bug — but it changes the intensity
+  of what is underneath, and in the layer-alone render that sprite does not
+  exist. In the scene without operators the difference is 0.
+
+Regenerate with `make -C tests regen-multilayer CORE=...`.
+
+The golden is what made #37.6 safe to attempt: plane B used to be drawn on
+**every** pass and erased right before the merge, and three of the five passes
+hide it. Removing that work had to leave all ten hashes untouched, and it did —
+with the `bg_b_skipped` counter reading exactly `3 x 224` lines per multilayer
+call, so the saving is counted rather than asserted.
+
+## macOS in CI (#35.2)
+
+The `macos-core` job is the only place the goldens run outside x86-64: GitHub's
+macOS runners are arm64. Until it exists, "the golden is architecture
+independent" is a supposition — the two goldens unified in #45.B were both
+verified on x86-64 hosts.
+
+It deliberately does not run the export closure: `check_exports.sh` reads
+symbols the ELF/PE way, and Mach-O prefixes them with an underscore. A green
+check that verifies nothing is worse than no check.
+## Journal, frame hashes and palette (#39 A/D/E)
+
+`make -C tests check-observability CORE=...` covers the three read-only regions
+of ABI 1.7. Every assertion has an oracle that does not reimplement the core:
+
+- **Journal.** The event *count* was already exposed through another path
+  (`raster_event_count` in the frame delta). Both numbers come from the same
+  source, so if they disagree one of the two is reading it wrong. And a journal
+  is a diary: its lines cannot run backwards.
+- **Frame hash.** The issue's own acceptance criterion — the region's
+  `video_hash` must equal the hash computed *outside* over the frame that
+  arrives through `video_refresh`. Same algorithm, same seed, two
+  implementations.
+- **Palette.** The table must **explain the frame**: every colour in the emitted
+  image must appear in it. A stale, truncated or wrong-format table breaks that
+  property, and asserting it needs none of the 9-bit conversion the region
+  exists to avoid.
+
+All three must answer `NOT_SUBSCRIBED` without a subscription.
+
+The test uses two fixtures, and the reason is something it found. The palette is
+the **current** table, not one per line: in the standard ROM the H-int handler
+writes CRAM mid-frame, so the image carries colours from several tables and the
+final one cannot explain them all — 8 of 11 distinct colours had no entry. That
+is not a defect (the per-line case is `LINE_CRAM`), but it is a property that
+has to be measured where it holds, so the palette check runs on the S/H fixture,
+which has no H-int. The contract is now written down in `ayther_api.h` and in
+`docs/ayther_abi_v1.md` instead of being folklore.

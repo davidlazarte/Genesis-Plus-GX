@@ -53,7 +53,33 @@ extern "C" {
 #define AYTHER_ABI_VERSION_1_2 UINT32_C(0x00010002)
 /* 1.3 (#41): region ATTRIBUTION + suscripcion propia + capability. Aditiva. */
 #define AYTHER_ABI_VERSION_1_3 UINT32_C(0x00010003)
-#define AYTHER_ABI_VERSION_LATEST AYTHER_ABI_VERSION_1_3
+#define AYTHER_ABI_VERSION_1_4 UINT32_C(0x00010004)
+/* 1.5 (#39.B): region SYSTEM. Aditiva: un descriptor de solo lectura con lo
+ * que hoy el frontend tiene que deducir decodificando registros del VDP -- y
+ * decodificarlos es reimplementar el core afuera del core, con las reglas
+ * duplicadas y sin nadie que avise cuando se separan. */
+#define AYTHER_ABI_VERSION_1_5 UINT32_C(0x00010005)
+/* 1.6 (#42): estado del VDP POR SCANLINE. Aditiva: dos regiones nuevas, una
+ * suscripcion propia y una capability. El frontend podia deducir el scroll de
+ * una linea leyendo la tabla de hscroll, pero no la CRAM vigente EN esa linea:
+ * un efecto raster de paleta solo existe mientras el frame se dibuja, y para
+ * cuando la ABI se puede consultar ya termino. */
+#define AYTHER_ABI_VERSION_1_6 UINT32_C(0x00010006)
+/* 1.7 (#39 A/D/E): tres regiones de solo lectura que cierran huecos que el
+ * frontend hoy tapa reimplementando el core afuera del core.
+ *
+ *   JOURNAL  -- el journal raster ya se llenaba; lo unico que se exponia era
+ *               su CANTIDAD. Saber que hubo 17 eventos y no cuales es saber
+ *               que el frame tiene splits y nada mas.
+ *   FRAME_HASH -- para detectar desincronizacion habia que serializar el
+ *               estado entero y hashearlo afuera: ~1 MB por comparacion.
+ *   PALETTE  -- la conversion 9-bit -> formato del build, con shadow y
+ *               highlight ya aplicados, es una tabla que el core arma igual;
+ *               el frontend la rehacia a mano y con sus propias reglas.
+ *
+ * Aditiva: ninguna estructura existente cambia de tamanio ni de orden. */
+#define AYTHER_ABI_VERSION_1_7 UINT32_C(0x00010007)
+#define AYTHER_ABI_VERSION_LATEST AYTHER_ABI_VERSION_1_7
 
 #define AYTHER_ABI_VERSION_MAJOR(v) ((uint32_t)(v) >> 16)
 #define AYTHER_ABI_VERSION_MINOR(v) ((uint32_t)(v) & UINT32_C(0xFFFF))
@@ -76,7 +102,22 @@ enum ayther_status
   AYTHER_STATUS_STALE_GENERATION  = -6,
   AYTHER_STATUS_BUSY              = -7,
   AYTHER_STATUS_UNSUPPORTED       = -8,
-  AYTHER_STATUS_NOT_SUBSCRIBED    = -9
+  AYTHER_STATUS_NOT_SUBSCRIBED    = -9,
+  /* #30: `frame_delta_since` pidio una generacion que ya salio del ring.
+     El `out` viene con TODO marcado sucio, que es la respuesta correcta y
+     conservadora: no se sabe que cambio, asi que hay que asumir que todo.
+     Es un aviso, no un fallo -- el consumidor puede seguir. */
+  AYTHER_STATUS_DELTA_HISTORY_LOST = -10,
+  /* #40: el control existe, pero no en el modo de video que corre ahora.
+
+     Es distinto de UNSUPPORTED -- que dice "esta build no lo tiene"-- y de
+     NOT_SUBSCRIBED -- "no lo pediste"-. Este dice "pedilo de nuevo cuando el
+     VDP este en Mode 5", y es informacion que el frontend puede usar: hasta
+     aca, escribir sprite_suppress con un juego de Master System devolvia OK y
+     no hacia absolutamente nada. Un exito que no hace nada es peor que un
+     error: el frontend cree que oculto el sprite y dibuja su reemplazo encima
+     del original. */
+  AYTHER_STATUS_UNSUPPORTED_MODE  = -11
 };
 
 /* Motivos INTERNOS del recompositor. Sus valores colisionan con los de
@@ -135,6 +176,26 @@ enum ayther_endianness
 #define AYTHER_CAP_FRAME_DELTA_V1      (UINT64_C(1) << 11)
 #define AYTHER_CAP_RECOMPOSE_STATS_V1  (UINT64_C(1) << 12)
 #define AYTHER_CAP_ATTRIBUTION_V1      (UINT64_C(1) << 13)
+/* #30: el delta dejo de consumirse al leerlo y hay historial por generacion.
+   Sin este bit, `poll_frame_delta` vacia el bitmap al leerlo y un segundo
+   lector del mismo frame recibe cero. */
+#define AYTHER_CAP_FRAME_DELTA_SINCE_V1 (UINT64_C(1) << 14)
+/* #39.B: descriptor de sistema. Sin este bit, saber en que modo esta el VDP
+   exige decodificar VDP_REGS del lado del consumidor. */
+#define AYTHER_CAP_SYSTEM_V1           (UINT64_C(1) << 15)
+/* #40: los controles de render funcionan tambien en Mode 4 (SMS/GG/PBC).
+   Mientras este bit NO este, los controles que dependen de Mode 5 -- supresion
+   de sprites, peel, supresion por celda de plano-- devuelven
+   AYTHER_STATUS_UNSUPPORTED_MODE en Mode 4 en vez de aceptar y no hacer nada.
+   Lo que SI funciona en los dos modos: la mascara de sprites de layer_mask,
+   layer_dim y todos los controles de audio. */
+#define AYTHER_CAP_MODE4_CONTROLS      (UINT64_C(1) << 16)
+/* #42: estado de render por scanline (registros/scroll y CRAM por linea). */
+#define AYTHER_CAP_LINE_STATE_V1       (UINT64_C(1) << 17)
+/* #39.A/D/E: contenido del journal, hashes por frame y paleta resuelta. Van
+   juntas en un bit porque llegan juntas y ninguna tiene sentido sin la ABI
+   1.7; separarlas seria prometer que una puede faltar, y no puede. */
+#define AYTHER_CAP_OBSERVABILITY_V1    (UINT64_C(1) << 18)
 
 /* Observation and control work is opt-in. A requested mask becomes active at
  * the beginning of the next frame; unknown bits are rejected. */
@@ -149,7 +210,18 @@ enum ayther_endianness
  * porque su costo es de otro orden -un byte por pixel por frame- y un consumidor
  * que solo oculta capas no tiene por que pagarlo. */
 #define AYTHER_SUB_ATTRIBUTION      (UINT32_C(1) << 7)
-#define AYTHER_SUB_ALL              UINT32_C(0xFF)
+/* #42: el estado por scanline. Bit propio y no parte de VDP_MEMORY porque el
+   costo es de otro orden -- una copia por LINEA y no una lectura por frame-, y
+   quien quiere el mapa de celdas no necesariamente quiere pagar la CRAM. */
+#define AYTHER_SUB_LINE_STATE       (UINT32_C(1) << 8)
+#define AYTHER_SUB_LINE_CRAM        (UINT32_C(1) << 9)
+#define AYTHER_SUB_LINE_CELLS       (UINT32_C(1) << 10)
+/* #39.D: los hashes son lo unico de esta tanda que CUESTA -- unos 100 KB
+   recorridos por frame-, asi que es lo unico que se suscribe aparte. El
+   journal y la paleta ya se mantienen para otra cosa: cobrarles una
+   suscripcion propia seria cobrar por trabajo que ya esta hecho. */
+#define AYTHER_SUB_FRAME_HASH       (UINT32_C(1) << 11)
+#define AYTHER_SUB_ALL              UINT32_C(0xFFF)
 
 enum ayther_region_id
 {
@@ -171,6 +243,20 @@ enum ayther_region_id
   AYTHER_REGION_RASTER_FALLBACK_REASONS,
   /* #41: un byte por pixel del frame emitido, con quien pinto cada uno. */
   AYTHER_REGION_ATTRIBUTION,
+  /* #39.B: que hardware, que modo, que viewport y que ROM. */
+  AYTHER_REGION_SYSTEM,
+  /* #42: registros y scroll tal como el VDP los uso EN CADA LINEA. */
+  AYTHER_REGION_LINE_REGS,
+  /* #42: la CRAM vigente en cada linea. */
+  AYTHER_REGION_LINE_CRAM,
+  /* #42.C: que entrada de la name table le toco a cada columna. */
+  AYTHER_REGION_LINE_CELLS,
+  /* #39.A: los eventos raster del frame, no solo cuantos hubo. */
+  AYTHER_REGION_RASTER_JOURNAL,
+  /* #39.D: hashes del frame, para detectar desincronizacion sin serializar. */
+  AYTHER_REGION_FRAME_HASH,
+  /* #39.E: la paleta ya resuelta al formato de pixel del build. */
+  AYTHER_REGION_PALETTE,
   AYTHER_REGION_COUNT
 };
 
@@ -238,6 +324,235 @@ enum ayther_legacy_memory_id
  * comparando valores: dos capas pueden producir el mismo byte y ahi comparar da
  * una respuesta arbitraria. */
 #define AYTHER_LAYOUT_ATTRIBUTION_V1 UINT32_C(1)
+#define AYTHER_LAYOUT_SYSTEM_V1      UINT32_C(1)
+#define AYTHER_LAYOUT_LINE_REGS_V1   UINT32_C(1)
+#define AYTHER_LAYOUT_LINE_CRAM_V1   UINT32_C(1)
+#define AYTHER_LAYOUT_LINE_CELLS_V1  UINT32_C(1)
+#define AYTHER_LAYOUT_JOURNAL_V1     UINT32_C(1)
+#define AYTHER_LAYOUT_FRAME_HASH_V1  UINT32_C(1)
+#define AYTHER_LAYOUT_PALETTE_V1     UINT32_C(1)
+
+/* AYTHER (#42): el estado de render POR SCANLINE, capturado del lado de la
+ * LECTURA -- cuando el renderer lo usa- y no reconstruido desde el lado de la
+ * escritura.
+ *
+ * Reconstruirlo desde las escrituras es lo que hace el raster journal, y es
+ * aproximado por construccion: hay que adivinar en que ciclo de que linea cayo
+ * cada write y que efecto tuvo. Capturarlo donde el renderer lo consume es
+ * exacto y ademas mas barato.
+ *
+ * Para que sirve: la celda de pantalla que el frontend puede ocultar hoy
+ * (id 0x104) es frame-space, y con scroll por linea NUNCA coincide con un tile
+ * del plano. Con `xscroll_a` de la linea, el frontend puede mapear "la celda
+ * (x,y) de la pantalla" a "este tile del plano A", que es lo que un pipeline de
+ * sustitucion HD necesita para keyear un asset.
+ */
+typedef struct ayther_line_regs_v1
+{
+  uint16_t xscroll_a, xscroll_b;   /* ya resueltos desde la tabla de hscroll */
+  uint16_t yscroll_a, yscroll_b;   /* VSRAM[0..1]                            */
+  uint16_t ntab, ntbb, ntwb;       /* bases de las name tables, resueltas    */
+  uint16_t hscb, satb;             /* bases de hscroll y de la SAT           */
+  uint8_t  reg1, reg7, reg11, reg12, reg13, reg16, reg17, reg18;
+  uint8_t  clip_a_start, clip_a_end, clip_w_start, clip_w_end;
+  uint8_t  flags;                  /* AYTHER_LINE_* de abajo                 */
+  uint8_t  reserved0;
+} ayther_line_regs_v1;
+
+/* La linea se dibujo con el plano A recortado por la ventana. */
+#define AYTHER_LINE_WINDOW_ACTIVE  UINT8_C(0x01)
+/* La linea se dibujo con vscroll por columna (reg 11 bit 2). */
+#define AYTHER_LINE_VSCROLL_COLUMN UINT8_C(0x02)
+
+/* Cabecera comun de las regiones por linea: el consumidor tiene que poder
+   interpretar el buffer sin adivinar cuantas lineas trae ni de que frame es. */
+typedef struct ayther_line_header_v1
+{
+  uint32_t struct_size;      /* tamanio de esta cabecera                     */
+  uint32_t entry_size;       /* tamanio de cada entrada que sigue            */
+  uint32_t lines;            /* entradas validas                             */
+  uint32_t flags;            /* AYTHER_LINES_* de abajo                      */
+  uint64_t frame_generation; /* el frame al que pertenece                    */
+} ayther_line_header_v1;
+
+/* AYTHER (#42.C): procedencia por CELDA de cada linea.
+ *
+ * Con LINE_REGS un frontend sabe el scroll de la linea; con esto sabe, sin
+ * volver a leer VRAM ni reimplementar el calculo de direcciones, QUE ENTRADA de
+ * la name table le toco a cada columna de 16 px, y en que fila del tile.
+ *
+ * El VDP lee la name table de a pares -- dos celdas por acceso de 32 bits-, y
+ * eso es lo que se guarda: `name_pair` es el valor crudo, tal como el renderer
+ * lo consumio. Guardar los pares y no las celdas sueltas es lo que hace que la
+ * captura no cueste una lectura extra: el valor ya estaba en un registro.
+ *
+ * Ese "tal cual" incluye el orden de bytes: en un host little-endian la VRAM
+ * esta guardada con los bytes intercambiados, asi que la region se declara con
+ * AYTHER_REGION_WORD_SWAPPED_LE. Leerla sin mirar ese flag da celdas al reves
+ * sin ningun sintoma que lo delate.
+ *
+ * Fila y desplazamiento fino son por LINEA y por PLANO, no por columna: el
+ * renderer los calcula una vez. Guardarlos por columna seria repetir 21 veces
+ * el mismo byte.
+ */
+#define AYTHER_LINE_CELL_COLUMNS 21   /* 21 x 16 px cubre H40 con el preambulo */
+
+typedef struct ayther_line_cells_v1
+{
+  uint32_t name_a[AYTHER_LINE_CELL_COLUMNS];
+  uint32_t name_b[AYTHER_LINE_CELL_COLUMNS];
+  uint32_t name_w[AYTHER_LINE_CELL_COLUMNS];
+  uint8_t  row_a, row_b, row_w;   /* fila dentro del tile, en pixeles      */
+  uint8_t  shift_a, shift_b;      /* desplazamiento fino de la linea (0-15) */
+  uint8_t  cols_a, cols_b, cols_w;
+  uint8_t  reserved0;
+} ayther_line_cells_v1;
+
+/* #39.A: el journal raster del frame, entero.
+ *
+ * El core ya lo llenaba -- es el insumo del raster replay-- y de el solo se
+ * exponia `raster_event_count`. Saber que un frame tuvo 17 eventos y no
+ * CUALES alcanza para decidir "no lo recompongo" y para nada mas: el
+ * frontend que quiere entender el split tiene que volver a mirar la memoria
+ * del VDP frame por frame y adivinar cuando cambio, que es justamente lo que
+ * el journal ya sabe.
+ *
+ * `dropped` no es un bit sino una cuenta, igual que adentro del core: el
+ * frontend que dimensiona su propio buffer necesita distinguir "se paso por
+ * uno" de "este frame es un festival de splits".
+ *
+ * Se llena bajo AYTHER_SUB_RASTER_TRACKING, que es la suscripcion que ya
+ * hace que el journal exista. Sin ella la region contesta NOT_SUBSCRIBED en
+ * vez de devolver el journal fosil del ultimo frame observado.
+ */
+#define AYTHER_JOURNAL_MAX_EVENTS 256
+
+typedef struct ayther_journal_event_v1
+{
+  uint16_t v_counter;   /* linea en que ocurrio                        */
+  uint16_t reason;      /* AYTHER_RASTER_REASON_* del core             */
+  uint16_t address;     /* direccion afectada, segun el motivo         */
+  uint16_t data;        /* los 16 bits que el bus puso                 */
+} ayther_journal_event_v1;
+
+typedef struct ayther_journal_v1
+{
+  uint32_t layout_version;
+  uint32_t struct_size;
+  uint32_t count;       /* eventos validos en `events`                 */
+  uint32_t dropped;     /* eventos que no entraron (0 = journal completo) */
+  ayther_journal_event_v1 events[AYTHER_JOURNAL_MAX_EVENTS];
+} ayther_journal_v1;
+
+/* #39.D: hashes del frame.
+ *
+ * Existe para contestar "¿seguimos sincronizados?" sin serializar. Hasta aca
+ * la unica forma era pedir el savestate entero -- ~1 MB-- y hashearlo
+ * afuera, una vez por frame, para comparar un numero.
+ *
+ * NO hay `state_hash`, y no es un olvido: calcularlo obliga a serializar, o
+ * sea a hacer exactamente lo que esta region existe para evitar. Las cuatro
+ * memorias del VDP mas el video y el audio emitidos cubren la desincroni-
+ * zacion que un frontend puede ver; para el resto del estado esta
+ * `retro_serialize`, que es donde esa pregunta corresponde.
+ *
+ * El algoritmo es FNV-1a de 64 bits sobre los bytes en el orden en que el
+ * core los tiene -- el mismo que usa `full_core_replay`-, asi que un
+ * frontend puede recalcularlo y comparar. `frame_index` dice de que frame
+ * son: leer la region dos veces en el mismo frame da lo mismo.
+ */
+typedef struct ayther_frame_hash_v1
+{
+  uint32_t layout_version;
+  uint32_t struct_size;
+  uint64_t frame_index;
+  uint64_t video_hash;  /* pixeles emitidos, viewport w*h              */
+  uint64_t audio_hash;  /* samples entregados en el frame              */
+  uint64_t vram_hash;
+  uint64_t cram_hash;
+  uint64_t vsram_hash;
+} ayther_frame_hash_v1;
+
+/* #39.E: la paleta ya resuelta al formato de pixel del build.
+ *
+ * El core arma esta tabla igual, en `color_update_m5`: indexada por el byte
+ * fusionado del line buffer, con shadow y highlight YA aplicados. Un
+ * frontend que quiere el color de un indice tenia que rehacer la conversion
+ * 9-bit -> RGB y las reglas de S/H por su cuenta, con dos copias de la misma
+ * regla y sin nadie que avise cuando se separan.
+ *
+ * Se expone la tabla ENTERA (256 entradas), no las 192 "utiles": el indice
+ * es el byte del line buffer tal cual, y recortarla obligaria al consumidor
+ * a saber cual es el recorte para volver a mapear. El ancho de cada entrada
+ * lo dice `element_size` de la region, porque depende del formato con que se
+ * compilo el core.
+ *
+ * Es la tabla VIGENTE, no una por linea. Un juego que escribe CRAM a mitad de
+ * frame -- un raster de paleta-- produce una imagen con colores de VARIAS
+ * tablas, y esta contesta la ultima. Eso no es una limitacion escondida: para
+ * el caso por linea esta LINE_CRAM (#42), y `AYTHER_REGION_RASTER_JOURNAL`
+ * dice si el frame tuvo escrituras de CRAM. Con journal sin eventos de CRAM,
+ * esta tabla explica todos los colores del frame; con eventos, no puede.
+ */
+#define AYTHER_PALETTE_ENTRIES 256
+
+/* La CRAM no cambio en todo el frame: solo la entrada 0 es significativa. */
+#define AYTHER_LINES_CRAM_UNIFORM   UINT32_C(0x01)
+/* Alguna linea no se lleno -- un renderer sin hooks-, y el buffer tiene huecos. */
+#define AYTHER_LINES_OVERFLOW       UINT32_C(0x02)
+
+/* AYTHER (#39.B): descriptor del sistema emulado.
+ *
+ * Todo esto era derivable, pero solo decodificando VDP_REGS del lado del
+ * consumidor: H40 sale del bit 0 de reg 12, el interlace de los bits 1-2, las
+ * lineas activas del bit 3 de reg 1... Decodificarlo afuera es reimplementar
+ * las reglas del core en otro repositorio, y cuando el core las corrija -- que
+ * ya paso: #28 arreglo justo esas mascaras-- nadie avisa que la copia quedo
+ * vieja. El core sabe la respuesta; darla cuesta un struct.
+ *
+ * Se refresca al empezar cada frame y queda fijo durante el. `system_hw` usa
+ * los mismos valores que SYSTEM_* del core.
+ */
+#define AYTHER_SYSTEM_HW_SG      0x01
+#define AYTHER_SYSTEM_HW_MARKIII 0x10
+#define AYTHER_SYSTEM_HW_SMS     0x20
+#define AYTHER_SYSTEM_HW_SMS2    0x21
+#define AYTHER_SYSTEM_HW_GG      0x40
+#define AYTHER_SYSTEM_HW_GGMS    0x41
+#define AYTHER_SYSTEM_HW_MD      0x80
+#define AYTHER_SYSTEM_HW_PBC     0x81
+#define AYTHER_SYSTEM_HW_PICO    0x82
+#define AYTHER_SYSTEM_HW_MCD     0x84
+
+typedef struct ayther_system_v1
+{
+  uint32_t struct_size;
+  uint32_t layout_version;
+
+  uint8_t  system_hw;        /* SYSTEM_* del core                         */
+  uint8_t  region_pal;       /* 1 = PAL (313 lineas), 0 = NTSC            */
+  uint8_t  vdp_mode;         /* 4 o 5; 0 si el VDP todavia no eligio      */
+  uint8_t  interlace;        /* 0 = progresivo, 1 = interlace 1, 2 = im2  */
+
+  uint8_t  h40;              /* 1 = 320 px de ancho activo                */
+  uint8_t  shadow_highlight; /* 1 = S/H activo (reg 12 bit 3)             */
+  uint16_t lines_per_frame;  /* 262 NTSC / 313 PAL                        */
+
+  /* Viewport del frame emitido, en pixeles, incluido el overscan que el
+     build entrega. Es el mismo rectangulo que describe ATTRIBUTION. */
+  uint16_t viewport_x, viewport_y, viewport_w, viewport_h;
+
+  uint32_t cpu_clock;        /* Hz del 68000 (o del Z80 en 8 bits)        */
+  uint32_t master_clock;     /* Hz del oscilador maestro                  */
+
+  uint8_t  fm_core;          /* 0 = MAME (ym2612), 1 = Nuked (ym3438)     */
+  uint8_t  psg_present;
+  uint8_t  pcm_present;      /* RF5C164 del Mega CD                       */
+  uint8_t  reserved0;
+
+  uint32_t rom_crc32;        /* crc32 del archivo cargado                 */
+  uint32_t rom_bytes;
+} ayther_system_v1;
 
 #define AYTHER_ATTRIB_LAYER_MASK     UINT8_C(0xC0)
 #define AYTHER_ATTRIB_LAYER_SHIFT    6
@@ -462,6 +777,11 @@ typedef int32_t (AYTHER_CALL *ayther_get_subscriptions_v1_fn)(
 typedef int32_t (AYTHER_CALL *ayther_set_subscriptions_v1_fn)(
     uint32_t requested_mask);
 
+/* #30: cuantos frames de historial guarda el ring. Ocho es suficiente para
+   que un consumidor que se salteo unos frames -- una UI de debug que
+   repinta a 30 Hz sobre 60-- recupere sin perder nada, y son 16 KB. */
+#define AYTHER_FRAME_DELTA_HISTORY 8
+
 typedef struct ayther_frame_delta_v1
 {
   uint32_t struct_size;
@@ -481,6 +801,19 @@ typedef struct ayther_frame_delta_v1
 
 typedef int32_t (AYTHER_CALL *ayther_poll_frame_delta_v1_fn)(
     ayther_frame_delta_v1 *out, uint32_t out_size);
+
+/* #30: todo lo ensuciado DESDE `generation_from` inclusive, OR-eando el ring.
+ *
+ * `poll_frame_delta` contesta "que cambio en el ultimo frame". Esta contesta
+ * "que cambio desde la ultima vez que mire", que es lo que necesita un
+ * consumidor que no lee todos los frames -- y antes no tenia forma de pedirlo
+ * sin perder informacion.
+ *
+ * Si `generation_from` ya salio del ring devuelve AYTHER_STATUS_DELTA_HISTORY_LOST
+ * con todo marcado sucio: conservador a proposito, porque la alternativa es
+ * devolver un subconjunto y que el consumidor crea que vio todo. */
+typedef int32_t (AYTHER_CALL *ayther_frame_delta_since_v1_fn)(
+    uint64_t generation_from, ayther_frame_delta_v1 *out, uint32_t out_size);
 
 /* #26: estado observable de los caches de recomposición.
  *
@@ -546,6 +879,8 @@ typedef struct ayther_interface_v1
   ayther_get_recompose_stats_v1_fn get_recompose_stats;
   /* --- ABI 1.2 (#32) --- */
   ayther_recompose_multilayer_v1_fn recompose_multilayer;
+  /* --- ABI 1.4 (#30) --- */
+  ayther_frame_delta_since_v1_fn frame_delta_since;
 } ayther_interface_v1;
 
 /* Un campo opcional es legible sólo si el descriptor llega hasta él. Esta es la

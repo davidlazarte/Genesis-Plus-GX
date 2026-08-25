@@ -46,6 +46,7 @@
 #ifdef AYTHER_EXTENSIONS
 #include "ayther/ayther_api.h"
 #include "ayther/ayther_runtime.h"
+#include "ayther/ayther_metrics.h"
 #ifdef AYTHER_EXTENSIONS
 #include "ayther/ayther_sprite_capture.h"
 #endif
@@ -129,9 +130,29 @@ extern uint8 ayther_layer_dim;             /* atenuar capas no-sprite al 25% (id
    chain_pos = posición en la CADENA de links al parsear = prioridad real de dibujo
    del VDP entre sprites (menor = más al frente). */
 extern uint8 ayther_sprite_suppress[16];   /* slots SAT suprimidos (id 0x103) */
+extern uint8 ayther_sprite_suppress_active; /* #36: 1 = hay algun slot suprimido */
+
+/* #42: estado de render por scanline. */
+#define AYTHER_LINE_MAX 240u
+extern ayther_line_regs_v1 ayther_line_regs[AYTHER_LINE_MAX];
+extern uint8 ayther_line_cram[AYTHER_LINE_MAX][128];
+extern uint32 ayther_line_count;
+extern uint32 ayther_line_flags;
+extern ayther_line_cells_v1 ayther_line_cells[AYTHER_LINE_MAX];
+void ayther_line_state_begin_frame(void);
+/* #36.7: suelta los caches de recomposicion pedidos al primer uso. */
+void ayther_recompose_release(void);
+/* #39.E: la LUT de color resuelto (formato del build, S/H ya aplicado). */
+const void *ayther_palette_data(void);
+unsigned ayther_palette_entry_size(void);
+unsigned ayther_palette_entries(void);
 extern uint8 ayther_tile_suppress[512];    /* celdas de tile suprimidas (id 0x104, 64x64) */
 extern uint8 ayther_plane_tile_suppress[3 * 1024]; /* tiles de plano suprimidos (id 0x105) */
 extern uint8 ayther_plane_suppress_active;  /* id 0x106: 1 = hay algún tile de plano oculto */
+/* #37.4: resumen por plano de la máscara 0x105 — un plano vacío conserva el
+   fast path de DRAW_COLUMN aunque otro tenga tiles ocultos. */
+extern uint8 ayther_psup_any[3];
+void ayther_psup_refresh(void);
 
 /* AYTHER (#270): recomposición del frame desde el estado FINAL del VDP, con el
    mismo renderer del core (spike de fidelidad del render propio). `flags` apaga

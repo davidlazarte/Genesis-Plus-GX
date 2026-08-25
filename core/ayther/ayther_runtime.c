@@ -1,6 +1,15 @@
 /* Runtime subscription state shared by the core and libretro adapter. */
 
 #include "ayther_runtime.h"
+#include "ayther_metrics.h"
+
+#ifdef AYTHER_METRICS
+/* `= {0}`, y no un inicializador campo por campo: `ayther_metrics_read`
+   escribe struct_size desde sizeof en cada lectura, asi que enumerarlos aca
+   no aporta nada y hacia que agregar un contador rompiera el build con
+   -Wmissing-field-initializers. */
+ayther_metrics_v1 ayther_metrics = {0};
+#endif
 
 #ifdef SOUND_PROBE
 #include "audio_probe.h"

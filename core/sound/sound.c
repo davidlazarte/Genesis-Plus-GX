@@ -236,6 +236,26 @@ static unsigned int YM2413_Read(unsigned int cycles, unsigned int a)
 static void YM3438_Update(int *buffer, int length)
 {
   int i, j;
+
+#if defined(AYTHER_EXTENSIONS) && defined(SOUND_PROBE)
+  /* #29: el gain por canal se resuelve una vez por update, como en
+     ym2612_update_impl. Sin suscripcion vuelve a 100 en vez de quedarse pegado:
+     si no, soltar RENDER_CONTROLS con un canal atenuado lo dejaria atenuado
+     para siempre -- el mismo residual que el mute del PSG evita por flanco. */
+  {
+    int ch;
+    int on = AYTHER_SUBSCRIBED(AYTHER_SUB_RENDER_CONTROLS);
+    for (ch = 0; ch < 6; ch++)
+    {
+      OPN2_AytherSetGain((unsigned int)ch, on
+        ? (((ch == 5) && ym3438.dacen)
+             ? audio_probe_get_channel_gain(AP_SRC_DAC, 5)
+             : audio_probe_get_channel_gain(AP_SRC_FM, ch))
+        : 100);
+    }
+  }
+#endif
+
   for (i = 0; i < length; i++)
   {
     OPN2_Clock(&ym3438, ym3438_accm[ym3438_cycles]);

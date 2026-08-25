@@ -22,24 +22,6 @@ SPRITE_CAPTURE_HEADERS := $(CORE_DIR)/core/ayther/ayther_sprite_capture.h \
 # estaba copiado en tres Makefiles y se corrigio dos veces por separado.
 include $(CORE_DIR)/mk/shell.mk
 
-ifeq ($(findstring sh,$(notdir $(SHELL))),sh)
-define require_core
-	@test -n "$(CORE)" || (echo "CORE=/path/to/libretro core is required" >&2; exit 2)
-endef
-define require_profile_cores
-	@test -n "$(PROFILE_OFF_CORE)" || (echo "PROFILE_OFF_CORE is required" >&2; exit 2)
-	@test -n "$(PROFILE_IDLE_CORE)" || (echo "PROFILE_IDLE_CORE is required" >&2; exit 2)
-endef
-else
-define require_core
-	@if "$(CORE)"=="" (echo CORE=path-to-libretro-core is required 1>&2 & exit /B 2)
-endef
-define require_profile_cores
-	@if "$(PROFILE_OFF_CORE)"=="" (echo PROFILE_OFF_CORE is required 1>&2 & exit /B 2)
-	@if "$(PROFILE_IDLE_CORE)"=="" (echo PROFILE_IDLE_CORE is required 1>&2 & exit /B 2)
-endef
-endif
-
 UNIT_BIN  := $(BUILD_DIR)/test_audio_probe$(EXE_EXT)
 CONCURRENCY_BIN := $(BUILD_DIR)/test_audio_probe_concurrency$(EXE_EXT)
 API_BIN := $(BUILD_DIR)/test_ayther_api$(EXE_EXT)
@@ -91,7 +73,7 @@ PROFILE_COMPARISON := $(ARTIFACT_DIR)/feature_gate_profiles.json
 .PHONY: all check check-unit check-concurrency check-determinism \
 	check-full-core check-profile-comparison raster-rom-probe \
 	full-core-replay check-idle-metrics check-attribution-scene check-plane-suppress check-multilayer \
-	check-observability check-abi-dynamic \
+	check-observability check-abi-dynamic check-fuzz check-fuzz-ring \
 	regen-multilayer check-scenes regen-scenes check-line-state clean
 
 all: $(UNIT_BIN) $(CONCURRENCY_BIN) $(API_BIN) $(RASTER_BIN) \
@@ -309,7 +291,21 @@ check-profile-comparison: $(FULL_CORE_BIN) | $(ARTIFACT_DIR)
 $(TRACE_BIN): ayther/audio_probe_trace.c $(PROBE_SRC) $(PROBE_HEADERS) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(COMMON_CPPFLAGS) -o $@ ayther/audio_probe_trace.c $(PROBE_SRC) $(LDFLAGS)
 
-check: check-unit check-determinism
+# #34: `check-fuzz-ring` entra en el `check` pelado porque es el unico target
+# de fuzzing que no necesita un core cargado. Los otros cuatro van en
+# `check-fuzz`, que si lo pide.
+check: check-unit check-determinism check-fuzz-ring
+
+# #34: reproducir el corpus y las regresiones de los targets de fuzzing.
+# Esto NO fuzzea -- no necesita clang-: replaya entradas conocidas bajo
+# ASan/UBSan, que es lo que evita que un crash arreglado vuelva sin que
+# nadie se entere.
+check-fuzz: 
+	$(call require_core)
+	$(MAKE) -C fuzz replay-all CC=$(CC) CORE="$(abspath $(CORE))"
+
+check-fuzz-ring:
+	$(MAKE) -C fuzz replay-audio_ring CC=$(CC) CORE=no-hace-falta
 
 check-unit: $(UNIT_BIN) $(CONCURRENCY_BIN) $(API_BIN) $(RASTER_BIN) \
 		$(SPRITE_CAPTURE_BIN) $(DIM_BIN) $(SPRITE_RULE_BIN) $(ROM_PROBE_BIN)

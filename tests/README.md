@@ -388,3 +388,52 @@ So it is **not adopted by default**. It stays as `AYTHER_LTO=1`, and the
 -- and asserts the 14 fast/observed clones are still separate functions. If LTO
 merged them, the pattern the whole "zero cost when idle" claim rests on would
 quietly collapse.
+## Fuzzing (#34)
+
+Five libFuzzer targets in `tests/fuzz/`, over the surfaces that receive bytes
+the core did not choose: `write_control`, `retro_unserialize`, recomposition,
+the synthetic ROM, and the audio event ring.
+
+Each target is a `LLVMFuzzerTestOneInput` and nothing else. **Who calls it
+depends on how it was built**, and both paths matter:
+
+- `make -C tests/fuzz fuzz-<name>` builds it with libFuzzer (clang) and searches.
+  That runs nightly, not on PRs: fuzzing is a search, so the same commit can go
+  green once and red the next time depending on where the budget lands.
+- `make -C tests check-fuzz` builds it **without** a fuzzer, with any C compiler,
+  and replays the seed corpus plus `regressions/` under ASan/UBSan. That one is
+  deterministic and does gate merges.
+
+Without the second path a broken target would only surface in the nightly job,
+and nobody could tell whether the target or the core broke. Without the first,
+nothing new is ever found.
+
+Inputs are **mutation lists over something valid**, not raw blobs. A savestate
+is ~1 MB and a cartridge 4 MB; starting from noise would spend the whole budget
+rediscovering "this is a Mega Drive header" instead of exploring what happens
+when one field is wrong. The corpus stays in the tens of bytes.
+
+The invariants are what make these more than crash detectors:
+
+- **write_control**: a *rejected* write must leave the region byte-identical. A
+  partial write followed by an error is the worst possible outcome, and it does
+  not crash — so it is only found by looking for it.
+- **unserialize**: if the state is *accepted*, the core must survive running.
+  Accepting and then dying is worse than rejecting, because the frontend moved on.
+- **recompose**: canaries around the output buffer, and the serialized state hash
+  must be identical before and after. That is the operational definition of "does
+  not perturb emulation", which the deterministic replay depends on.
+- **audio_ring**: what comes out must be strictly increasing (drops leave
+  legitimate gaps; reordering and duplication do not), and delivered + dropped
+  must equal pushed. A ring that hands back garbage without crashing is exactly
+  what a "does not crash" test cannot see.
+
+When the nightly job finds something it uploads the reproducer and opens one
+issue with the crash hash in the title — twenty nights finding the same bug must
+produce one issue, not twenty. The fix lands together with the reproducer in
+`tests/fuzz/regressions/<target>/`, and from then on `check-fuzz` replays it.
+
+On Windows the replay build runs without sanitizers: the llvm-mingw toolchain
+this fork uses ships no ASan runtime for `x86_64-w64-windows-gnu`. It still
+catches aborts and crashes there; the magnifying glass is on Linux, which is
+where the nightly job runs.

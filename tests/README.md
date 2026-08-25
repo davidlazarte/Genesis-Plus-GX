@@ -73,20 +73,34 @@ make -f Makefile.libretro platform=unix SOUND_PROBE=1 -j2
 make -C tests check-full-core CORE=../genesis_plus_gx_libretro.so
 ```
 
-The golden summary is **per platform**: `ayther/golden/full_core_replay-linux-x64.json`
-and `-windows-x64.json`; the Makefile picks one by host OS.
+The golden summary is a single file: `ayther/golden/full_core_replay-x64.json`.
+Linux and Windows produce identical `video_hash`, `audio_hash`, `state_hash` and
+`replay_hash` from it.
 
-This used to be a single `-x64.json`, on the stated assumption that every hash
-was "byte-identical on Linux x64 and Windows x64 MSVCRT". **It is not.** Measured
-on the same core at the same commit: video `4d39e98f` on Linux against
-`dd112c2b` on Windows, and audio and serialized state differ too. Both platforms
-run this check, so one shared file made it impossible for both jobs to pass —
-which is why it sat red while looking like a merely stale golden.
+It was two files, one per platform, from the point where the hashes were
+measured to differ (video `4d39e98f` on Linux against `dd112c2b` on Windows) up
+to #45. The leading hypothesis was the worst one — a real emulation divergence
+between compilers. It was neither emulation nor the compiler. Two causes, both
+outside the emulated system:
 
-Input, configuration and **telemetry** hashes *are* identical across platforms.
-That narrows the divergence to emulation itself — the two are built by different
-compilers — and not to what the probe reports. Worth investigating on its own; a
-per-platform golden makes it visible instead of hiding it behind a permanent red.
+1. **`rand()` in `gen_reset`.** On a *button* reset the 68k starts at a random
+   point in the VDP frame (Bonkers, Eternal Champions, X-Men 2 depend on it).
+   That point came from the C library's `rand()`, and glibc and MSVCRT agree on
+   neither the generator nor `RAND_MAX` (2147483647 against 32767). Windows
+   started the CPU somewhere else and stayed exactly one emulated frame ahead
+   for the rest of the run. `core/genesis.c` now uses its own xorshift, reseeded
+   on power-on: same variety across resets, same numbers on every platform.
+2. **The layout tag in the state hash.** `retro_serialize` writes an AYTHER tag
+   in the last 16 bytes encoding the sizes of the serialized structs, so a
+   savestate from another ABI is rejected instead of silently corrupting. It
+   differs across platforms *on purpose*. Hashing it mixed "what the emulated
+   system did" with "how this build stores it", and made a shared golden
+   impossible even with byte-identical emulation. The harness now hashes the
+   state below the tag.
+
+That the compiler was *not* the variable came from a cheap check worth repeating
+in similar hunts: CI builds Linux with clang and this repo's local runs use gcc,
+and both matched the same golden. Whatever differed had to be the platform.
 
 The actual summary,
 per-frame JSONL trace, first-frame savestate diagnostic and p50/p95/p99 frame

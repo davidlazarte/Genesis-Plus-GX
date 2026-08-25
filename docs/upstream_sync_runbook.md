@@ -143,11 +143,16 @@ escrito en el commit *cuál* fue ese cambio.
 
 Ojo con los hashes del replay: `video_hash`, `audio_hash` y `telemetry_hash`
 dependen sólo de la emulación, pero `state_hash` depende del **layout
-serializado**. Hay un golden por plataforma (Linux y Windows) porque el probe
-reporta distinto en cada una. Y además, medido: entre el core x64 y el x86 los
-hashes de video/audio/telemetría son idénticos pero `state_hash` no, porque el
-padding de los structs y el ancho de puntero cambian el layout. Los savestates
-no son portables entre arquitecturas.
+serializado**. Desde #45 hay **un solo golden** para Linux y Windows x64: la
+divergencia que había no era de emulación sino de `rand()` en `gen_reset` (que
+es de la libc) más el tag de layout metido en el hash del estado. Los detalles
+están en `tests/README.md`.
+
+Lo que sigue siendo cierto: entre el core x64 y el x86 los hashes de
+video/audio/telemetría son idénticos pero `state_hash` no, porque el padding de
+los structs y el ancho de puntero cambian el layout. Los savestates no son
+portables entre arquitecturas — y ese es justamente el caso que el tag de layout
+detecta, por lo que queda **fuera** del hash del estado.
 
 ## 5. Después del sync
 

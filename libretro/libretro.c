@@ -243,6 +243,53 @@ static void ayther_reset_session(bool content_loaded)
    ayther_invalidate_snapshot();
 }
 
+/* AYTHER (#39.B): descriptor del sistema emulado.
+
+   Se rellena AL LEERLO y no una vez por frame, a proposito: son unos cuarenta
+   bytes que nadie mira en la mayoria de los frames, y rellenarlos siempre seria
+   exactamente el tipo de trabajo-en-idle que #36 saco de otros seis lugares.
+   Entre frames -- que es cuando el frontend puede leer-- el estado del VDP es
+   el del frame que acaba de terminar, que es la respuesta correcta. */
+static ayther_system_v1 ayther_system_desc;
+
+static void ayther_fill_system(void)
+{
+   memset(&ayther_system_desc, 0, sizeof(ayther_system_desc));
+   ayther_system_desc.struct_size = (uint32_t)sizeof(ayther_system_desc);
+   ayther_system_desc.layout_version = AYTHER_LAYOUT_SYSTEM_V1;
+
+   ayther_system_desc.system_hw = system_hw;
+   ayther_system_desc.region_pal = vdp_pal ? 1 : 0;
+   /* El VDP no elige modo hasta que el programa escribe reg 1; hasta entonces
+      decir "modo 4" seria inventar. 0 significa "todavia no". */
+   ayther_system_desc.vdp_mode = (reg[1] & 0x04) ? 5
+                               : ((system_hw & SYSTEM_PBC) == SYSTEM_MD ? 0 : 4);
+   ayther_system_desc.interlace = (uint8_t)(im2_flag ? 2 : (interlaced ? 1 : 0));
+   ayther_system_desc.h40 = (reg[12] & 0x01) ? 1 : 0;
+   ayther_system_desc.shadow_highlight = (reg[12] & 0x08) ? 1 : 0;
+   ayther_system_desc.lines_per_frame = (uint16_t)lines_per_frame;
+
+   ayther_system_desc.viewport_x = (uint16_t)bitmap.viewport.x;
+   ayther_system_desc.viewport_y = (uint16_t)bitmap.viewport.y;
+   ayther_system_desc.viewport_w = (uint16_t)bitmap.viewport.w;
+   ayther_system_desc.viewport_h = (uint16_t)bitmap.viewport.h;
+
+   ayther_system_desc.master_clock = system_clock;
+   ayther_system_desc.cpu_clock = ((system_hw & SYSTEM_PBC) == SYSTEM_MD)
+      ? (system_clock / 7) : (system_clock / 15);
+
+#if defined(HAVE_YM3438_CORE)
+   ayther_system_desc.fm_core = (config.ym2612 >= YM2612_ENHANCED) ? 1 : 0;
+#else
+   ayther_system_desc.fm_core = 0;
+#endif
+   ayther_system_desc.psg_present = 1;
+   ayther_system_desc.pcm_present = (system_hw == SYSTEM_MCD) ? 1 : 0;
+
+   ayther_system_desc.rom_crc32 = (uint32_t)rominfo.crc32;
+   ayther_system_desc.rom_bytes = (uint32_t)cart.romsize;
+}
+
 /* #36: las suscripciones que gatean el bitmap de VRAM sucia. Quien lee el
    frame delta esta leyendo, por definicion, que cambio en la memoria del VDP. */
 #define AYTHER_SUB_DELTA_PRODUCERS \
@@ -4122,6 +4169,19 @@ static int32_t ayther_map_region(uint32_t region_id,
          mapping->access_flags = AYTHER_REGION_ACCESS_READ |
             AYTHER_REGION_FRAME_SCOPED | AYTHER_REGION_NATIVE_ENDIAN;
          break;
+      case AYTHER_REGION_SYSTEM:
+         /* #39.B: descriptor de solo lectura. Se rellena aca, en la consulta,
+            y no una vez por frame: ver la nota en ayther_fill_system. */
+         ayther_fill_system();
+         mapping->data = &ayther_system_desc;
+         mapping->element_size = sizeof(ayther_system_desc);
+         mapping->capacity = 1;
+         mapping->byte_size = sizeof(ayther_system_desc);
+         mapping->data_version = AYTHER_LAYOUT_SYSTEM_V1;
+         mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_NONE;
+         mapping->access_flags = AYTHER_REGION_ACCESS_READ |
+            AYTHER_REGION_NATIVE_ENDIAN;
+         break;
       case AYTHER_REGION_RASTER_FALLBACK_REASONS:
          mapping->data = &ayther_raster_dirty;
          mapping->element_size = sizeof(ayther_raster_dirty);
@@ -4238,6 +4298,13 @@ static int32_t AYTHER_CALL ayther_read_region_v1(uint32_t region_id,
    return AYTHER_STATUS_OK;
 }
 
+/* #40: el VDP esta en Mode 5. Es lo que decide si los controles de plano y de
+   sprite pueden cumplir lo que prometen. */
+static int ayther_mode5_active(void)
+{
+   return (reg[1] & 0x04) != 0;
+}
+
 static int ayther_range_nonzero(const void *data, size_t n)
 {
    const uint8_t *p = (const uint8_t *)data;
@@ -4292,6 +4359,37 @@ static int32_t AYTHER_CALL ayther_write_control_v1(uint32_t region_id,
    {
       if ((offset != 0) || (byte_count != mapping.byte_size))
          return AYTHER_STATUS_INVALID_ARGUMENT;
+   }
+
+   /* #40: los controles que solo existen en Mode 5, pedidos en Mode 4.
+      Hasta aca esto devolvia OK y no hacia nada: `parse_satb_m4` no tiene
+      supresion, `render_bg_m4` no tiene hooks y `merge` no participa de ese
+      path. Un exito que no hace nada es el peor contrato posible -- el
+      frontend cree que oculto el sprite y dibuja su reemplazo encima del
+      original-, asi que ahora se dice. */
+   if (!ayther_mode5_active())
+   {
+      switch (region_id)
+      {
+         case AYTHER_REGION_SPRITE_SUPPRESS:
+         case AYTHER_REGION_TILE_SUPPRESS:
+         case AYTHER_REGION_PLANE_TILE_SUPPRESS:
+         case AYTHER_REGION_PLANE_SUPPRESS_ACTIVE:
+            ayther_raster_dirty |= AYTHER_RASTER_REASON_UNSUPPORTED_CONTROLS;
+            return AYTHER_STATUS_UNSUPPORTED_MODE;
+         case AYTHER_REGION_LAYER_MASK:
+            /* Los bits A/B/W no significan nada con un solo plano de fondo; el
+               de sprites SI aplica, porque se resuelve en render_line, que es
+               comun a los dos modos. Se rechaza solo lo que no puede cumplir. */
+            if ((*(const uint8_t *)data & UINT8_C(0x07)) != UINT8_C(0x07))
+            {
+               ayther_raster_dirty |= AYTHER_RASTER_REASON_UNSUPPORTED_CONTROLS;
+               return AYTHER_STATUS_UNSUPPORTED_MODE;
+            }
+            break;
+         default:
+            break;
+      }
    }
 
    if ((region_id == AYTHER_REGION_LAYER_MASK) &&
@@ -4692,6 +4790,7 @@ static const ayther_interface_v1 ayther_interface_1 =
       AYTHER_CAP_RECOMPOSE_V1 | AYTHER_CAP_SUBSCRIPTIONS_V1 |
       AYTHER_CAP_FRAME_DELTA_V1 | AYTHER_CAP_RECOMPOSE_STATS_V1 |
       AYTHER_CAP_ATTRIBUTION_V1 | AYTHER_CAP_FRAME_DELTA_SINCE_V1 |
+      AYTHER_CAP_SYSTEM_V1 |
       AYTHER_AUDIO_PROBE_CAPABILITY,
    AYTHER_HOST_ENDIANNESS,
    sizeof(void *),

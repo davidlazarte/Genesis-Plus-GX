@@ -174,7 +174,6 @@ int main(int argc, char **argv)
   }
   attrib_w = 320;
   attrib_h = info.byte_size / attrib_w;
-  close_library(lib);
 
   /* --- las capas son exactas sobre una escena de capa conocida ----------- */
   {
@@ -196,6 +195,63 @@ int main(int argc, char **argv)
     if (backdrop_bottom != expect_bottom) {
       printf("  FALLA: sin celdas escritas la capa tendria que ser backdrop\n");
       fail = 1;
+    }
+  }
+
+  /* --- #39.B: el descriptor de sistema dice lo que la escena es ---------- */
+  /* Todo esto era derivable decodificando VDP_REGS del lado del consumidor, o
+     sea reimplementando las reglas del core afuera del core. La escena tiene
+     una configuracion conocida, asi que sirve de oraculo. */
+  {
+    ayther_system_v1 sys;
+    memset(&sys, 0, sizeof(sys));
+    if (api->read_region(AYTHER_REGION_SYSTEM, 0, &sys, sizeof(sys),
+                         AYTHER_GENERATION_ANY, NULL) != AYTHER_STATUS_OK)
+    {
+      printf("system: la region no se puede leer  FALLA\n");
+      fail = 1;
+    }
+    else
+    {
+      printf("\nsystem: hw=%02x mode=%u h40=%u s/h=%u pal=%u lineas=%u "
+             "viewport=%ux%u fm=%u rom=%u B crc=%08x\n",
+             sys.system_hw, sys.vdp_mode, sys.h40, sys.shadow_highlight,
+             sys.region_pal, sys.lines_per_frame,
+             sys.viewport_w, sys.viewport_h, sys.fm_core,
+             (unsigned)sys.rom_bytes, (unsigned)sys.rom_crc32);
+      if (sys.layout_version != AYTHER_LAYOUT_SYSTEM_V1 ||
+          sys.struct_size != sizeof(sys)) {
+        printf("  FALLA: cabecera del descriptor inconsistente\n"); fail = 1;
+      }
+      if (sys.system_hw != AYTHER_SYSTEM_HW_MD) {
+        printf("  FALLA: el fixture es un cartucho de Mega Drive\n"); fail = 1;
+      }
+      if (sys.vdp_mode != 5) {
+        printf("  FALLA: la escena programa Mode 5\n"); fail = 1;
+      }
+      if (!sys.h40) {
+        printf("  FALLA: la escena programa H40 (reg 12 bit 0)\n"); fail = 1;
+      }
+      if (!sys.shadow_highlight) {
+        printf("  FALLA: la escena programa shadow/highlight (reg 12 bit 3)\n");
+        fail = 1;
+      }
+      if (sys.region_pal || sys.lines_per_frame != 262) {
+        printf("  FALLA: la escena es NTSC, 262 lineas\n"); fail = 1;
+      }
+      if (sys.viewport_w != attrib_w || sys.viewport_h != attrib_h) {
+        printf("  FALLA: el viewport tiene que describir el MISMO rectangulo "
+               "que ATTRIBUTION (%ux%u)\n", attrib_w, attrib_h);
+        fail = 1;
+      }
+      if (sys.rom_bytes != ROM_SIZE) {
+        printf("  FALLA: el tamano de ROM no coincide con el cargado\n");
+        fail = 1;
+      }
+      if (!sys.master_clock || !sys.cpu_clock ||
+          sys.cpu_clock >= sys.master_clock) {
+        printf("  FALLA: los relojes no son plausibles\n"); fail = 1;
+      }
     }
   }
 

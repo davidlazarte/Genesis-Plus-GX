@@ -54,7 +54,12 @@ extern "C" {
 /* 1.3 (#41): region ATTRIBUTION + suscripcion propia + capability. Aditiva. */
 #define AYTHER_ABI_VERSION_1_3 UINT32_C(0x00010003)
 #define AYTHER_ABI_VERSION_1_4 UINT32_C(0x00010004)
-#define AYTHER_ABI_VERSION_LATEST AYTHER_ABI_VERSION_1_4
+/* 1.5 (#39.B): region SYSTEM. Aditiva: un descriptor de solo lectura con lo
+ * que hoy el frontend tiene que deducir decodificando registros del VDP -- y
+ * decodificarlos es reimplementar el core afuera del core, con las reglas
+ * duplicadas y sin nadie que avise cuando se separan. */
+#define AYTHER_ABI_VERSION_1_5 UINT32_C(0x00010005)
+#define AYTHER_ABI_VERSION_LATEST AYTHER_ABI_VERSION_1_5
 
 #define AYTHER_ABI_VERSION_MAJOR(v) ((uint32_t)(v) >> 16)
 #define AYTHER_ABI_VERSION_MINOR(v) ((uint32_t)(v) & UINT32_C(0xFFFF))
@@ -82,7 +87,17 @@ enum ayther_status
      El `out` viene con TODO marcado sucio, que es la respuesta correcta y
      conservadora: no se sabe que cambio, asi que hay que asumir que todo.
      Es un aviso, no un fallo -- el consumidor puede seguir. */
-  AYTHER_STATUS_DELTA_HISTORY_LOST = -10
+  AYTHER_STATUS_DELTA_HISTORY_LOST = -10,
+  /* #40: el control existe, pero no en el modo de video que corre ahora.
+
+     Es distinto de UNSUPPORTED -- que dice "esta build no lo tiene"-- y de
+     NOT_SUBSCRIBED -- "no lo pediste"-. Este dice "pedilo de nuevo cuando el
+     VDP este en Mode 5", y es informacion que el frontend puede usar: hasta
+     aca, escribir sprite_suppress con un juego de Master System devolvia OK y
+     no hacia absolutamente nada. Un exito que no hace nada es peor que un
+     error: el frontend cree que oculto el sprite y dibuja su reemplazo encima
+     del original. */
+  AYTHER_STATUS_UNSUPPORTED_MODE  = -11
 };
 
 /* Motivos INTERNOS del recompositor. Sus valores colisionan con los de
@@ -145,6 +160,16 @@ enum ayther_endianness
    Sin este bit, `poll_frame_delta` vacia el bitmap al leerlo y un segundo
    lector del mismo frame recibe cero. */
 #define AYTHER_CAP_FRAME_DELTA_SINCE_V1 (UINT64_C(1) << 14)
+/* #39.B: descriptor de sistema. Sin este bit, saber en que modo esta el VDP
+   exige decodificar VDP_REGS del lado del consumidor. */
+#define AYTHER_CAP_SYSTEM_V1           (UINT64_C(1) << 15)
+/* #40: los controles de render funcionan tambien en Mode 4 (SMS/GG/PBC).
+   Mientras este bit NO este, los controles que dependen de Mode 5 -- supresion
+   de sprites, peel, supresion por celda de plano-- devuelven
+   AYTHER_STATUS_UNSUPPORTED_MODE en Mode 4 en vez de aceptar y no hacer nada.
+   Lo que SI funciona en los dos modos: la mascara de sprites de layer_mask,
+   layer_dim y todos los controles de audio. */
+#define AYTHER_CAP_MODE4_CONTROLS      (UINT64_C(1) << 16)
 
 /* Observation and control work is opt-in. A requested mask becomes active at
  * the beginning of the next frame; unknown bits are rejected. */
@@ -181,6 +206,8 @@ enum ayther_region_id
   AYTHER_REGION_RASTER_FALLBACK_REASONS,
   /* #41: un byte por pixel del frame emitido, con quien pinto cada uno. */
   AYTHER_REGION_ATTRIBUTION,
+  /* #39.B: que hardware, que modo, que viewport y que ROM. */
+  AYTHER_REGION_SYSTEM,
   AYTHER_REGION_COUNT
 };
 
@@ -248,6 +275,60 @@ enum ayther_legacy_memory_id
  * comparando valores: dos capas pueden producir el mismo byte y ahi comparar da
  * una respuesta arbitraria. */
 #define AYTHER_LAYOUT_ATTRIBUTION_V1 UINT32_C(1)
+#define AYTHER_LAYOUT_SYSTEM_V1      UINT32_C(1)
+
+/* AYTHER (#39.B): descriptor del sistema emulado.
+ *
+ * Todo esto era derivable, pero solo decodificando VDP_REGS del lado del
+ * consumidor: H40 sale del bit 0 de reg 12, el interlace de los bits 1-2, las
+ * lineas activas del bit 3 de reg 1... Decodificarlo afuera es reimplementar
+ * las reglas del core en otro repositorio, y cuando el core las corrija -- que
+ * ya paso: #28 arreglo justo esas mascaras-- nadie avisa que la copia quedo
+ * vieja. El core sabe la respuesta; darla cuesta un struct.
+ *
+ * Se refresca al empezar cada frame y queda fijo durante el. `system_hw` usa
+ * los mismos valores que SYSTEM_* del core.
+ */
+#define AYTHER_SYSTEM_HW_SG      0x01
+#define AYTHER_SYSTEM_HW_MARKIII 0x10
+#define AYTHER_SYSTEM_HW_SMS     0x20
+#define AYTHER_SYSTEM_HW_SMS2    0x21
+#define AYTHER_SYSTEM_HW_GG      0x40
+#define AYTHER_SYSTEM_HW_GGMS    0x41
+#define AYTHER_SYSTEM_HW_MD      0x80
+#define AYTHER_SYSTEM_HW_PBC     0x81
+#define AYTHER_SYSTEM_HW_PICO    0x82
+#define AYTHER_SYSTEM_HW_MCD     0x84
+
+typedef struct ayther_system_v1
+{
+  uint32_t struct_size;
+  uint32_t layout_version;
+
+  uint8_t  system_hw;        /* SYSTEM_* del core                         */
+  uint8_t  region_pal;       /* 1 = PAL (313 lineas), 0 = NTSC            */
+  uint8_t  vdp_mode;         /* 4 o 5; 0 si el VDP todavia no eligio      */
+  uint8_t  interlace;        /* 0 = progresivo, 1 = interlace 1, 2 = im2  */
+
+  uint8_t  h40;              /* 1 = 320 px de ancho activo                */
+  uint8_t  shadow_highlight; /* 1 = S/H activo (reg 12 bit 3)             */
+  uint16_t lines_per_frame;  /* 262 NTSC / 313 PAL                        */
+
+  /* Viewport del frame emitido, en pixeles, incluido el overscan que el
+     build entrega. Es el mismo rectangulo que describe ATTRIBUTION. */
+  uint16_t viewport_x, viewport_y, viewport_w, viewport_h;
+
+  uint32_t cpu_clock;        /* Hz del 68000 (o del Z80 en 8 bits)        */
+  uint32_t master_clock;     /* Hz del oscilador maestro                  */
+
+  uint8_t  fm_core;          /* 0 = MAME (ym2612), 1 = Nuked (ym3438)     */
+  uint8_t  psg_present;
+  uint8_t  pcm_present;      /* RF5C164 del Mega CD                       */
+  uint8_t  reserved0;
+
+  uint32_t rom_crc32;        /* crc32 del archivo cargado                 */
+  uint32_t rom_bytes;
+} ayther_system_v1;
 
 #define AYTHER_ATTRIB_LAYER_MASK     UINT8_C(0xC0)
 #define AYTHER_ATTRIB_LAYER_SHIFT    6

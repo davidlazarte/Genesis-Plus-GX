@@ -58,6 +58,7 @@ consuming the bitmap: it now returns the frozen delta of the last completed
 frame, so two consumers of the same frame read the same thing. Before, the
 second one read zero. |
 | 1.2 | **Additive.** Appends `recompose_multilayer` to the descriptor and adds the `AYTHER_REGION_WORD_SWAPPED_LE` region flag (#32). The standalone `ayther_recompose_multilayer` export is now **deprecated** and is emitted only in the legacy profile. |
+| 1.5 | **Additive.** Adds the `SYSTEM` region and `AYTHER_CAP_SYSTEM_V1` (#39.B), plus the `AYTHER_STATUS_UNSUPPORTED_MODE` status and `AYTHER_CAP_MODE4_CONTROLS` (#40). No existing field moved. Controls that only exist in Mode 5 now say so instead of accepting the write and doing nothing. |
 
 Two earlier changes were shipped inside 1.0 without a bump, which is what this
 table exists to prevent from recurring:
@@ -387,3 +388,52 @@ Marking those exactly requires `render_obj` to write the sprite id in its inner
 loop. That change also delivers `sat_idx` per pixel, fixes the same flaw in
 `layer_dim` (#31), and lets multilayer recomposition run in one pass (#37) — so
 it belongs with them rather than here.
+
+## System descriptor (#39.B)
+
+`AYTHER_REGION_SYSTEM` returns an `ayther_system_v1`: which hardware is running,
+which video mode the VDP is in, the emitted viewport, the clocks, which FM core
+is selected, and the identity of the loaded ROM.
+
+All of it was already derivable — by decoding `VDP_REGS` on the consumer side.
+H40 is bit 0 of register 12, interlace is bits 1-2, the active line count is
+bit 3 of register 1, and so on. Decoding it outside means reimplementing the
+core's rules in another repository, and when the core corrects them — which has
+happened: #28 fixed exactly those masks — nothing tells the copy it went stale.
+The core knows the answer; giving it costs a struct.
+
+The region is **read-only and needs no subscription**. It is filled *when read*,
+not once per frame: it is about forty bytes that nobody looks at in most frames,
+and filling them unconditionally is precisely the kind of idle work #36 removed
+from six other places. Between frames — which is when a frontend can read — the
+VDP state is the state of the frame that just finished, which is the right
+answer.
+
+`vdp_mode` is `0` on a Mega Drive cartridge until the program writes register 1:
+before that the VDP has not chosen, and answering "Mode 4" would be inventing.
+
+## Control × video mode (#40)
+
+Not every control means something in every video mode. Until #40 the ones that
+do not simply returned `AYTHER_STATUS_OK` and did nothing, which is the worst
+contract available: a frontend believes it hid a sprite and draws its HD
+replacement on top of the original.
+
+| Control | Mode 5 (MD) | Mode 4 (SMS/GG/PBC) |
+|---|---|---|
+| `LAYER_MASK` sprite bit | yes | yes — resolved in `render_line`, shared by both |
+| `LAYER_MASK` A/B/W bits | yes | **`UNSUPPORTED_MODE`** — one background plane, the bits have no referent |
+| `SPRITE_SUPPRESS` (0x103) | yes | **`UNSUPPORTED_MODE`** — `parse_satb_m4` has no suppression |
+| `TILE_SUPPRESS` / peel (0x104) | yes | **`UNSUPPORTED_MODE`** — `render_bg_m4` has no hooks and does not merge |
+| `PLANE_TILE_SUPPRESS` (0x105/0x106) | yes | **`UNSUPPORTED_MODE`** — same reason |
+| `LAYER_DIM` (0x108) | yes | yes — `remap_line` is shared |
+| Audio mute and gain (0x10D) | yes | yes |
+| `ATTRIBUTION` | yes | background layer only |
+| Recomposition | yes | `AYTHER_STATUS_RC_NOT_MODE5` |
+
+A rejected write also raises `AYTHER_RASTER_REASON_UNSUPPORTED_CONTROLS` in
+`0x10E`, so a frontend polling the fallback reasons sees it without having to
+check every return value.
+
+`AYTHER_CAP_MODE4_CONTROLS` announces that the rows above have become "yes".
+While the bit is absent, the table is the contract.

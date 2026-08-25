@@ -74,7 +74,7 @@ PROFILE_COMPARISON := $(ARTIFACT_DIR)/feature_gate_profiles.json
 .PHONY: all check check-unit check-concurrency check-determinism \
 	check-full-core check-profile-comparison raster-rom-probe \
 	full-core-replay check-idle-metrics check-attribution-scene check-plane-suppress check-multilayer \
-	check-observability check-abi-dynamic check-fuzz check-fuzz-ring \
+	check-observability check-abi-dynamic check-fuzz check-fuzz-ring validate-roms \
 	check-sprite-outcome \
 	regen-multilayer check-scenes regen-scenes check-line-state clean
 
@@ -131,6 +131,20 @@ $(ROM_PROBE_BIN): ayther/raster_rom_probe.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core -I$(CORE_DIR)/libretro/libretro-common/include -o $@ $< $(LDFLAGS) $(ROM_PROBE_LIBS)
 
 raster-rom-probe: $(ROM_PROBE_BIN)
+
+# #35 punto 4: la validacion con ROMs comerciales, reproducible.
+#
+# Los ROMs no estan en el repo ni pueden estarlo, asi que esto es opt-in y no
+# corre en CI. Lo que si tiene que ser es REHACIBLE: el informe de agosto
+# existia desde hace meses generado a mano, o sea que nadie mas podia
+# reproducirlo ni saber con que comando habia salido.
+#
+#   make -C tests validate-roms CORE=<core> ROM_DIR=<directorio> [FRAMES=1800]
+FRAMES ?= 1800
+validate-roms: $(ROM_PROBE_BIN)
+	$(call require_core)
+	@test -n "$(ROM_DIR)" || (echo "ROM_DIR=<directorio-de-roms> es obligatorio" >&2; exit 2)
+	bash ci/validate_roms.sh "$(abspath $(CORE))" "$(ROM_DIR)" $(FRAMES)
 
 $(FULL_CORE_BIN): ayther/full_core_replay.c ayther/generated_rom.c \
 		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)

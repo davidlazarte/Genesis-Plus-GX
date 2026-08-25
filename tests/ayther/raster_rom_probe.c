@@ -288,6 +288,7 @@ static int load_api(library_t library, struct core_api *api)
     fprintf(stderr, "AYTHER ABI v1 lacks snapshot/recomposition capabilities\n");
     return 0;
   }
+
   return 1;
 }
 
@@ -450,6 +451,26 @@ static int probe_rom(const struct core_api *api, const char *path, int frames,
     goto cleanup;
   }
   loaded = 1;
+
+  /* #35.4: recomponer pasa por suscripcion desde que las suscripciones
+     existen, y este probe no se habia enterado: pedia la recomposicion en
+     el frame 0 y se comia un NOT_SUBSCRIBED, o sea que fallaba con
+     CUALQUIER ROM. El informe que hay en docs/validation es de antes de
+     ese cambio.
+
+     Y va DESPUES de load_game, no al negociar la ABI: cargar contenido
+     reinicia la sesion y con ella las suscripciones. Suscribirse antes
+     compila, corre, y no sirve para nada -- que es la peor de las tres
+     cosas-.
+
+     Un probe que solo se corre a mano puede quedarse roto mucho tiempo sin
+     que nadie lo note; por eso `make -C tests validate-roms` lo ejercita
+     ahora con el ROM sintetico. */
+  if (AYTHER_IFACE_HAS(api->ayther, set_subscriptions) &&
+      api->ayther->set_subscriptions)
+    api->ayther->set_subscriptions(AYTHER_SUB_RECOMPOSITION |
+                                   AYTHER_SUB_RASTER_TRACKING |
+                                   AYTHER_SUB_VDP_MEMORY);
   if (api->get_memory_size(AYTHER_MEMORY_RASTER_DIRTY) != sizeof(uint32_t))
   {
     fprintf(stderr, "private memory id 0x10E is not four bytes\n");

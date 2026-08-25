@@ -53,7 +53,8 @@ extern "C" {
 #define AYTHER_ABI_VERSION_1_2 UINT32_C(0x00010002)
 /* 1.3 (#41): region ATTRIBUTION + suscripcion propia + capability. Aditiva. */
 #define AYTHER_ABI_VERSION_1_3 UINT32_C(0x00010003)
-#define AYTHER_ABI_VERSION_LATEST AYTHER_ABI_VERSION_1_3
+#define AYTHER_ABI_VERSION_1_4 UINT32_C(0x00010004)
+#define AYTHER_ABI_VERSION_LATEST AYTHER_ABI_VERSION_1_4
 
 #define AYTHER_ABI_VERSION_MAJOR(v) ((uint32_t)(v) >> 16)
 #define AYTHER_ABI_VERSION_MINOR(v) ((uint32_t)(v) & UINT32_C(0xFFFF))
@@ -76,7 +77,12 @@ enum ayther_status
   AYTHER_STATUS_STALE_GENERATION  = -6,
   AYTHER_STATUS_BUSY              = -7,
   AYTHER_STATUS_UNSUPPORTED       = -8,
-  AYTHER_STATUS_NOT_SUBSCRIBED    = -9
+  AYTHER_STATUS_NOT_SUBSCRIBED    = -9,
+  /* #30: `frame_delta_since` pidio una generacion que ya salio del ring.
+     El `out` viene con TODO marcado sucio, que es la respuesta correcta y
+     conservadora: no se sabe que cambio, asi que hay que asumir que todo.
+     Es un aviso, no un fallo -- el consumidor puede seguir. */
+  AYTHER_STATUS_DELTA_HISTORY_LOST = -10
 };
 
 /* Motivos INTERNOS del recompositor. Sus valores colisionan con los de
@@ -135,6 +141,10 @@ enum ayther_endianness
 #define AYTHER_CAP_FRAME_DELTA_V1      (UINT64_C(1) << 11)
 #define AYTHER_CAP_RECOMPOSE_STATS_V1  (UINT64_C(1) << 12)
 #define AYTHER_CAP_ATTRIBUTION_V1      (UINT64_C(1) << 13)
+/* #30: el delta dejo de consumirse al leerlo y hay historial por generacion.
+   Sin este bit, `poll_frame_delta` vacia el bitmap al leerlo y un segundo
+   lector del mismo frame recibe cero. */
+#define AYTHER_CAP_FRAME_DELTA_SINCE_V1 (UINT64_C(1) << 14)
 
 /* Observation and control work is opt-in. A requested mask becomes active at
  * the beginning of the next frame; unknown bits are rejected. */
@@ -462,6 +472,11 @@ typedef int32_t (AYTHER_CALL *ayther_get_subscriptions_v1_fn)(
 typedef int32_t (AYTHER_CALL *ayther_set_subscriptions_v1_fn)(
     uint32_t requested_mask);
 
+/* #30: cuantos frames de historial guarda el ring. Ocho es suficiente para
+   que un consumidor que se salteo unos frames -- una UI de debug que
+   repinta a 30 Hz sobre 60-- recupere sin perder nada, y son 16 KB. */
+#define AYTHER_FRAME_DELTA_HISTORY 8
+
 typedef struct ayther_frame_delta_v1
 {
   uint32_t struct_size;
@@ -481,6 +496,19 @@ typedef struct ayther_frame_delta_v1
 
 typedef int32_t (AYTHER_CALL *ayther_poll_frame_delta_v1_fn)(
     ayther_frame_delta_v1 *out, uint32_t out_size);
+
+/* #30: todo lo ensuciado DESDE `generation_from` inclusive, OR-eando el ring.
+ *
+ * `poll_frame_delta` contesta "que cambio en el ultimo frame". Esta contesta
+ * "que cambio desde la ultima vez que mire", que es lo que necesita un
+ * consumidor que no lee todos los frames -- y antes no tenia forma de pedirlo
+ * sin perder informacion.
+ *
+ * Si `generation_from` ya salio del ring devuelve AYTHER_STATUS_DELTA_HISTORY_LOST
+ * con todo marcado sucio: conservador a proposito, porque la alternativa es
+ * devolver un subconjunto y que el consumidor crea que vio todo. */
+typedef int32_t (AYTHER_CALL *ayther_frame_delta_since_v1_fn)(
+    uint64_t generation_from, ayther_frame_delta_v1 *out, uint32_t out_size);
 
 /* #26: estado observable de los caches de recomposición.
  *
@@ -546,6 +574,8 @@ typedef struct ayther_interface_v1
   ayther_get_recompose_stats_v1_fn get_recompose_stats;
   /* --- ABI 1.2 (#32) --- */
   ayther_recompose_multilayer_v1_fn recompose_multilayer;
+  /* --- ABI 1.4 (#30) --- */
+  ayther_frame_delta_since_v1_fn frame_delta_since;
 } ayther_interface_v1;
 
 /* Un campo opcional es legible sólo si el descriptor llega hasta él. Esta es la

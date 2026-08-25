@@ -73,6 +73,7 @@ FULL_CORE_BIN := $(BUILD_DIR)/full_core_replay$(EXE_EXT)
 STATE_GUARD_BIN := $(BUILD_DIR)/state_guard$(EXE_EXT)
 STATE_LAYOUT_BIN := $(BUILD_DIR)/state_layout$(EXE_EXT)
 AUDIO_CTRL_BIN := $(BUILD_DIR)/audio_controls$(EXE_EXT)
+FRAME_DELTA_BIN := $(BUILD_DIR)/frame_delta$(EXE_EXT)
 TRACE_BIN := $(BUILD_DIR)/audio_probe_trace$(EXE_EXT)
 TRACE_GOLDEN := ayther/golden/audio_probe_trace.json
 TRACE_ACTUAL := $(ARTIFACT_DIR)/audio_probe_trace.actual.json
@@ -175,6 +176,19 @@ $(AUDIO_CTRL_BIN): ayther/audio_controls.c ayther/generated_rom.c 		ayther/gener
 check-audio-controls: $(AUDIO_CTRL_BIN)
 	$(call require_core)
 	$(AUDIO_CTRL_BIN) "$(CORE)"
+
+$(FRAME_DELTA_BIN): ayther/frame_delta.c ayther/generated_rom.c \
+		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther \
+		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include \
+		-Iayther -o $@ ayther/frame_delta.c ayther/generated_rom.c \
+		$(LDFLAGS) $(ROM_PROBE_LIBS)
+
+# #30: necesita el core real. Lo que se verifica es que dos lecturas del
+# mismo frame devuelvan lo mismo, y eso solo lo contesta el binario.
+check-frame-delta: $(FRAME_DELTA_BIN)
+	$(call require_core)
+	$(FRAME_DELTA_BIN) "$(CORE)"
 
 full-core-replay: $(FULL_CORE_BIN)
 

@@ -51,6 +51,12 @@ if (AYTHER_IFACE_HAS(api, get_recompose_stats))
 | 1.0 | Initial contract: regions, snapshots, subscriptions, recomposition, audio transport, frame delta. |
 | 1.1 | **Additive.** Appends `recompose_stats_size` + `get_recompose_stats` and the `AYTHER_CAP_RECOMPOSE_STATS_V1` capability bit (#26). No existing field moved or changed meaning. |
 | 1.3 | **Additive.** Adds the `ATTRIBUTION` region, the `AYTHER_SUB_ATTRIBUTION` subscription and the `AYTHER_CAP_ATTRIBUTION_V1` capability (#41). |
+| 1.4 | **Additive.** Appends `frame_delta_since` to the descriptor, the
+`AYTHER_CAP_FRAME_DELTA_SINCE_V1` capability and the
+`AYTHER_STATUS_DELTA_HISTORY_LOST` status (#30). `poll_frame_delta` stops
+consuming the bitmap: it now returns the frozen delta of the last completed
+frame, so two consumers of the same frame read the same thing. Before, the
+second one read zero. |
 | 1.2 | **Additive.** Appends `recompose_multilayer` to the descriptor and adds the `AYTHER_REGION_WORD_SWAPPED_LE` region flag (#32). The standalone `ayther_recompose_multilayer` export is now **deprecated** and is emitted only in the legacy profile. |
 
 Two earlier changes were shipped inside 1.0 without a bump, which is what this
@@ -163,6 +169,36 @@ single-byte commands and report `addr = 0`.
 
 The public ABI treats emulated memory and frame counters as read-only. The
 legacy pointers preserve their historical mutability for the transition.
+
+## Frame Delta: double buffer and history (#30)
+
+`poll_frame_delta` used to be **consume-on-poll**: reading the dirty-pattern
+bitmap cleared it. That made it valid for exactly one consumer per frame, which
+is not how it is used -- the debug Lab and the HD engine read the same frame, and
+whichever asked second got an empty bitmap and never invalidated its assets.
+
+What the bitmap is accumulated into during a frame is **frozen** when the frame
+ends, and the read returns the frozen copy without touching it. Reading it N
+times returns the same thing N times.
+
+`frame_delta_since(generation_from, out, out_size)` ORs a ring of
+`AYTHER_FRAME_DELTA_HISTORY` (8) frames, for a consumer that does not read every
+frame. A generation that already fell out of the ring returns
+`AYTHER_STATUS_DELTA_HISTORY_LOST` with **everything** marked dirty: returning
+only the subset still in the ring would be worse than useless, because the
+consumer would believe it saw every change.
+
+One property the old design bought and this one keeps: `retro_unserialize` can
+replace the whole VRAM without a single frame running, and `vdp_ctrl.c` marks
+everything dirty on context load. The frozen copy is refreshed there too, so the
+consumer does not have to wait for the next frame end to find out.
+
+**Not yet gated.** The issue also asks for `NOT_SUBSCRIBED` without an explicit
+subscription. That bit does not exist yet -- bits 0-7 are taken and
+`AYTHER_SUB_ALL` is `0xFF` -- and adding it would be a **breaking** change:
+consumers that poll the delta today do so without subscribing, and would start
+getting `NOT_SUBSCRIBED`. It is tracked with the strict-idle work, where the
+accumulation cost lives.
 
 ## Recomposition and Delta Stream
 

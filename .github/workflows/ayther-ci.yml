@@ -325,6 +325,13 @@ jobs:
           CC=clang
           CORE=../genesis_plus_gx_libretro.so
 
+      # #30: dos lecturas del mismo frame tienen que dar lo mismo.
+      - name: Frame delta survives a second reader
+        run: >-
+          make -C tests check-frame-delta
+          CC=clang
+          CORE=../genesis_plus_gx_libretro.so
+
       # El numero se publica pero NO bloquea. Evidencia: dos corridas PARALELAS
       # del mismo commit midieron 1,023% y 1,708% -0,7 puntos de spread sobre
       # binarios identicos-, o sea que el ruido del runner compartido es mayor
@@ -545,6 +552,14 @@ jobs:
         shell: pwsh
         run: >-
           make -C tests check-audio-controls
+          CC=clang
+          CORE=../genesis_plus_gx_libretro.dll
+
+      - name: Frame delta survives a second reader
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        shell: pwsh
+        run: >-
+          make -C tests check-frame-delta
           CC=clang
           CORE=../genesis_plus_gx_libretro.dll
 

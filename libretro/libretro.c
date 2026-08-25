@@ -252,6 +252,58 @@ static void ayther_reset_session(bool content_loaded)
    el del frame que acaba de terminar, que es la respuesta correcta. */
 static ayther_system_v1 ayther_system_desc;
 
+/* #42: las regiones por linea se entregan como CABECERA + ENTRADAS en un solo
+   buffer contiguo. La cabecera va adentro y no aparte porque el consumidor
+   necesita saber cuantas lineas trae y de que frame son EN EL MISMO read: dos
+   lecturas separadas pueden caer a los dos lados de un frame. */
+static uint8_t ayther_line_regs_buf[sizeof(ayther_line_header_v1) +
+                                    AYTHER_LINE_MAX * sizeof(ayther_line_regs_v1)];
+static uint8_t ayther_line_cram_buf[sizeof(ayther_line_header_v1) +
+                                    AYTHER_LINE_MAX * 128];
+static uint32_t ayther_line_regs_bytes;
+static uint32_t ayther_line_cram_bytes;
+
+static void ayther_fill_line_header(void *dst, uint32_t entry_size,
+                                    uint32_t lines, uint32_t flags)
+{
+   ayther_line_header_v1 h;
+   memset(&h, 0, sizeof(h));
+   h.struct_size = (uint32_t)sizeof(h);
+   h.entry_size = entry_size;
+   h.lines = lines;
+   h.flags = flags;
+   h.frame_generation = ayther_frame_generation;
+   memcpy(dst, &h, sizeof(h));
+}
+
+static void ayther_fill_line_regs(void)
+{
+   uint32_t lines = ayther_line_count;
+   if (lines > AYTHER_LINE_MAX) lines = AYTHER_LINE_MAX;
+   ayther_fill_line_header(ayther_line_regs_buf,
+                           (uint32_t)sizeof(ayther_line_regs_v1),
+                           lines, ayther_line_flags);
+   memcpy(ayther_line_regs_buf + sizeof(ayther_line_header_v1),
+          ayther_line_regs, lines * sizeof(ayther_line_regs_v1));
+   ayther_line_regs_bytes = (uint32_t)(sizeof(ayther_line_header_v1) +
+                                       lines * sizeof(ayther_line_regs_v1));
+}
+
+static void ayther_fill_line_cram(void)
+{
+   /* Un frame sin writes de paleta a mitad de camino entrega UNA entrada y el
+      flag CRAM_UNIFORM, no 240 copias iguales: 128 B contra 30 KB. */
+   uint32_t lines = ayther_line_count;
+   uint32_t flags = ayther_line_flags;
+   if (lines > AYTHER_LINE_MAX) lines = AYTHER_LINE_MAX;
+   if (ayther_line_flags & AYTHER_LINES_CRAM_UNIFORM)
+      lines = lines ? 1u : 0u;
+   ayther_fill_line_header(ayther_line_cram_buf, 128u, lines, flags);
+   memcpy(ayther_line_cram_buf + sizeof(ayther_line_header_v1),
+          ayther_line_cram, lines * 128u);
+   ayther_line_cram_bytes = (uint32_t)(sizeof(ayther_line_header_v1) + lines * 128u);
+}
+
 static void ayther_fill_system(void)
 {
    memset(&ayther_system_desc, 0, sizeof(ayther_system_desc));
@@ -4169,6 +4221,30 @@ static int32_t ayther_map_region(uint32_t region_id,
          mapping->access_flags = AYTHER_REGION_ACCESS_READ |
             AYTHER_REGION_FRAME_SCOPED | AYTHER_REGION_NATIVE_ENDIAN;
          break;
+      case AYTHER_REGION_LINE_REGS:
+         /* #42: se arma al leer, como el descriptor de sistema y por la misma
+            razon: son hasta 7,5 KB que nadie mira en la mayoria de los frames. */
+         ayther_fill_line_regs();
+         mapping->data = ayther_line_regs_buf;
+         mapping->element_size = sizeof(ayther_line_regs_v1);
+         mapping->capacity = ayther_line_count;
+         mapping->byte_size = ayther_line_regs_bytes;
+         mapping->data_version = AYTHER_LAYOUT_LINE_REGS_V1;
+         mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_NONE;
+         mapping->access_flags = AYTHER_REGION_ACCESS_READ |
+            AYTHER_REGION_FRAME_SCOPED | AYTHER_REGION_NATIVE_ENDIAN;
+         break;
+      case AYTHER_REGION_LINE_CRAM:
+         ayther_fill_line_cram();
+         mapping->data = ayther_line_cram_buf;
+         mapping->element_size = 128;
+         mapping->capacity = ayther_line_count;
+         mapping->byte_size = ayther_line_cram_bytes;
+         mapping->data_version = AYTHER_LAYOUT_LINE_CRAM_V1;
+         mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_NONE;
+         mapping->access_flags = AYTHER_REGION_ACCESS_READ |
+            AYTHER_REGION_FRAME_SCOPED | AYTHER_REGION_NATIVE_ENDIAN;
+         break;
       case AYTHER_REGION_SYSTEM:
          /* #39.B: descriptor de solo lectura. Se rellena aca, en la consulta,
             y no una vez por frame: ver la nota en ayther_fill_system. */
@@ -4219,6 +4295,10 @@ static uint32_t ayther_region_subscription(uint32_t region_id)
          return AYTHER_SUB_RASTER_TRACKING;
       case AYTHER_REGION_ATTRIBUTION:
          return AYTHER_SUB_ATTRIBUTION;
+      case AYTHER_REGION_LINE_REGS:
+         return AYTHER_SUB_LINE_STATE;
+      case AYTHER_REGION_LINE_CRAM:
+         return AYTHER_SUB_LINE_CRAM;
       default:
          return 0;
    }
@@ -4790,7 +4870,7 @@ static const ayther_interface_v1 ayther_interface_1 =
       AYTHER_CAP_RECOMPOSE_V1 | AYTHER_CAP_SUBSCRIPTIONS_V1 |
       AYTHER_CAP_FRAME_DELTA_V1 | AYTHER_CAP_RECOMPOSE_STATS_V1 |
       AYTHER_CAP_ATTRIBUTION_V1 | AYTHER_CAP_FRAME_DELTA_SINCE_V1 |
-      AYTHER_CAP_SYSTEM_V1 |
+      AYTHER_CAP_SYSTEM_V1 | AYTHER_CAP_LINE_STATE_V1 |
       AYTHER_AUDIO_PROBE_CAPABILITY,
    AYTHER_HOST_ENDIANNESS,
    sizeof(void *),

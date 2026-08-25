@@ -59,7 +59,13 @@ extern "C" {
  * decodificarlos es reimplementar el core afuera del core, con las reglas
  * duplicadas y sin nadie que avise cuando se separan. */
 #define AYTHER_ABI_VERSION_1_5 UINT32_C(0x00010005)
-#define AYTHER_ABI_VERSION_LATEST AYTHER_ABI_VERSION_1_5
+/* 1.6 (#42): estado del VDP POR SCANLINE. Aditiva: dos regiones nuevas, una
+ * suscripcion propia y una capability. El frontend podia deducir el scroll de
+ * una linea leyendo la tabla de hscroll, pero no la CRAM vigente EN esa linea:
+ * un efecto raster de paleta solo existe mientras el frame se dibuja, y para
+ * cuando la ABI se puede consultar ya termino. */
+#define AYTHER_ABI_VERSION_1_6 UINT32_C(0x00010006)
+#define AYTHER_ABI_VERSION_LATEST AYTHER_ABI_VERSION_1_6
 
 #define AYTHER_ABI_VERSION_MAJOR(v) ((uint32_t)(v) >> 16)
 #define AYTHER_ABI_VERSION_MINOR(v) ((uint32_t)(v) & UINT32_C(0xFFFF))
@@ -170,6 +176,8 @@ enum ayther_endianness
    Lo que SI funciona en los dos modos: la mascara de sprites de layer_mask,
    layer_dim y todos los controles de audio. */
 #define AYTHER_CAP_MODE4_CONTROLS      (UINT64_C(1) << 16)
+/* #42: estado de render por scanline (registros/scroll y CRAM por linea). */
+#define AYTHER_CAP_LINE_STATE_V1       (UINT64_C(1) << 17)
 
 /* Observation and control work is opt-in. A requested mask becomes active at
  * the beginning of the next frame; unknown bits are rejected. */
@@ -184,7 +192,12 @@ enum ayther_endianness
  * porque su costo es de otro orden -un byte por pixel por frame- y un consumidor
  * que solo oculta capas no tiene por que pagarlo. */
 #define AYTHER_SUB_ATTRIBUTION      (UINT32_C(1) << 7)
-#define AYTHER_SUB_ALL              UINT32_C(0xFF)
+/* #42: el estado por scanline. Bit propio y no parte de VDP_MEMORY porque el
+   costo es de otro orden -- una copia por LINEA y no una lectura por frame-, y
+   quien quiere el mapa de celdas no necesariamente quiere pagar la CRAM. */
+#define AYTHER_SUB_LINE_STATE       (UINT32_C(1) << 8)
+#define AYTHER_SUB_LINE_CRAM        (UINT32_C(1) << 9)
+#define AYTHER_SUB_ALL              UINT32_C(0x3FF)
 
 enum ayther_region_id
 {
@@ -208,6 +221,10 @@ enum ayther_region_id
   AYTHER_REGION_ATTRIBUTION,
   /* #39.B: que hardware, que modo, que viewport y que ROM. */
   AYTHER_REGION_SYSTEM,
+  /* #42: registros y scroll tal como el VDP los uso EN CADA LINEA. */
+  AYTHER_REGION_LINE_REGS,
+  /* #42: la CRAM vigente en cada linea. */
+  AYTHER_REGION_LINE_CRAM,
   AYTHER_REGION_COUNT
 };
 
@@ -276,6 +293,56 @@ enum ayther_legacy_memory_id
  * una respuesta arbitraria. */
 #define AYTHER_LAYOUT_ATTRIBUTION_V1 UINT32_C(1)
 #define AYTHER_LAYOUT_SYSTEM_V1      UINT32_C(1)
+#define AYTHER_LAYOUT_LINE_REGS_V1   UINT32_C(1)
+#define AYTHER_LAYOUT_LINE_CRAM_V1   UINT32_C(1)
+
+/* AYTHER (#42): el estado de render POR SCANLINE, capturado del lado de la
+ * LECTURA -- cuando el renderer lo usa- y no reconstruido desde el lado de la
+ * escritura.
+ *
+ * Reconstruirlo desde las escrituras es lo que hace el raster journal, y es
+ * aproximado por construccion: hay que adivinar en que ciclo de que linea cayo
+ * cada write y que efecto tuvo. Capturarlo donde el renderer lo consume es
+ * exacto y ademas mas barato.
+ *
+ * Para que sirve: la celda de pantalla que el frontend puede ocultar hoy
+ * (id 0x104) es frame-space, y con scroll por linea NUNCA coincide con un tile
+ * del plano. Con `xscroll_a` de la linea, el frontend puede mapear "la celda
+ * (x,y) de la pantalla" a "este tile del plano A", que es lo que un pipeline de
+ * sustitucion HD necesita para keyear un asset.
+ */
+typedef struct ayther_line_regs_v1
+{
+  uint16_t xscroll_a, xscroll_b;   /* ya resueltos desde la tabla de hscroll */
+  uint16_t yscroll_a, yscroll_b;   /* VSRAM[0..1]                            */
+  uint16_t ntab, ntbb, ntwb;       /* bases de las name tables, resueltas    */
+  uint16_t hscb, satb;             /* bases de hscroll y de la SAT           */
+  uint8_t  reg1, reg7, reg11, reg12, reg13, reg16, reg17, reg18;
+  uint8_t  clip_a_start, clip_a_end, clip_w_start, clip_w_end;
+  uint8_t  flags;                  /* AYTHER_LINE_* de abajo                 */
+  uint8_t  reserved0;
+} ayther_line_regs_v1;
+
+/* La linea se dibujo con el plano A recortado por la ventana. */
+#define AYTHER_LINE_WINDOW_ACTIVE  UINT8_C(0x01)
+/* La linea se dibujo con vscroll por columna (reg 11 bit 2). */
+#define AYTHER_LINE_VSCROLL_COLUMN UINT8_C(0x02)
+
+/* Cabecera comun de las regiones por linea: el consumidor tiene que poder
+   interpretar el buffer sin adivinar cuantas lineas trae ni de que frame es. */
+typedef struct ayther_line_header_v1
+{
+  uint32_t struct_size;      /* tamanio de esta cabecera                     */
+  uint32_t entry_size;       /* tamanio de cada entrada que sigue            */
+  uint32_t lines;            /* entradas validas                             */
+  uint32_t flags;            /* AYTHER_LINES_* de abajo                      */
+  uint64_t frame_generation; /* el frame al que pertenece                    */
+} ayther_line_header_v1;
+
+/* La CRAM no cambio en todo el frame: solo la entrada 0 es significativa. */
+#define AYTHER_LINES_CRAM_UNIFORM   UINT32_C(0x01)
+/* Alguna linea no se lleno -- un renderer sin hooks-, y el buffer tiene huecos. */
+#define AYTHER_LINES_OVERFLOW       UINT32_C(0x02)
 
 /* AYTHER (#39.B): descriptor del sistema emulado.
  *

@@ -56,6 +56,7 @@ FRAME_DELTA_BIN := $(BUILD_DIR)/frame_delta$(EXE_EXT)
 IDLE_METRICS_BIN := $(BUILD_DIR)/idle_metrics$(EXE_EXT)
 ATTRIB_SCENE_BIN := $(BUILD_DIR)/attribution_scene$(EXE_EXT)
 SCENES_BIN := $(BUILD_DIR)/scenes$(EXE_EXT)
+LINE_STATE_BIN := $(BUILD_DIR)/line_state$(EXE_EXT)
 SCENES_GOLDEN := ayther/golden/scenes.txt
 TRACE_BIN := $(BUILD_DIR)/audio_probe_trace$(EXE_EXT)
 TRACE_GOLDEN := ayther/golden/audio_probe_trace.json
@@ -85,7 +86,7 @@ PROFILE_COMPARISON := $(ARTIFACT_DIR)/feature_gate_profiles.json
 
 .PHONY: all check check-unit check-concurrency check-determinism \
 	check-full-core check-profile-comparison raster-rom-probe \
-	full-core-replay check-idle-metrics check-attribution-scene check-scenes regen-scenes clean
+	full-core-replay check-idle-metrics check-attribution-scene check-scenes regen-scenes check-line-state clean
 
 all: $(UNIT_BIN) $(CONCURRENCY_BIN) $(API_BIN) $(RASTER_BIN) \
 	$(SPRITE_CAPTURE_BIN) $(DIM_BIN) $(TRACE_BIN)
@@ -205,6 +206,14 @@ check-attribution-scene: $(ATTRIB_SCENE_BIN)
 
 $(SCENES_BIN): ayther/scenes.c ayther/generated_rom.c 		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther 		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include 		-Iayther -o $@ ayther/scenes.c ayther/generated_rom.c 		$(LDFLAGS) $(ROM_PROBE_LIBS)
+
+$(LINE_STATE_BIN): ayther/line_state.c ayther/generated_rom.c 		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther 		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include 		-Iayther -o $@ ayther/line_state.c ayther/generated_rom.c 		$(LDFLAGS) $(ROM_PROBE_LIBS)
+
+# #42: el estado de render por scanline, contra la tabla de hscroll del ROM.
+check-line-state: $(LINE_STATE_BIN)
+	$(call require_core)
+	$(LINE_STATE_BIN) "$(CORE)"
 
 # #35: un hash por modo de video. El golden es por escena y no agregado: eso es
 # lo que convierte "algo se rompio" en "se rompio el interlace 2".

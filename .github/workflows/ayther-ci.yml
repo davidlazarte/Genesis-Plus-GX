@@ -358,6 +358,14 @@ jobs:
           CC=clang
           CORE=../genesis_plus_gx_libretro.so
 
+      # #42: el estado de render por scanline, contra la tabla de hscroll que
+      # el propio ROM escribe. El oraculo sale del generador, no del core.
+      - name: Per-scanline state matches the ROM's own scroll table
+        run: >-
+          make -C tests check-line-state
+          CC=clang
+          CORE=../genesis_plus_gx_libretro.so
+
       # #35: un hash por modo de video. El fixture determinista cubre Mode 5
       # H40 progresivo NTSC y nada mas; estas ocho escenas cubren H32, window,
       # shadow/highlight, los dos interlaces, PAL y DMA fill. Un golden POR

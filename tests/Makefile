@@ -44,6 +44,7 @@ UNIT_BIN  := $(BUILD_DIR)/test_audio_probe$(EXE_EXT)
 CONCURRENCY_BIN := $(BUILD_DIR)/test_audio_probe_concurrency$(EXE_EXT)
 API_BIN := $(BUILD_DIR)/test_ayther_api$(EXE_EXT)
 RASTER_BIN := $(BUILD_DIR)/test_raster_guard$(EXE_EXT)
+DIM_BIN := $(BUILD_DIR)/test_dim_quarter$(EXE_EXT)
 SPRITE_CAPTURE_BIN := $(BUILD_DIR)/test_sprite_capture$(EXE_EXT)
 ROM_PROBE_BIN := $(BUILD_DIR)/raster_rom_probe$(EXE_EXT)
 FULL_CORE_BIN := $(BUILD_DIR)/full_core_replay$(EXE_EXT)
@@ -84,7 +85,7 @@ PROFILE_COMPARISON := $(ARTIFACT_DIR)/feature_gate_profiles.json
 	full-core-replay check-idle-metrics check-attribution-scene clean
 
 all: $(UNIT_BIN) $(CONCURRENCY_BIN) $(API_BIN) $(RASTER_BIN) \
-	$(SPRITE_CAPTURE_BIN) $(TRACE_BIN)
+	$(SPRITE_CAPTURE_BIN) $(DIM_BIN) $(TRACE_BIN)
 
 $(BUILD_DIR):
 	$(call make_dir,$@)
@@ -104,6 +105,11 @@ $(API_BIN): test_ayther_api.c $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR
 
 $(RASTER_BIN): test_raster_guard.c $(CORE_DIR)/core/ayther_raster.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core -o $@ test_raster_guard.c $(LDFLAGS)
+
+# #31: el atenuado del dim, en los tres formatos de pixel que el core compila.
+# Aritmetica pura: no necesita el core, solo el mismo header.
+$(DIM_BIN): test_dim_quarter.c $(CORE_DIR)/core/ayther/ayther_dim.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ test_dim_quarter.c $(LDFLAGS)
 
 $(SPRITE_CAPTURE_BIN): test_sprite_capture.c $(SPRITE_CAPTURE_SRC) \
 		$(SPRITE_CAPTURE_HEADERS) | $(BUILD_DIR)
@@ -220,12 +226,13 @@ $(TRACE_BIN): ayther/audio_probe_trace.c $(PROBE_SRC) $(PROBE_HEADERS) | $(BUILD
 check: check-unit check-determinism
 
 check-unit: $(UNIT_BIN) $(CONCURRENCY_BIN) $(API_BIN) $(RASTER_BIN) \
-		$(SPRITE_CAPTURE_BIN) $(ROM_PROBE_BIN)
+		$(SPRITE_CAPTURE_BIN) $(DIM_BIN) $(ROM_PROBE_BIN)
 	$(UNIT_BIN)
 	$(CONCURRENCY_BIN)
 	$(API_BIN)
 	$(RASTER_BIN)
 	$(SPRITE_CAPTURE_BIN)
+	$(DIM_BIN)
 
 check-concurrency: $(CONCURRENCY_BIN)
 	$(CONCURRENCY_BIN)

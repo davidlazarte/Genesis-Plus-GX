@@ -598,6 +598,11 @@ static const uint32 tms_palette[16] =
 
 /* AYTHER (#31): el cuarteo por canal vive en su propio header para que el
    test pueda verificar los valores sin levantar el core. */
+/* #37.6: los contadores se resuelven a no-ops sin -DAYTHER_METRICS, asi que
+   incluirlo siempre deja los AYTHER_METRIC_INC validos tambien en el perfil
+   sin extensiones, donde las ramas que los usan son codigo muerto pero igual
+   tienen que compilar. */
+#include "ayther/ayther_metrics.h"
 #include "ayther/ayther_dim.h"
 #include "ayther/ayther_sprite_px.h"
 
@@ -1110,6 +1115,7 @@ uint64_t ayther_controls_fingerprint(void)
 #define AYTHER_PSUP(plane) ((const uint8 *)0)
 #define ayther_sprite_capture_record(yr, xr, attr, w, h, sat_idx, chain_pos) ((void)0)
 #define AYTHER_CELL_RECORD(pair) ((void)0)
+#define AYTHER_LINE_CELLS_ACTIVE 0
 
 #endif /* AYTHER_EXTENSIONS */
 
@@ -2371,6 +2377,28 @@ AYTHER_HOT_INLINE void render_bg_m5_impl(int line, int ayther_observed)
     ayther_cells_open((uint32)line, 1, v_line, shift);
   }
 #endif
+  /* AYTHER (#37 punto 6): el plano B se dibujaba SIEMPRE y recien despues
+     se borraba -- el `if (hide_b) memset(...)` de mas abajo, justo antes del
+     merge. Una linea entera de columnas leidas de VRAM, pasadas por el cache
+     de patterns y escritas al line buffer para tirarlas.
+
+     No es un caso raro: `recompose_multilayer` pide las capas una por una y
+     TRES de las cinco pasadas ocultan B, asi que un frontend que muestra el
+     inspector de capas pagaba ese dibujo tres veces por linea y por frame.
+
+     Borrar antes en vez de despues da el mismo buffer -- lo unico que hacia
+     el memset era dejarlo en cero-, y el bucle se saltea. La excepcion es
+     LINE_CELLS: esa region reporta que celda de la nametable toco cada
+     columna, y eso se anota DENTRO del bucle. Si alguien esta suscrito, se
+     dibuja igual: contestarle con una fila vacia seria mentirle. */
+  if (hide_b && !AYTHER_LINE_CELLS_ACTIVE)
+  {
+    memset(&linebuf[0][0x20], 0, bitmap.viewport.w);
+    shift = 0;
+    end = 0;
+    AYTHER_METRIC_INC(bg_b_skipped);
+  }
+
   if(shift)
   {
     /* Plane B line buffer */
@@ -2601,6 +2629,15 @@ AYTHER_HOT_INLINE void render_bg_m5_vs_impl(int line, int ayther_observed)
   if (reg[12] & 1)
   {
     yscroll = vs[19] & (vs[19] >> 16);
+  }
+
+  /* #37.6: mismo caso que en render_bg_m5 -- ver el comentario de alla. */
+  if (hide_b && !AYTHER_LINE_CELLS_ACTIVE)
+  {
+    memset(&linebuf[0][0x20], 0, bitmap.viewport.w);
+    shift = 0;
+    end = 0;
+    AYTHER_METRIC_INC(bg_b_skipped);
   }
 
   if(shift)
@@ -2867,6 +2904,15 @@ void render_bg_m5_vs_enhanced(int line)
   if (reg[12] & 1)
   {
     yscroll = vs[19] & (vs[19] >> 16);
+  }
+
+  /* #37.6: mismo caso que en render_bg_m5 -- ver el comentario de alla. */
+  if (hide_b && !AYTHER_LINE_CELLS_ACTIVE)
+  {
+    memset(&linebuf[0][0x20], 0, bitmap.viewport.w);
+    shift = 0;
+    end = 0;
+    AYTHER_METRIC_INC(bg_b_skipped);
   }
 
   if(shift)
@@ -3177,6 +3223,15 @@ void render_bg_m5_im2(int line)
   /* Pattern row index */
   v_line = (v_line & 15) << 3;
 
+  /* #37.6: mismo caso que en render_bg_m5 -- ver el comentario de alla. */
+  if (hide_b && !AYTHER_LINE_CELLS_ACTIVE)
+  {
+    memset(&linebuf[0][0x20], 0, bitmap.viewport.w);
+    shift = 0;
+    end = 0;
+    AYTHER_METRIC_INC(bg_b_skipped);
+  }
+
   if(shift)
   {
     /* Plane B line buffer */
@@ -3359,6 +3414,15 @@ void render_bg_m5_im2_vs(int line)
   if (reg[12] & 1)
   {
     yscroll = vs[19] & (vs[19] >> 16);
+  }
+
+  /* #37.6: mismo caso que en render_bg_m5 -- ver el comentario de alla. */
+  if (hide_b && !AYTHER_LINE_CELLS_ACTIVE)
+  {
+    memset(&linebuf[0][0x20], 0, bitmap.viewport.w);
+    shift = 0;
+    end = 0;
+    AYTHER_METRIC_INC(bg_b_skipped);
   }
 
   if(shift)

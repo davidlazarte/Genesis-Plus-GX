@@ -30,6 +30,10 @@ typedef struct ayther_metrics_v1
   uint64_t satb_slow_path;
   /* Bytes copiados por el path activo del frame delta. */
   uint64_t frame_delta_bytes;
+  /* #37.6: líneas en que el plano B NO se dibujó porque la máscara de capas
+     lo ocultaba. Antes se dibujaba igual y se borraba antes del merge, así
+     que este contador es, literalmente, el trabajo que dejó de hacerse. */
+  uint64_t bg_b_skipped;
 } ayther_metrics_v1;
 
 extern ayther_metrics_v1 ayther_metrics;

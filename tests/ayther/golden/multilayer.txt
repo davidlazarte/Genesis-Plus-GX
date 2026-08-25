@@ -1,0 +1,14 @@
+# #37.6: hashes FNV-1a de las cinco capas de recompose_multilayer,
+# 8 frames, flags=0. Regenerar con: make regen-multilayer CORE=<core>
+fixture sh 320 224
+  bg_a       984c89354c634383
+  bg_b       984c89354c634383
+  window     c916ac0bebe74383
+  sprites    a608c4b644fc9783
+  composite  c9a3cd10cf0fed83
+fixture window 320 224
+  bg_a       98ffaae7316d557d
+  bg_b       ed6b7532c70fb583
+  window     a0a19cbc3f9b9a83
+  sprites    a0a55fbcb2323243
+  composite  c1ec00d5c71e7283

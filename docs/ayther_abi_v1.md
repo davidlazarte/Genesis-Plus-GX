@@ -60,6 +60,7 @@ second one read zero. |
 | 1.2 | **Additive.** Appends `recompose_multilayer` to the descriptor and adds the `AYTHER_REGION_WORD_SWAPPED_LE` region flag (#32). The standalone `ayther_recompose_multilayer` export is now **deprecated** and is emitted only in the legacy profile. |
 | 1.5 | **Additive.** Adds the `SYSTEM` region and `AYTHER_CAP_SYSTEM_V1` (#39.B), plus the `AYTHER_STATUS_UNSUPPORTED_MODE` status and `AYTHER_CAP_MODE4_CONTROLS` (#40). No existing field moved. Controls that only exist in Mode 5 now say so instead of accepting the write and doing nothing. |
 | 1.6 | **Additive.** Adds the `LINE_REGS`, `LINE_CRAM` and `LINE_CELLS` regions, the `AYTHER_SUB_LINE_STATE` / `AYTHER_SUB_LINE_CRAM` / `AYTHER_SUB_LINE_CELLS` subscriptions and `AYTHER_CAP_LINE_STATE_V1` (#42). `AYTHER_SUB_ALL` widens from `0xFF` to `0x7FF`; the eight existing bits keep their positions. |
+| 1.7 | **Additive.** Adds the `RASTER_JOURNAL`, `FRAME_HASH` and `PALETTE` regions, the `AYTHER_SUB_FRAME_HASH` subscription and `AYTHER_CAP_OBSERVABILITY_V1` (#39 A/D/E). `AYTHER_SUB_ALL` widens to `0xFFF`. No existing structure changes size or order. |
 
 Two earlier changes were shipped inside 1.0 without a bump, which is what this
 table exists to prevent from recurring:
@@ -168,6 +169,9 @@ single-byte commands and report `addr = 0`.
 | `PARSED_SPRITE_COUNT` | `uint8_t` | 1 / 1 | frame read | `0x10C` |
 | `AUDIO_MUTE` | `uint32_t` | 1 / 4 | read/control | `0x10D` |
 | `RASTER_FALLBACK_REASONS` | `uint32_t` | 1 / 4 | frame read | `0x10E` |
+| `RASTER_JOURNAL` | `ayther_journal_v1` | 1 / 2,064 | frame read | — |
+| `FRAME_HASH` | `ayther_frame_hash_v1` | 1 / 56 | frame read | — |
+| `PALETTE` | build pixel type | 256 / 512 (16bpp) | read | — |
 
 The public ABI treats emulated memory and frame counters as read-only. The
 legacy pointers preserve their historical mutability for the transition.
@@ -531,3 +535,66 @@ inside the observed clone. Forgetting one does not raise an error: it produces a
 region that answers `OK` and comes back empty. That is how #41 was found, and it
 happened again while adding these regions. Any future region filled in there
 gets its bit added to that list.
+## Observability: journal, hashes and palette (#39 A/D/E)
+
+Three read-only regions, all for the same reason: the core already knows the
+answer, and the frontend was re-deriving it with its own copy of the rules.
+
+### `RASTER_JOURNAL`
+
+The journal already existed — it is what the raster replay consumes. The only
+thing exposed was its **count**. Knowing a frame had 17 events and not *which*
+is enough to decide "don't recompose this one" and nothing else; a frontend that
+wants to understand the split had to re-read VDP memory frame by frame and guess
+when it changed.
+
+`dropped` is a count and not a bit, matching the core: a frontend sizing its own
+buffer needs to tell "missed by one" from "this frame is a festival of splits".
+
+It is gated on `AYTHER_SUB_RASTER_TRACKING` — the subscription that makes the
+journal exist at all. Without it the region answers `NOT_SUBSCRIBED` instead of
+handing back the fossil journal of the last observed frame.
+
+### `FRAME_HASH`
+
+Answers "are we still in sync?" without serializing. Until now the only way was
+to ask for the whole savestate — ~1 MB — and hash it outside, once per frame, to
+compare one number.
+
+There is deliberately **no `state_hash`**: computing it requires serializing,
+which is exactly what this region exists to avoid. The four VDP memories plus
+the emitted video and audio cover the desync a frontend can actually see; for
+the rest of the state there is `retro_serialize`, which is where that question
+belongs.
+
+The algorithm is 64-bit FNV-1a over the bytes in the core's own order — the same
+one `full_core_replay` uses — so a frontend can recompute and compare rather
+than trust. The video hash walks the frame **row by row**, `width` pixels at a
+time, skipping by pitch: the pitch covers 720 px and the frame occupies less, so
+hashing in one shot would fold in padding nobody sees. `tests/ayther/observability.c`
+computes the same number from the `video_refresh` callback and requires the two
+to match.
+
+This is the only part of 1.7 that costs anything — about 100 KB walked per frame
+— and therefore the only one with its own subscription.
+
+### `PALETTE`
+
+The core builds this table anyway, in `color_update_m5`: indexed by the merged
+line-buffer byte, with shadow and highlight already applied. A frontend that
+wanted the colour of an index had to redo the 9-bit → pixel conversion and the
+S/H rules itself.
+
+The whole 256-entry table is exposed, not the 192 "useful" ones: the index *is*
+the line-buffer byte, and trimming it would force the consumer to know the trim
+in order to map back. Entry width comes from the region's `element_size`,
+because it depends on the pixel format the core was built with — a consumer that
+hardcodes 2 bytes misreads a 32bpp build with no symptom.
+
+**It is the current table, not one per line.** A game that writes CRAM mid-frame
+— a palette raster — produces an image with colours from several tables, and
+this region answers the last one. That is not a hidden limitation: `LINE_CRAM`
+(#42) covers the per-line case, and `RASTER_JOURNAL` says whether the frame had
+CRAM writes at all. With a journal free of CRAM events this table explains every
+colour in the frame; with them, it cannot. The test measures the property on the
+S/H fixture, which has no H-int and therefore a palette that does not move.

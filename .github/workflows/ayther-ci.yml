@@ -360,6 +360,21 @@ jobs:
 
       # #42: el estado de render por scanline, contra la tabla de hscroll que
       # el propio ROM escribe. El oraculo sale del generador, no del core.
+      - name: Plane tile suppression hides one plane at a time
+        run: >-
+          make -C tests check-plane-suppress
+          CORE=../genesis_plus_gx_libretro.so
+
+      - name: The five recomposition layers match their golden
+        run: >-
+          make -C tests check-multilayer
+          CORE=../genesis_plus_gx_libretro.so
+
+      - name: Journal, frame hashes and resolved palette
+        run: >-
+          make -C tests check-observability
+          CORE=../genesis_plus_gx_libretro.so
+
       - name: Per-scanline state matches the ROM's own scroll table
         run: >-
           make -C tests check-line-state
@@ -752,6 +767,12 @@ jobs:
         if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
         run: >-
           make -C tests check-multilayer
+          CORE=../genesis_plus_gx_libretro.dylib
+
+      - name: Journal, frame hashes and resolved palette
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -C tests check-observability
           CORE=../genesis_plus_gx_libretro.dylib
 
       - name: Per-scanline state matches the ROM's own scroll table

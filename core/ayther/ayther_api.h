@@ -65,7 +65,21 @@ extern "C" {
  * un efecto raster de paleta solo existe mientras el frame se dibuja, y para
  * cuando la ABI se puede consultar ya termino. */
 #define AYTHER_ABI_VERSION_1_6 UINT32_C(0x00010006)
-#define AYTHER_ABI_VERSION_LATEST AYTHER_ABI_VERSION_1_6
+/* 1.7 (#39 A/D/E): tres regiones de solo lectura que cierran huecos que el
+ * frontend hoy tapa reimplementando el core afuera del core.
+ *
+ *   JOURNAL  -- el journal raster ya se llenaba; lo unico que se exponia era
+ *               su CANTIDAD. Saber que hubo 17 eventos y no cuales es saber
+ *               que el frame tiene splits y nada mas.
+ *   FRAME_HASH -- para detectar desincronizacion habia que serializar el
+ *               estado entero y hashearlo afuera: ~1 MB por comparacion.
+ *   PALETTE  -- la conversion 9-bit -> formato del build, con shadow y
+ *               highlight ya aplicados, es una tabla que el core arma igual;
+ *               el frontend la rehacia a mano y con sus propias reglas.
+ *
+ * Aditiva: ninguna estructura existente cambia de tamanio ni de orden. */
+#define AYTHER_ABI_VERSION_1_7 UINT32_C(0x00010007)
+#define AYTHER_ABI_VERSION_LATEST AYTHER_ABI_VERSION_1_7
 
 #define AYTHER_ABI_VERSION_MAJOR(v) ((uint32_t)(v) >> 16)
 #define AYTHER_ABI_VERSION_MINOR(v) ((uint32_t)(v) & UINT32_C(0xFFFF))
@@ -178,6 +192,10 @@ enum ayther_endianness
 #define AYTHER_CAP_MODE4_CONTROLS      (UINT64_C(1) << 16)
 /* #42: estado de render por scanline (registros/scroll y CRAM por linea). */
 #define AYTHER_CAP_LINE_STATE_V1       (UINT64_C(1) << 17)
+/* #39.A/D/E: contenido del journal, hashes por frame y paleta resuelta. Van
+   juntas en un bit porque llegan juntas y ninguna tiene sentido sin la ABI
+   1.7; separarlas seria prometer que una puede faltar, y no puede. */
+#define AYTHER_CAP_OBSERVABILITY_V1    (UINT64_C(1) << 18)
 
 /* Observation and control work is opt-in. A requested mask becomes active at
  * the beginning of the next frame; unknown bits are rejected. */
@@ -198,7 +216,12 @@ enum ayther_endianness
 #define AYTHER_SUB_LINE_STATE       (UINT32_C(1) << 8)
 #define AYTHER_SUB_LINE_CRAM        (UINT32_C(1) << 9)
 #define AYTHER_SUB_LINE_CELLS       (UINT32_C(1) << 10)
-#define AYTHER_SUB_ALL              UINT32_C(0x7FF)
+/* #39.D: los hashes son lo unico de esta tanda que CUESTA -- unos 100 KB
+   recorridos por frame-, asi que es lo unico que se suscribe aparte. El
+   journal y la paleta ya se mantienen para otra cosa: cobrarles una
+   suscripcion propia seria cobrar por trabajo que ya esta hecho. */
+#define AYTHER_SUB_FRAME_HASH       (UINT32_C(1) << 11)
+#define AYTHER_SUB_ALL              UINT32_C(0xFFF)
 
 enum ayther_region_id
 {
@@ -228,6 +251,12 @@ enum ayther_region_id
   AYTHER_REGION_LINE_CRAM,
   /* #42.C: que entrada de la name table le toco a cada columna. */
   AYTHER_REGION_LINE_CELLS,
+  /* #39.A: los eventos raster del frame, no solo cuantos hubo. */
+  AYTHER_REGION_RASTER_JOURNAL,
+  /* #39.D: hashes del frame, para detectar desincronizacion sin serializar. */
+  AYTHER_REGION_FRAME_HASH,
+  /* #39.E: la paleta ya resuelta al formato de pixel del build. */
+  AYTHER_REGION_PALETTE,
   AYTHER_REGION_COUNT
 };
 
@@ -299,6 +328,9 @@ enum ayther_legacy_memory_id
 #define AYTHER_LAYOUT_LINE_REGS_V1   UINT32_C(1)
 #define AYTHER_LAYOUT_LINE_CRAM_V1   UINT32_C(1)
 #define AYTHER_LAYOUT_LINE_CELLS_V1  UINT32_C(1)
+#define AYTHER_LAYOUT_JOURNAL_V1     UINT32_C(1)
+#define AYTHER_LAYOUT_FRAME_HASH_V1  UINT32_C(1)
+#define AYTHER_LAYOUT_PALETTE_V1     UINT32_C(1)
 
 /* AYTHER (#42): el estado de render POR SCANLINE, capturado del lado de la
  * LECTURA -- cuando el renderer lo usa- y no reconstruido desde el lado de la
@@ -375,6 +407,94 @@ typedef struct ayther_line_cells_v1
   uint8_t  cols_a, cols_b, cols_w;
   uint8_t  reserved0;
 } ayther_line_cells_v1;
+
+/* #39.A: el journal raster del frame, entero.
+ *
+ * El core ya lo llenaba -- es el insumo del raster replay-- y de el solo se
+ * exponia `raster_event_count`. Saber que un frame tuvo 17 eventos y no
+ * CUALES alcanza para decidir "no lo recompongo" y para nada mas: el
+ * frontend que quiere entender el split tiene que volver a mirar la memoria
+ * del VDP frame por frame y adivinar cuando cambio, que es justamente lo que
+ * el journal ya sabe.
+ *
+ * `dropped` no es un bit sino una cuenta, igual que adentro del core: el
+ * frontend que dimensiona su propio buffer necesita distinguir "se paso por
+ * uno" de "este frame es un festival de splits".
+ *
+ * Se llena bajo AYTHER_SUB_RASTER_TRACKING, que es la suscripcion que ya
+ * hace que el journal exista. Sin ella la region contesta NOT_SUBSCRIBED en
+ * vez de devolver el journal fosil del ultimo frame observado.
+ */
+#define AYTHER_JOURNAL_MAX_EVENTS 256
+
+typedef struct ayther_journal_event_v1
+{
+  uint16_t v_counter;   /* linea en que ocurrio                        */
+  uint16_t reason;      /* AYTHER_RASTER_REASON_* del core             */
+  uint16_t address;     /* direccion afectada, segun el motivo         */
+  uint16_t data;        /* los 16 bits que el bus puso                 */
+} ayther_journal_event_v1;
+
+typedef struct ayther_journal_v1
+{
+  uint32_t layout_version;
+  uint32_t struct_size;
+  uint32_t count;       /* eventos validos en `events`                 */
+  uint32_t dropped;     /* eventos que no entraron (0 = journal completo) */
+  ayther_journal_event_v1 events[AYTHER_JOURNAL_MAX_EVENTS];
+} ayther_journal_v1;
+
+/* #39.D: hashes del frame.
+ *
+ * Existe para contestar "¿seguimos sincronizados?" sin serializar. Hasta aca
+ * la unica forma era pedir el savestate entero -- ~1 MB-- y hashearlo
+ * afuera, una vez por frame, para comparar un numero.
+ *
+ * NO hay `state_hash`, y no es un olvido: calcularlo obliga a serializar, o
+ * sea a hacer exactamente lo que esta region existe para evitar. Las cuatro
+ * memorias del VDP mas el video y el audio emitidos cubren la desincroni-
+ * zacion que un frontend puede ver; para el resto del estado esta
+ * `retro_serialize`, que es donde esa pregunta corresponde.
+ *
+ * El algoritmo es FNV-1a de 64 bits sobre los bytes en el orden en que el
+ * core los tiene -- el mismo que usa `full_core_replay`-, asi que un
+ * frontend puede recalcularlo y comparar. `frame_index` dice de que frame
+ * son: leer la region dos veces en el mismo frame da lo mismo.
+ */
+typedef struct ayther_frame_hash_v1
+{
+  uint32_t layout_version;
+  uint32_t struct_size;
+  uint64_t frame_index;
+  uint64_t video_hash;  /* pixeles emitidos, viewport w*h              */
+  uint64_t audio_hash;  /* samples entregados en el frame              */
+  uint64_t vram_hash;
+  uint64_t cram_hash;
+  uint64_t vsram_hash;
+} ayther_frame_hash_v1;
+
+/* #39.E: la paleta ya resuelta al formato de pixel del build.
+ *
+ * El core arma esta tabla igual, en `color_update_m5`: indexada por el byte
+ * fusionado del line buffer, con shadow y highlight YA aplicados. Un
+ * frontend que quiere el color de un indice tenia que rehacer la conversion
+ * 9-bit -> RGB y las reglas de S/H por su cuenta, con dos copias de la misma
+ * regla y sin nadie que avise cuando se separan.
+ *
+ * Se expone la tabla ENTERA (256 entradas), no las 192 "utiles": el indice
+ * es el byte del line buffer tal cual, y recortarla obligaria al consumidor
+ * a saber cual es el recorte para volver a mapear. El ancho de cada entrada
+ * lo dice `element_size` de la region, porque depende del formato con que se
+ * compilo el core.
+ *
+ * Es la tabla VIGENTE, no una por linea. Un juego que escribe CRAM a mitad de
+ * frame -- un raster de paleta-- produce una imagen con colores de VARIAS
+ * tablas, y esta contesta la ultima. Eso no es una limitacion escondida: para
+ * el caso por linea esta LINE_CRAM (#42), y `AYTHER_REGION_RASTER_JOURNAL`
+ * dice si el frame tuvo escrituras de CRAM. Con journal sin eventos de CRAM,
+ * esta tabla explica todos los colores del frame; con eventos, no puede.
+ */
+#define AYTHER_PALETTE_ENTRIES 256
 
 /* La CRAM no cambio en todo el frame: solo la entrada 0 es significativa. */
 #define AYTHER_LINES_CRAM_UNIFORM   UINT32_C(0x01)

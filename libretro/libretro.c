@@ -358,6 +358,94 @@ static void ayther_fill_system(void)
    ayther_system_desc.rom_bytes = (uint32_t)cart.romsize;
 }
 
+static ayther_journal_v1    ayther_journal_desc;
+static ayther_frame_hash_v1 ayther_frame_hash_desc;
+
+/* #39.A: el journal se copia EN LA CONSULTA, igual que el descriptor de
+   sistema. Copiarlo una vez por frame seria trabajo que casi siempre nadie
+   lee; la region es de solo lectura y el journal no se mueve entre el fin
+   del frame y la consulta. */
+static void ayther_fill_journal(void)
+{
+   int i;
+   int n = ayther_raster_journal_count;
+   if (n < 0) n = 0;
+   if (n > AYTHER_JOURNAL_MAX_EVENTS) n = AYTHER_JOURNAL_MAX_EVENTS;
+
+   memset(&ayther_journal_desc, 0, sizeof(ayther_journal_desc));
+   ayther_journal_desc.layout_version = AYTHER_LAYOUT_JOURNAL_V1;
+   ayther_journal_desc.struct_size = (uint32_t)sizeof(ayther_journal_desc);
+   ayther_journal_desc.count = (uint32_t)n;
+   ayther_journal_desc.dropped = (ayther_raster_journal_dropped > 0)
+      ? (uint32_t)ayther_raster_journal_dropped : 0u;
+   for (i = 0; i < n; ++i)
+   {
+      ayther_journal_desc.events[i].v_counter = ayther_raster_journal[i].v_counter;
+      ayther_journal_desc.events[i].reason    = ayther_raster_journal[i].reason;
+      ayther_journal_desc.events[i].address   = ayther_raster_journal[i].address;
+      ayther_journal_desc.events[i].data      = ayther_raster_journal[i].data;
+   }
+}
+
+/* #39.D: FNV-1a de 64 bits, el mismo que usa full_core_replay, para que el
+   frontend pueda recalcular y comparar en vez de tener que confiar. */
+#define AYTHER_FNV_OFFSET UINT64_C(1469598103934665603)
+#define AYTHER_FNV_PRIME  UINT64_C(1099511628211)
+
+static uint64_t ayther_hash_bytes(uint64_t h, const void *p, size_t n)
+{
+   const uint8_t *b = (const uint8_t *)p;
+   size_t i;
+   for (i = 0; i < n; ++i)
+   {
+      h ^= (uint64_t)b[i];
+      h *= AYTHER_FNV_PRIME;
+   }
+   return h;
+}
+
+/* Se calcula al CERRAR el frame, que es el unico momento en que el video y
+   el audio del frame estan los dos completos. Solo bajo suscripcion: son
+   ~100 KB recorridos, y cobrarselos a quien no los pidio contradice la
+   promesa del fork. */
+static void ayther_update_frame_hash(const int16 *samples, unsigned frames)
+{
+   uint64_t video = AYTHER_FNV_OFFSET;
+   const int rw = vwidth - vwoffset;
+   int y;
+
+   if (!AYTHER_SUBSCRIBED(AYTHER_SUB_FRAME_HASH))
+      return;
+
+   /* Exactamente el frame que el frontend recibe: el mismo puntero, el mismo
+      ancho y el mismo pitch que el video_cb de mas abajo, y fila por fila
+      -- el pitch cubre 720 px y el frame ocupa menos, asi que hashear de un
+      saque meteria relleno que nadie ve-. Es la misma cuenta que hace
+      `full_core_replay` desde afuera, y por eso los dos numeros se pueden
+      comparar: si no coinciden, uno de los dos esta mirando otra cosa. */
+   if (bitmap.data && rw > 0 && vheight > 0)
+   {
+      const uint8 *base = bitmap.data + bmdoffset;
+      for (y = 0; y < vheight; ++y)
+         video = ayther_hash_bytes(video,
+                                   base + (size_t)y * (size_t)bitmap.pitch,
+                                   (size_t)rw * sizeof(uint16_t));
+   }
+
+   ayther_frame_hash_desc.layout_version = AYTHER_LAYOUT_FRAME_HASH_V1;
+   ayther_frame_hash_desc.struct_size =
+      (uint32_t)sizeof(ayther_frame_hash_desc);
+   ayther_frame_hash_desc.frame_index = ayther_frame_generation;
+   ayther_frame_hash_desc.video_hash = video;
+   ayther_frame_hash_desc.audio_hash = (samples && frames)
+      ? ayther_hash_bytes(AYTHER_FNV_OFFSET, samples,
+                          (size_t)frames * 2u * sizeof(int16))
+      : AYTHER_FNV_OFFSET;
+   ayther_frame_hash_desc.vram_hash  = ayther_hash_bytes(AYTHER_FNV_OFFSET, vram, 0x10000);
+   ayther_frame_hash_desc.cram_hash  = ayther_hash_bytes(AYTHER_FNV_OFFSET, cram, 0x80);
+   ayther_frame_hash_desc.vsram_hash = ayther_hash_bytes(AYTHER_FNV_OFFSET, vsram, 0x80);
+}
+
 /* #36: las suscripciones que gatean el bitmap de VRAM sucia. Quien lee el
    frame delta esta leyendo, por definicion, que cambio en la memoria del VDP. */
 #define AYTHER_SUB_DELTA_PRODUCERS \
@@ -386,9 +474,11 @@ static void ayther_begin_frame(void)
    AYTHER_METRIC_INC(begin_frame_calls);
 }
 
-static void ayther_end_frame(void)
+static void ayther_end_frame(const int16 *samples, unsigned frames)
 {
    ayther_frame_active = false;
+   /* #39.D: antes de mover la generacion -- el hash es de ESTE frame. */
+   ayther_update_frame_hash(samples, frames);
    /* Se congela ANTES de incrementar: el bitmap pertenece al frame que acaba
       de correr, no al que viene. */
    ayther_delta_freeze(ayther_frame_generation);
@@ -399,7 +489,7 @@ static void ayther_end_frame(void)
 #define ayther_reset_session(content_loaded) ((void)(content_loaded))
 #define ayther_invalidate_snapshot() ((void)0)
 #define ayther_begin_frame() ((void)0)
-#define ayther_end_frame() ((void)0)
+#define ayther_end_frame(samples, frames) ((void)(samples), (void)(frames))
 #endif
 
 retro_log_printf_t log_cb;
@@ -4290,6 +4380,42 @@ static int32_t ayther_map_region(uint32_t region_id,
          mapping->access_flags = AYTHER_REGION_ACCESS_READ |
             AYTHER_REGION_NATIVE_ENDIAN;
          break;
+      case AYTHER_REGION_RASTER_JOURNAL:
+         /* #39.A: se copia aca, en la consulta. */
+         ayther_fill_journal();
+         mapping->data = &ayther_journal_desc;
+         mapping->element_size = sizeof(ayther_journal_desc);
+         mapping->capacity = 1;
+         mapping->byte_size = sizeof(ayther_journal_desc);
+         mapping->data_version = AYTHER_LAYOUT_JOURNAL_V1;
+         mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_NONE;
+         mapping->access_flags = AYTHER_REGION_ACCESS_READ |
+            AYTHER_REGION_FRAME_SCOPED | AYTHER_REGION_NATIVE_ENDIAN;
+         break;
+      case AYTHER_REGION_FRAME_HASH:
+         /* #39.D: ya calculado al cerrar el frame; aca solo se entrega. */
+         mapping->data = &ayther_frame_hash_desc;
+         mapping->element_size = sizeof(ayther_frame_hash_desc);
+         mapping->capacity = 1;
+         mapping->byte_size = sizeof(ayther_frame_hash_desc);
+         mapping->data_version = AYTHER_LAYOUT_FRAME_HASH_V1;
+         mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_NONE;
+         mapping->access_flags = AYTHER_REGION_ACCESS_READ |
+            AYTHER_REGION_FRAME_SCOPED | AYTHER_REGION_NATIVE_ENDIAN;
+         break;
+      case AYTHER_REGION_PALETTE:
+         /* #39.E: la LUT del renderer, tal cual. El ancho de la entrada lo
+            dice element_size porque depende del formato del build. */
+         mapping->data = (void *)ayther_palette_data();
+         mapping->element_size = ayther_palette_entry_size();
+         mapping->capacity = ayther_palette_entries();
+         mapping->byte_size = ayther_palette_entry_size() *
+                              ayther_palette_entries();
+         mapping->data_version = AYTHER_LAYOUT_PALETTE_V1;
+         mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_NONE;
+         mapping->access_flags = AYTHER_REGION_ACCESS_READ |
+            AYTHER_REGION_NATIVE_ENDIAN;
+         break;
       case AYTHER_REGION_RASTER_FALLBACK_REASONS:
          mapping->data = &ayther_raster_dirty;
          mapping->element_size = sizeof(ayther_raster_dirty);
@@ -4324,7 +4450,17 @@ static uint32_t ayther_region_subscription(uint32_t region_id)
       case AYTHER_REGION_PARSED_SPRITE_COUNT:
          return AYTHER_SUB_SPRITE_CAPTURE;
       case AYTHER_REGION_RASTER_FALLBACK_REASONS:
+      /* #39.A: el journal EXISTE porque alguien se suscribio al tracking
+         raster. Sin esa suscripcion no hay journal que devolver, y entregar
+         el del ultimo frame observado seria devolver un fosil. */
+      case AYTHER_REGION_RASTER_JOURNAL:
          return AYTHER_SUB_RASTER_TRACKING;
+      case AYTHER_REGION_FRAME_HASH:
+         return AYTHER_SUB_FRAME_HASH;
+      /* #39.E: la paleta es estado del VDP resuelto; quien pregunta por
+         colores esta preguntando por su memoria. */
+      case AYTHER_REGION_PALETTE:
+         return AYTHER_SUB_VDP_MEMORY;
       case AYTHER_REGION_ATTRIBUTION:
          return AYTHER_SUB_ATTRIBUTION;
       case AYTHER_REGION_LINE_REGS:
@@ -4907,6 +5043,7 @@ static const ayther_interface_v1 ayther_interface_1 =
       AYTHER_CAP_FRAME_DELTA_V1 | AYTHER_CAP_RECOMPOSE_STATS_V1 |
       AYTHER_CAP_ATTRIBUTION_V1 | AYTHER_CAP_FRAME_DELTA_SINCE_V1 |
       AYTHER_CAP_SYSTEM_V1 | AYTHER_CAP_LINE_STATE_V1 |
+      AYTHER_CAP_OBSERVABILITY_V1 |
       AYTHER_AUDIO_PROBE_CAPABILITY,
    AYTHER_HOST_ENDIANNESS,
    sizeof(void *),
@@ -5363,7 +5500,7 @@ void retro_run(void)
    }
 
    soundbuffer_size = audio_update(soundbuffer);
-   ayther_end_frame();
+   ayther_end_frame(soundbuffer, (unsigned)soundbuffer_size);
 
    /* Force viewport update when SMS border changes after startup undetected */
    if (     ((system_hw == SYSTEM_MARKIII) || (system_hw & SYSTEM_SMS) || (system_hw == SYSTEM_PBC))

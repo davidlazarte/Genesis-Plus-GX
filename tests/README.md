@@ -338,3 +338,31 @@ verified on x86-64 hosts.
 It deliberately does not run the export closure: `check_exports.sh` reads
 symbols the ELF/PE way, and Mach-O prefixes them with an underscore. A green
 check that verifies nothing is worse than no check.
+## Journal, frame hashes and palette (#39 A/D/E)
+
+`make -C tests check-observability CORE=...` covers the three read-only regions
+of ABI 1.7. Every assertion has an oracle that does not reimplement the core:
+
+- **Journal.** The event *count* was already exposed through another path
+  (`raster_event_count` in the frame delta). Both numbers come from the same
+  source, so if they disagree one of the two is reading it wrong. And a journal
+  is a diary: its lines cannot run backwards.
+- **Frame hash.** The issue's own acceptance criterion — the region's
+  `video_hash` must equal the hash computed *outside* over the frame that
+  arrives through `video_refresh`. Same algorithm, same seed, two
+  implementations.
+- **Palette.** The table must **explain the frame**: every colour in the emitted
+  image must appear in it. A stale, truncated or wrong-format table breaks that
+  property, and asserting it needs none of the 9-bit conversion the region
+  exists to avoid.
+
+All three must answer `NOT_SUBSCRIBED` without a subscription.
+
+The test uses two fixtures, and the reason is something it found. The palette is
+the **current** table, not one per line: in the standard ROM the H-int handler
+writes CRAM mid-frame, so the image carries colours from several tables and the
+final one cannot explain them all — 8 of 11 distinct colours had no entry. That
+is not a defect (the per-line case is `LINE_CRAM`), but it is a property that
+has to be measured where it holds, so the palette check runs on the S/H fixture,
+which has no H-int. The contract is now written down in `ayther_api.h` and in
+`docs/ayther_abi_v1.md` instead of being folklore.

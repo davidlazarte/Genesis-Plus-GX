@@ -620,6 +620,20 @@ static uint8 lut[LUT_MAX][LUT_SIZE];
 
 /* Output pixel data look-up tables*/
 static PIXEL_OUT_T pixel[0x100];
+
+#ifdef AYTHER_EXTENSIONS
+/* #39.E: la tabla de color YA resuelta -- conversion 9-bit al formato del
+   build, con shadow y highlight aplicados-, indexada por el byte del line
+   buffer. La arma `color_update_m5` para dibujar; exponerla no cuesta nada y
+   evita que el frontend rehaga la misma regla con su propia copia.
+
+   El ancho de la entrada depende de con que formato se compilo el core, asi
+   que se informa en vez de asumirse: un consumidor que hardcodee 2 bytes
+   lee mal un build de 32 bpp sin ningun sintoma que lo delate. */
+const void *ayther_palette_data(void)     { return (const void *)pixel; }
+unsigned    ayther_palette_entry_size(void) { return (unsigned)sizeof(pixel[0]); }
+unsigned    ayther_palette_entries(void)  { return (unsigned)(sizeof(pixel) / sizeof(pixel[0])); }
+#endif
 static PIXEL_OUT_T pixel_lut[3][0x200];
 static PIXEL_OUT_T pixel_lut_m4[0x40];
 

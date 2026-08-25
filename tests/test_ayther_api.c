@@ -60,9 +60,11 @@ int main(void)
         "ABI 1.4 is a minor bump over 1.3");
   CHECK(AYTHER_ABI_VERSION_1_5 == UINT32_C(0x00010005),
         "ABI 1.5 is a minor bump over 1.4");
+  CHECK(AYTHER_ABI_VERSION_1_7 == UINT32_C(0x00010007),
+        "ABI 1.7 keeps its encoding");
   CHECK(AYTHER_ABI_VERSION_1_6 == UINT32_C(0x00010006),
         "ABI 1.6 is a minor bump over 1.5");
-  CHECK(AYTHER_ABI_VERSION_LATEST == AYTHER_ABI_VERSION_1_6,
+  CHECK(AYTHER_ABI_VERSION_LATEST == AYTHER_ABI_VERSION_1_7,
         "latest ABI is 1.6");
 
   /* #30: la 1.4 es ADITIVA. Lo que hay que fijar no es que los campos nuevos
@@ -111,10 +113,13 @@ int main(void)
   CHECK(AYTHER_STATUS_RC_JOURNAL_OVERFLOW == -24 &&
         AYTHER_RC_ERR_JOURNAL_OVERFLOW == -5,
         "the journal-overflow status codes are stable");
-  CHECK(AYTHER_REGION_COUNT == 22, "every region is inventoried");
+  CHECK(AYTHER_REGION_COUNT == 25, "every region is inventoried");
   /* #41/#39: la region nueva va al FINAL del enum. Meterla en el medio
      correria los ids de todas las siguientes, y los ids viajan por la ABI. */
-  CHECK(AYTHER_REGION_LINE_CELLS == AYTHER_REGION_COUNT - 1 &&
+  CHECK(AYTHER_REGION_PALETTE == AYTHER_REGION_COUNT - 1 &&
+        AYTHER_REGION_FRAME_HASH == AYTHER_REGION_PALETTE - 1 &&
+        AYTHER_REGION_RASTER_JOURNAL == AYTHER_REGION_FRAME_HASH - 1 &&
+        AYTHER_REGION_LINE_CELLS == AYTHER_REGION_RASTER_JOURNAL - 1 &&
         AYTHER_REGION_LINE_CRAM == AYTHER_REGION_LINE_CELLS - 1 &&
         AYTHER_REGION_LINE_REGS == AYTHER_REGION_LINE_CRAM - 1 &&
         AYTHER_REGION_SYSTEM == AYTHER_REGION_LINE_REGS - 1 &&
@@ -171,13 +176,27 @@ int main(void)
         "capability bits added after v1 keep their positions");
   /* #42: dos bits nuevos al final. Los ocho de antes no se mueven: los ids de
      suscripcion viajan por la ABI igual que los de region. */
-  CHECK(AYTHER_SUB_ALL == UINT32_C(0x7FF),
+  CHECK(AYTHER_SUB_ALL == UINT32_C(0xFFF),
         "all subscription bits are accounted for");
   CHECK(AYTHER_SUB_LINE_STATE == (UINT32_C(1) << 8) &&
         AYTHER_SUB_LINE_CRAM == (UINT32_C(1) << 9) &&
         AYTHER_SUB_LINE_CELLS == (UINT32_C(1) << 10) &&
-        AYTHER_SUB_ATTRIBUTION == (UINT32_C(1) << 7),
+        AYTHER_SUB_ATTRIBUTION == (UINT32_C(1) << 7) &&
+        AYTHER_SUB_FRAME_HASH == (UINT32_C(1) << 11),
         "subscription bits are append-only");
+  /* #39.A/D/E: las tres regiones nuevas y sus tamanios. El journal es el
+     unico con un array adentro, y su tope tiene que seguir siendo el mismo
+     que el del core: si uno de los dos crece sin el otro, la region entrega
+     menos eventos de los que hubo y nadie se entera. */
+  CHECK(AYTHER_JOURNAL_MAX_EVENTS == 256 &&
+        sizeof(ayther_journal_event_v1) == 8 &&
+        sizeof(ayther_journal_v1) == 16 + 256 * 8,
+        "the journal region keeps its size");
+  CHECK(sizeof(ayther_frame_hash_v1) == 56 &&
+        AYTHER_PALETTE_ENTRIES == 256,
+        "frame hash and palette keep their layout");
+  CHECK(AYTHER_CAP_OBSERVABILITY_V1 == (UINT64_C(1) << 18),
+        "the observability capability keeps its bit");
   /* #42.C: el par de celdas se entrega tal como el renderer lo cargo, que en
      little-endian significa con los bytes dados vuelta. Congelar el tamanio
      evita que una entrada crezca sin bump. */

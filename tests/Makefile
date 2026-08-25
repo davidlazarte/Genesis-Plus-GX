@@ -57,6 +57,7 @@ IDLE_METRICS_BIN := $(BUILD_DIR)/idle_metrics$(EXE_EXT)
 ATTRIB_SCENE_BIN := $(BUILD_DIR)/attribution_scene$(EXE_EXT)
 PLANE_SUP_BIN := $(BUILD_DIR)/plane_suppress$(EXE_EXT)
 MULTILAYER_BIN := $(BUILD_DIR)/multilayer$(EXE_EXT)
+OBSERVABILITY_BIN := $(BUILD_DIR)/observability$(EXE_EXT)
 SCENES_BIN := $(BUILD_DIR)/scenes$(EXE_EXT)
 LINE_STATE_BIN := $(BUILD_DIR)/line_state$(EXE_EXT)
 SCENES_GOLDEN := ayther/golden/scenes.txt
@@ -89,6 +90,7 @@ PROFILE_COMPARISON := $(ARTIFACT_DIR)/feature_gate_profiles.json
 .PHONY: all check check-unit check-concurrency check-determinism \
 	check-full-core check-profile-comparison raster-rom-probe \
 	full-core-replay check-idle-metrics check-attribution-scene check-plane-suppress check-multilayer \
+	check-observability \
 	regen-multilayer check-scenes regen-scenes check-line-state clean
 
 all: $(UNIT_BIN) $(CONCURRENCY_BIN) $(API_BIN) $(RASTER_BIN) \
@@ -220,6 +222,18 @@ $(MULTILAYER_BIN): ayther/multilayer.c ayther/generated_rom.c \
 		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include \
 		-Iayther -o $@ ayther/multilayer.c ayther/generated_rom.c \
 		$(LDFLAGS) $(ROM_PROBE_LIBS)
+
+$(OBSERVABILITY_BIN): ayther/observability.c ayther/generated_rom.c \
+		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther \
+		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include \
+		-Iayther -o $@ ayther/observability.c ayther/generated_rom.c \
+		$(LDFLAGS) $(ROM_PROBE_LIBS)
+
+# #39 A/D/E: journal raster, hashes del frame y paleta resuelta.
+check-observability: $(OBSERVABILITY_BIN)
+	$(call require_core)
+	$(OBSERVABILITY_BIN) "$(CORE)"
 
 # #37.6: las cinco capas de recompose_multilayer, pixel por pixel.
 check-multilayer: $(MULTILAYER_BIN)

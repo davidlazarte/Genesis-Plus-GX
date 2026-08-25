@@ -60,7 +60,7 @@ static uint8 ayther_rc_effective_mask(unsigned int flags)
                                                       : ayther_layer_mask);
 }
 
-/* Cache MULTICAPA (#406). El de arriba es de `ayther_recompose_frame` y
+/* Cache MULTICAPA (tracker viejo 406). El de arriba es de `ayther_recompose_frame` y
  * multilayer no lo tocaba: pedir el mismo frame dos veces costaba lo mismo las
  * dos veces (medido desde el frontend: 0,28 → 0,29 ms). El frontend hace
  * exactamente eso cada vez que el emulador esta en pausa y la UI repinta.
@@ -463,7 +463,7 @@ int ayther_core_recompose_multilayer(
   if (ayther_raster_journal_dropped > 0)
     return AYTHER_RC_ERR_JOURNAL_OVERFLOW;
 
-  /* ---- cache (#406): mismo frame, misma configuracion ---- */
+  /* ---- cache (tracker viejo 406): mismo frame, misma configuracion ---- */
   {
     const uint8 want = (uint8)((out_bg_a     ? AYTHER_ML_A    : 0) |
                                (out_bg_b     ? AYTHER_ML_B    : 0) |
@@ -677,7 +677,7 @@ int ayther_core_recompose_multilayer(
   }
   ayther_render_ctx_restore(&ctx, 0);
 
-  /* ---- guardar en el cache (#406) ----
+  /* ---- guardar en el cache (tracker viejo 406) ----
      Si la clave cambio, lo guardado antes ya no vale y `have` arranca de cero:
      acumular sobre datos de otro frame es exactamente el bug que este cache
      podria introducir. Si la clave es la misma, se SUMAN las capas nuevas a las

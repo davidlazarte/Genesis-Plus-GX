@@ -62,7 +62,7 @@ extern uint8 ALIGNED_(4) sat[0x400];
 extern uint8 ALIGNED_(4) vram[0x10000];
 extern uint8 ALIGNED_(4) cram[0x80];
 extern uint8 ALIGNED_(4) vsram[0x80];
-extern uint8 border;   /* AYTHER (#12C): indice de color del borde */
+extern uint8 border;   /* AYTHER (tracker viejo 12C): indice de color del borde */
 #ifdef AYTHER_EXTENSIONS
 /* AYTHER (#27): tablas de layout del playfield/hscroll. Las usa el raster
    replay para recalcular el estado derivado de un cambio de registro con las
@@ -93,7 +93,7 @@ extern uint8 hscroll_mask;
 /* AYTHER (#5/#274): bitmask transiente de motivos de fallback por frame.
    Se expone por el id privado 0x10E; `> 0` conserva el contrato booleano. */
 extern uint32 ayther_raster_dirty;
-/* AYTHER (#405): espejo acumulativo de `bg_name_dirty` para el frontend. El
+/* AYTHER (tracker viejo 405): espejo acumulativo de `bg_name_dirty` para el frontend. El
    original lo limpia `update_bg_pattern_cache()` a mitad del frame, así que
    nunca llegaba nada al otro lado; este sólo lo limpia el poll del frontend
    (ayther_poll_frame_delta_v1). Ver el comentario largo en vdp_ctrl.c. */

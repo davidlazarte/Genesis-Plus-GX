@@ -1,6 +1,6 @@
 /* #37.6: las cinco capas de `recompose_multilayer`, pixel por pixel.
  *
- * La funcion existe desde #12C y hasta hoy nadie habia mirado lo que DEVUELVE.
+ * La funcion existe desde tracker viejo 12C y hasta hoy nadie habia mirado lo que DEVUELVE.
  * El unico test que la llamaba -- full_core_replay-- pide dos capas y verifica
  * otra cosa: que recomponer no perturbe la emulacion. Que las capas contengan
  * lo que dicen contener no estaba afirmado en ningun lado.

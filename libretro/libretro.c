@@ -5024,7 +5024,7 @@ static int32_t AYTHER_CALL ayther_poll_frame_delta_v1(
    out->raster_events_dropped = (uint32_t)ayther_raster_journal_dropped;
    out->parsed_sprite_count = ayther_sprite_n;
    out->audio_write_count = ayther_audio_write_n;
-   /* AYTHER (#405): del espejo ACUMULATIVO, no de `bg_name_dirty`. Al original
+   /* AYTHER (tracker viejo 405): del espejo ACUMULATIVO, no de `bg_name_dirty`. Al original
       lo limpia `update_bg_pattern_cache()` línea por línea DENTRO del frame, y
       para cuando el frontend puede preguntar ya está vacío — medido desde el
       Engine: 0 patterns marcados en 240 frames contra 711 que habían cambiado.

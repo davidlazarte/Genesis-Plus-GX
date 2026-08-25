@@ -47,7 +47,7 @@ static int8 do_not_invalidate_tile_cache;
 
 static void vdp_set_all_vram(const uint8 *src);
 
-/* AYTHER (#405): el espejo ACUMULATIVO de bg_name_dirty.
+/* AYTHER (tracker viejo 405): el espejo ACUMULATIVO de bg_name_dirty.
 
    `bg_name_dirty` no sirve para contarle al frontend qué cambió en el frame:
    `update_bg_pattern_cache()` lo va limpiando pattern por pattern DENTRO de
@@ -152,7 +152,7 @@ uint32 fifo_cycles[4];            /* VDP FIFO read-out cycles */
    conservan su comportamiento. Se reinicia automáticamente por frame. */
 #ifdef AYTHER_EXTENSIONS
 uint32 ayther_raster_dirty = 0;
-/* AYTHER (#12C): journal de eventos raster del frame — (linea, motivo,
+/* AYTHER (tracker viejo 12C): journal de eventos raster del frame — (linea, motivo,
    direccion, dato) de cada escritura que cambio algo VISIBLE a mitad de
    pantalla. Insumo del raster replay: recomponer respetando los splits en
    vez de tomar solo el estado final del VDP. */
@@ -201,7 +201,7 @@ const uint8 shift_table[]        = { 6, 7, 0, 8 };
 const uint8 col_mask_table[]     = { 0x0F, 0x1F, 0x0F, 0x3F };
 const uint16 row_mask_table[]    = { 0x0FF, 0x1FF, 0x2FF, 0x3FF };
 
-/* AYTHER (#12C): deja de ser static — el raster replay de ayther_core.c
+/* AYTHER (tracker viejo 12C): deja de ser static — el raster replay de ayther_core.c
    necesita saber si el color que cambio a mitad de frame es el del BORDE
    (se actualiza distinto). Mismo criterio que reg/sat/vram/cram/vsram, que
    ya viven expuestos en vdp_ctrl.h por la misma razon. */
@@ -448,12 +448,12 @@ void vdp_ayther_begin_frame(void)
 {
   ayther_core_frame_generation++;
   ayther_raster_dirty = 0;
-  /* AYTHER (#405): el journal es de ESTE frame, igual que `ayther_raster_dirty`
+  /* AYTHER (tracker viejo 405): el journal es de ESTE frame, igual que `ayther_raster_dirty`
      de la línea de arriba — y hasta acá no se reiniciaba en ningún lado. Se
      llenaba hasta su tope de AYTHER_RASTER_JOURNAL_MAX en los primeros frames y
      se quedaba ahí para siempre: medido desde el Engine, `raster_event_count`
      daba 256 fijo desde el primer frame observado y no bajaba nunca. El replay
-     de #12C (ayther_core_recompose_multilayer) estaba, por lo tanto, aplicando
+     de tracker viejo 12C (ayther_core_recompose_multilayer) estaba, por lo tanto, aplicando
      eventos fósiles del arranque a cada línea que recomponía. */
   ayther_raster_journal_count = 0;
   ayther_raster_journal_dropped = 0;
@@ -524,7 +524,7 @@ void vdp_reset(void)
     memset((char *)bg_name_dirty, 0, sizeof(bg_name_dirty));
     memset((char *)bg_name_list, 0, sizeof(bg_name_list));
 #ifdef AYTHER_EXTENSIONS
-    /* AYTHER (#405): la VRAM se acaba de poner en cero (arriba). Para el
+    /* AYTHER (tracker viejo 405): la VRAM se acaba de poner en cero (arriba). Para el
        frontend eso es un cambio de los 2048 patterns, no una limpieza. */
     memset((char *)ayther_vram_dirty, 0xFF, sizeof(ayther_vram_dirty));
 #endif
@@ -870,7 +870,7 @@ int vdp_context_load(uint8 *state)
       bg_name_dirty[i] = 0xFF;
     }
 #ifdef AYTHER_EXTENSIONS
-    /* AYTHER (#405): acá se copió la VRAM ENTERA, no los tiles del cache. El
+    /* AYTHER (tracker viejo 405): acá se copió la VRAM ENTERA, no los tiles del cache. El
        frontend tiene que enterarse de todo, no de `bg_list_index` patterns. */
     memset((char *)ayther_vram_dirty, 0xFF, sizeof(ayther_vram_dirty));
 #endif

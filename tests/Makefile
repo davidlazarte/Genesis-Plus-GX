@@ -52,6 +52,7 @@ STATE_LAYOUT_BIN := $(BUILD_DIR)/state_layout$(EXE_EXT)
 AUDIO_CTRL_BIN := $(BUILD_DIR)/audio_controls$(EXE_EXT)
 FRAME_DELTA_BIN := $(BUILD_DIR)/frame_delta$(EXE_EXT)
 IDLE_METRICS_BIN := $(BUILD_DIR)/idle_metrics$(EXE_EXT)
+ATTRIB_SCENE_BIN := $(BUILD_DIR)/attribution_scene$(EXE_EXT)
 TRACE_BIN := $(BUILD_DIR)/audio_probe_trace$(EXE_EXT)
 TRACE_GOLDEN := ayther/golden/audio_probe_trace.json
 TRACE_ACTUAL := $(ARTIFACT_DIR)/audio_probe_trace.actual.json
@@ -80,7 +81,7 @@ PROFILE_COMPARISON := $(ARTIFACT_DIR)/feature_gate_profiles.json
 
 .PHONY: all check check-unit check-concurrency check-determinism \
 	check-full-core check-profile-comparison raster-rom-probe \
-	full-core-replay check-idle-metrics clean
+	full-core-replay check-idle-metrics check-attribution-scene clean
 
 all: $(UNIT_BIN) $(CONCURRENCY_BIN) $(API_BIN) $(RASTER_BIN) \
 	$(SPRITE_CAPTURE_BIN) $(TRACE_BIN)
@@ -179,6 +180,27 @@ $(IDLE_METRICS_BIN): ayther/idle_metrics.c ayther/generated_rom.c 		ayther/gener
 check-idle-metrics: $(IDLE_METRICS_BIN)
 	$(call require_core)
 	$(IDLE_METRICS_BIN) "$(CORE)"
+
+$(ATTRIB_SCENE_BIN): ayther/attribution_scene.c ayther/generated_rom.c 		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther 		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include 		-Iayther -o $@ ayther/attribution_scene.c ayther/generated_rom.c 		$(LDFLAGS) $(ROM_PROBE_LIBS)
+
+# #41: la region de atribucion con una suscripcion que pide SOLO atribucion.
+check-attribution-scene: $(ATTRIB_SCENE_BIN)
+	$(call require_core)
+	$(ATTRIB_SCENE_BIN) "$(CORE)"
+
+$(FRAME_DELTA_BIN): ayther/frame_delta.c ayther/generated_rom.c \
+		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther \
+		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include \
+		-Iayther -o $@ ayther/frame_delta.c ayther/generated_rom.c \
+		$(LDFLAGS) $(ROM_PROBE_LIBS)
+
+# #30: necesita el core real. Lo que se verifica es que dos lecturas del
+# mismo frame devuelvan lo mismo, y eso solo lo contesta el binario.
+check-frame-delta: $(FRAME_DELTA_BIN)
+	$(call require_core)
+	$(FRAME_DELTA_BIN) "$(CORE)"
 
 full-core-replay: $(FULL_CORE_BIN)
 

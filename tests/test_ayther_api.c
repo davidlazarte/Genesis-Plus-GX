@@ -56,8 +56,24 @@ int main(void)
         "ABI 1.2 is a minor bump over 1.1");
   CHECK(AYTHER_ABI_VERSION_1_3 == UINT32_C(0x00010003),
         "ABI 1.3 is a minor bump over 1.2");
-  CHECK(AYTHER_ABI_VERSION_LATEST == AYTHER_ABI_VERSION_1_3,
-        "latest ABI is 1.3");
+  CHECK(AYTHER_ABI_VERSION_1_4 == UINT32_C(0x00010004),
+        "ABI 1.4 is a minor bump over 1.3");
+  CHECK(AYTHER_ABI_VERSION_LATEST == AYTHER_ABI_VERSION_1_4,
+        "latest ABI is 1.4");
+
+  /* #30: la 1.4 es ADITIVA. Lo que hay que fijar no es que los campos nuevos
+     existan -- eso lo dice el compilador-- sino que los viejos NO se movieron:
+     un consumidor compilado contra 1.0 lee por offset, y si `frame_delta_since`
+     hubiera entrado en el medio del descriptor leeria basura sin enterarse. */
+  CHECK(offsetof(ayther_interface_v1, frame_delta_since) >
+        offsetof(ayther_interface_v1, recompose_multilayer),
+        "frame_delta_since va DESPUES de todo lo de 1.3");
+  CHECK(AYTHER_STATUS_DELTA_HISTORY_LOST == -10,
+        "DELTA_HISTORY_LOST no pisa ningun status previo");
+  CHECK(AYTHER_CAP_FRAME_DELTA_SINCE_V1 == (UINT64_C(1) << 14),
+        "la capability de 1.4 usa un bit libre");
+  CHECK(AYTHER_FRAME_DELTA_HISTORY == 8,
+        "el ring guarda 8 generaciones");
   CHECK(AYTHER_ABI_VERSION_MAJOR(AYTHER_ABI_VERSION_1_1) == 1 &&
         AYTHER_ABI_VERSION_MINOR(AYTHER_ABI_VERSION_1_1) == 1,
         "major/minor accessors split the version");

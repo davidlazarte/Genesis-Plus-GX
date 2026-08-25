@@ -172,6 +172,30 @@ static bool is_running = 0;
 #ifdef AYTHER_EXTENSIONS
 static bool ayther_content_loaded = false;
 static bool ayther_frame_active = false;
+
+/* #30: el delta era consume-on-poll -- leerlo lo vaciaba--, asi que solo servia
+   para UN consumidor por frame. Con el Lab de debug y el motor HD leyendo el
+   mismo frame, el segundo recibia un bitmap vacio y no invalidaba sus assets.
+   No es un caso raro: es el uso previsto.
+
+   Doble buffer: lo que se acumula durante el frame se CONGELA al terminarlo, y
+   la lectura devuelve el congelado sin tocarlo. Leerlo N veces da lo mismo N
+   veces. Ademas cada frame entra en un ring, para que `frame_delta_since`
+   pueda contestar "que cambio desde la generacion X". */
+static uint8_t ayther_delta_frozen[2048];
+static uint8_t ayther_delta_ring[AYTHER_FRAME_DELTA_HISTORY][2048];
+static uint64_t ayther_delta_ring_gen[AYTHER_FRAME_DELTA_HISTORY];
+static bool ayther_delta_ring_valid[AYTHER_FRAME_DELTA_HISTORY];
+
+static void ayther_delta_freeze(uint64_t completed_generation)
+{
+   size_t slot = (size_t)(completed_generation % AYTHER_FRAME_DELTA_HISTORY);
+   memcpy(ayther_delta_frozen, ayther_vram_dirty, sizeof(ayther_delta_frozen));
+   memcpy(ayther_delta_ring[slot], ayther_vram_dirty, sizeof(ayther_delta_frozen));
+   ayther_delta_ring_gen[slot] = completed_generation;
+   ayther_delta_ring_valid[slot] = true;
+   memset(ayther_vram_dirty, 0, sizeof(ayther_vram_dirty));
+}
 static uint64_t ayther_frame_generation = 0;
 static uint64_t ayther_snapshot_generation = 1;
 #endif
@@ -201,6 +225,13 @@ static void ayther_invalidate_snapshot(void)
    ayther_clear_frame_capture();
    ayther_raster_dirty = 0;
    ayther_snapshot_generation++;
+
+   /* #30: esto es lo que el consume-on-poll compraba y hay que conservar. Un
+      unserialize puede cambiar la VRAM ENTERA sin que corra un solo frame, y
+      vdp_ctrl.c marca todo sucio al cargar el contexto. Sin esto, el consumidor
+      no se enteraria hasta el proximo end_frame y pintaria un frame con assets
+      viejos. El congelado se actualiza sin esperar al fin de frame. */
+   memcpy(ayther_delta_frozen, ayther_vram_dirty, sizeof(ayther_delta_frozen));
 }
 
 static void ayther_reset_session(bool content_loaded)
@@ -222,6 +253,9 @@ static void ayther_begin_frame(void)
 static void ayther_end_frame(void)
 {
    ayther_frame_active = false;
+   /* Se congela ANTES de incrementar: el bitmap pertenece al frame que acaba
+      de correr, no al que viene. */
+   ayther_delta_freeze(ayther_frame_generation);
    ayther_frame_generation++;
    ayther_snapshot_generation++;
 }
@@ -4515,13 +4549,47 @@ static int32_t AYTHER_CALL ayther_poll_frame_delta_v1(
       para cuando el frontend puede preguntar ya está vacío — medido desde el
       Engine: 0 patterns marcados en 240 frames contra 711 que habían cambiado.
 
-      CONSUME-ON-POLL: leer el delta lo vacía, así el poll siguiente trae lo
-      ensuciado DESDE ESTE. Eso lo hace válido para UN consumidor por frame, que
-      es el contrato del resto de la ABI (un hilo de emulación, un frontend), y
-      a cambio el dato sobrevive a un unserialize — donde la VRAM puede cambiar
-      entera sin que haya corrido un solo frame. */
-   memcpy(out->dirty_patterns, ayther_vram_dirty, sizeof(out->dirty_patterns));
-   memset(ayther_vram_dirty, 0, sizeof(ayther_vram_dirty));
+      #30: ya NO se consume al leer. Devuelve el bitmap CONGELADO del ultimo
+      frame terminado, sin tocarlo, asi que dos consumidores del mismo frame
+      reciben lo mismo. Antes el segundo recibia cero. */
+   memcpy(out->dirty_patterns, ayther_delta_frozen, sizeof(out->dirty_patterns));
+
+   return AYTHER_STATUS_OK;
+}
+
+/* #30: todo lo ensuciado desde `generation_from` inclusive. */
+static int32_t AYTHER_CALL ayther_frame_delta_since_v1(
+      uint64_t generation_from, ayther_frame_delta_v1 *out, uint32_t out_size)
+{
+   size_t i;
+   uint64_t oldest;
+   int32_t status;
+
+   status = ayther_poll_frame_delta_v1(out, out_size);
+   if (status != AYTHER_STATUS_OK)
+      return status;
+
+   oldest = (ayther_frame_generation > (uint64_t)AYTHER_FRAME_DELTA_HISTORY)
+      ? (ayther_frame_generation - (uint64_t)AYTHER_FRAME_DELTA_HISTORY)
+      : 0u;
+
+   if (generation_from < oldest)
+   {
+      /* Conservador a proposito: TODO sucio. Devolver el subconjunto que si
+         esta en el ring seria peor que inutil -- el consumidor creeria que vio
+         todo lo que cambio y dejaria assets viejos en pantalla. */
+      memset(out->dirty_patterns, 0xFF, sizeof(out->dirty_patterns));
+      return AYTHER_STATUS_DELTA_HISTORY_LOST;
+   }
+
+   for (i = 0; i < AYTHER_FRAME_DELTA_HISTORY; i++)
+   {
+      size_t b;
+      if (!ayther_delta_ring_valid[i] || ayther_delta_ring_gen[i] < generation_from)
+         continue;
+      for (b = 0; b < sizeof(out->dirty_patterns); b++)
+         out->dirty_patterns[b] |= ayther_delta_ring[i][b];
+   }
 
    return AYTHER_STATUS_OK;
 }
@@ -4546,7 +4614,7 @@ static int32_t AYTHER_CALL ayther_get_recompose_stats_v1(
 
 static const ayther_interface_v1 ayther_interface_1 =
 {
-   AYTHER_ABI_VERSION_1_3,
+   AYTHER_ABI_VERSION_1_4,
    sizeof(ayther_interface_v1),
    AYTHER_CAP_LEGACY_MEMORY | AYTHER_CAP_REGION_QUERY |
       AYTHER_CAP_REGION_READ | AYTHER_CAP_CONTROL_WRITE |
@@ -4554,7 +4622,7 @@ static const ayther_interface_v1 ayther_interface_1 =
       AYTHER_CAP_AUDIO_WRITES_V1 | AYTHER_CAP_RASTER_FALLBACK_V1 |
       AYTHER_CAP_RECOMPOSE_V1 | AYTHER_CAP_SUBSCRIPTIONS_V1 |
       AYTHER_CAP_FRAME_DELTA_V1 | AYTHER_CAP_RECOMPOSE_STATS_V1 |
-      AYTHER_CAP_ATTRIBUTION_V1 |
+      AYTHER_CAP_ATTRIBUTION_V1 | AYTHER_CAP_FRAME_DELTA_SINCE_V1 |
       AYTHER_AUDIO_PROBE_CAPABILITY,
    AYTHER_HOST_ENDIANNESS,
    sizeof(void *),
@@ -4583,7 +4651,8 @@ static const ayther_interface_v1 ayther_interface_1 =
    sizeof(ayther_recompose_stats_v1),
    0,
    ayther_get_recompose_stats_v1,
-   ayther_recompose_multilayer_v1
+   ayther_recompose_multilayer_v1,
+   ayther_frame_delta_since_v1
 };
 
 AYTHER_API const ayther_interface_v1 *AYTHER_CALL ayther_get_interface(

@@ -111,10 +111,11 @@ int main(void)
   CHECK(AYTHER_STATUS_RC_JOURNAL_OVERFLOW == -24 &&
         AYTHER_RC_ERR_JOURNAL_OVERFLOW == -5,
         "the journal-overflow status codes are stable");
-  CHECK(AYTHER_REGION_COUNT == 21, "every region is inventoried");
+  CHECK(AYTHER_REGION_COUNT == 22, "every region is inventoried");
   /* #41/#39: la region nueva va al FINAL del enum. Meterla en el medio
      correria los ids de todas las siguientes, y los ids viajan por la ABI. */
-  CHECK(AYTHER_REGION_LINE_CRAM == AYTHER_REGION_COUNT - 1 &&
+  CHECK(AYTHER_REGION_LINE_CELLS == AYTHER_REGION_COUNT - 1 &&
+        AYTHER_REGION_LINE_CRAM == AYTHER_REGION_LINE_CELLS - 1 &&
         AYTHER_REGION_LINE_REGS == AYTHER_REGION_LINE_CRAM - 1 &&
         AYTHER_REGION_SYSTEM == AYTHER_REGION_LINE_REGS - 1 &&
         AYTHER_REGION_ATTRIBUTION == AYTHER_REGION_SYSTEM - 1 &&
@@ -170,12 +171,19 @@ int main(void)
         "capability bits added after v1 keep their positions");
   /* #42: dos bits nuevos al final. Los ocho de antes no se mueven: los ids de
      suscripcion viajan por la ABI igual que los de region. */
-  CHECK(AYTHER_SUB_ALL == UINT32_C(0x3FF),
+  CHECK(AYTHER_SUB_ALL == UINT32_C(0x7FF),
         "all subscription bits are accounted for");
   CHECK(AYTHER_SUB_LINE_STATE == (UINT32_C(1) << 8) &&
         AYTHER_SUB_LINE_CRAM == (UINT32_C(1) << 9) &&
+        AYTHER_SUB_LINE_CELLS == (UINT32_C(1) << 10) &&
         AYTHER_SUB_ATTRIBUTION == (UINT32_C(1) << 7),
         "subscription bits are append-only");
+  /* #42.C: el par de celdas se entrega tal como el renderer lo cargo, que en
+     little-endian significa con los bytes dados vuelta. Congelar el tamanio
+     evita que una entrada crezca sin bump. */
+  CHECK(sizeof(ayther_line_cells_v1) == 264 &&
+        AYTHER_LINE_CELL_COLUMNS == 21,
+        "the per-line cell record is frozen");
   CHECK((AYTHER_SUB_ALL & UINT32_C(0x7F)) == UINT32_C(0x7F) &&
         AYTHER_SUB_ATTRIBUTION == (UINT32_C(1) << 7),
         "the v1 subscription bits keep their positions");

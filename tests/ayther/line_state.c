@@ -52,6 +52,8 @@ static void close_library(library_t l) { dlclose(l); }
 static struct retro_game_info_ext gi_ext;
 static uint8_t regs_buf[64 * 1024];
 static uint8_t cram_buf[64 * 1024];
+static uint8_t cells_buf[256 * 1024];
+static uint8_t vram_copy[0x10000];
 
 static bool env_cb(unsigned cmd, void *data)
 {
@@ -146,7 +148,8 @@ int main(int argc, char **argv)
   }
 
   /* --- 1: el scroll por linea contra la tabla de hscroll ---------------- */
-  api->set_subscriptions(AYTHER_SUB_LINE_STATE | AYTHER_SUB_LINE_CRAM);
+  api->set_subscriptions(AYTHER_SUB_LINE_STATE | AYTHER_SUB_LINE_CRAM |
+                         AYTHER_SUB_LINE_CELLS | AYTHER_SUB_VDP_MEMORY);
   for (f = 0; f < FRAMES; f++) p_run();
 
   memset(&info, 0, sizeof(info));
@@ -229,6 +232,18 @@ int main(int argc, char **argv)
   }
   api->read_region(AYTHER_REGION_LINE_CRAM, 0, cram_buf, info.byte_size,
                    AYTHER_GENERATION_ANY, NULL);
+
+  memset(&info, 0, sizeof(info));
+  api->query_region(AYTHER_REGION_LINE_CELLS, &info, sizeof(info));
+  if (!info.byte_size || info.byte_size > sizeof(cells_buf)) {
+    printf("  FALLA: region de celdas por linea inesperada (%u B)\n",
+           (unsigned)info.byte_size);
+    close_library(lib); return 1;
+  }
+  api->read_region(AYTHER_REGION_LINE_CELLS, 0, cells_buf, info.byte_size,
+                   AYTHER_GENERATION_ANY, NULL);
+  api->read_region(AYTHER_REGION_VRAM, 0, vram_copy, sizeof(vram_copy),
+                   AYTHER_GENERATION_ANY, NULL);
   close_library(lib);
 
   {
@@ -267,6 +282,83 @@ int main(int argc, char **argv)
                "significa que la captura no ve el efecto raster\n");
         fail = 1;
       }
+    }
+  }
+
+  /* --- 4: la procedencia por celda contra la VRAM ---------------------- */
+  /* Cada entrada de LINE_CELLS es el PAR de words de la name table que el VDP
+     leyó para esa columna. El test recalcula la dirección desde cero —con el
+     scroll que LINE_REGS publica y las bases resueltas— y la compara contra la
+     VRAM que lee por su cuenta. Si las dos coinciden, la región no está
+     inventando: dice exactamente lo que el renderer consumió. */
+  {
+    const ayther_line_header_v1 *hr = (const ayther_line_header_v1 *)regs_buf;
+    const ayther_line_regs_v1 *r =
+      (const ayther_line_regs_v1 *)(regs_buf + sizeof(*hr));
+    const ayther_line_header_v1 *hc = (const ayther_line_header_v1 *)cells_buf;
+    const ayther_line_cells_v1 *cl =
+      (const ayther_line_cells_v1 *)(cells_buf + sizeof(*hc));
+    unsigned line, checked = 0, bad = 0, first = 0;
+
+    printf("celdas por linea: %u lineas, entrada de %u B\n",
+           (unsigned)hc->lines, (unsigned)hc->entry_size);
+    if (hc->entry_size != sizeof(ayther_line_cells_v1)) {
+      printf("  FALLA: cabecera de celdas inconsistente\n"); fail = 1;
+    }
+
+    for (line = 1; line < hc->lines && line < hr->lines && line < 224u; ++line)
+    {
+      /* Plano B. El plano del fixture es de 64x32 celdas (reg 16 = 0x01), asi
+         que una fila ocupa 128 bytes -- de ahi el << 7-- y el scroll vertical se
+         enmascara en PIXELES, no en celdas.
+
+         Cuando hay desplazamiento fino, el renderer dibuja una columna de mas
+         ANTES de la primera, con el indice previo: es como el VDP resuelve un
+         scroll que no cae en un borde de celda. La captura la incluye, y el
+         oraculo tiene que empezar en el mismo lugar. */
+      unsigned v_line = (line + r[line].yscroll_b) & 0xFFu;
+      unsigned base = r[line].ntbb + (((v_line >> 3) << 7) & 0x1FC0u);
+      /* La name table se recorre de a PARES de celdas -- el VDP la lee de a 32
+         bits-, asi que la mascara de columna cuenta pares: 32 en un plano de 64
+         celdas de ancho, no 64. Usar 0x3F daba direcciones del doble. */
+      unsigned index = 32u - ((r[line].xscroll_b >> 4) & 0x1Fu);
+      unsigned col;
+
+      if (cl[line].shift_b) index -= 1u;
+
+      for (col = 0; col < cl[line].cols_b && col < 21u; ++col)
+      {
+        unsigned addr = base + (((index + col) & 0x1Fu) << 2);
+        /* La region declara WORD_SWAPPED_LE: el par es la carga nativa de 32
+           bits sobre una VRAM que en little-endian esta con los bytes dados
+           vuelta. El oraculo la arma igual, o compararia contra otro valor. */
+        uint32_t expected = (uint32_t)vram_copy[addr] |
+                            ((uint32_t)vram_copy[addr + 1] << 8) |
+                            ((uint32_t)vram_copy[addr + 2] << 16) |
+                            ((uint32_t)vram_copy[addr + 3] << 24);
+        ++checked;
+        if (cl[line].name_b[col] != expected)
+        {
+          if (bad < 4)
+            fprintf(stderr, "  linea %u col %u: %08x contra %08x "
+                    "(shift=%u xs=%u ys=%u cols=%u)\n",
+                    line, col, cl[line].name_b[col], expected,
+                    cl[line].shift_b, r[line].xscroll_b, r[line].yscroll_b,
+                    cl[line].cols_b);
+          if (!bad) first = line;
+          ++bad;
+        }
+      }
+    }
+    if (!checked) {
+      printf("  FALLA: no se comparo ninguna celda\n"); fail = 1;
+    } else if (bad) {
+      printf("  FALLA: %u de %u celdas no coinciden con la VRAM; la primera en "
+             "la linea %u\n", bad, checked, first);
+      fail = 1;
+    } else {
+      printf("las %u celdas del plano B coinciden con la VRAM leida aparte\n",
+             checked);
     }
   }
 

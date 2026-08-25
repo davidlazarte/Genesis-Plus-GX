@@ -138,6 +138,7 @@ extern ayther_line_regs_v1 ayther_line_regs[AYTHER_LINE_MAX];
 extern uint8 ayther_line_cram[AYTHER_LINE_MAX][128];
 extern uint32 ayther_line_count;
 extern uint32 ayther_line_flags;
+extern ayther_line_cells_v1 ayther_line_cells[AYTHER_LINE_MAX];
 void ayther_line_state_begin_frame(void);
 extern uint8 ayther_tile_suppress[512];    /* celdas de tile suprimidas (id 0x104, 64x64) */
 extern uint8 ayther_plane_tile_suppress[3 * 1024]; /* tiles de plano suprimidos (id 0x105) */

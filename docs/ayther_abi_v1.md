@@ -59,7 +59,7 @@ frame, so two consumers of the same frame read the same thing. Before, the
 second one read zero. |
 | 1.2 | **Additive.** Appends `recompose_multilayer` to the descriptor and adds the `AYTHER_REGION_WORD_SWAPPED_LE` region flag (#32). The standalone `ayther_recompose_multilayer` export is now **deprecated** and is emitted only in the legacy profile. |
 | 1.5 | **Additive.** Adds the `SYSTEM` region and `AYTHER_CAP_SYSTEM_V1` (#39.B), plus the `AYTHER_STATUS_UNSUPPORTED_MODE` status and `AYTHER_CAP_MODE4_CONTROLS` (#40). No existing field moved. Controls that only exist in Mode 5 now say so instead of accepting the write and doing nothing. |
-| 1.6 | **Additive.** Adds the `LINE_REGS` and `LINE_CRAM` regions, the `AYTHER_SUB_LINE_STATE` / `AYTHER_SUB_LINE_CRAM` subscriptions and `AYTHER_CAP_LINE_STATE_V1` (#42). `AYTHER_SUB_ALL` widens from `0xFF` to `0x3FF`; the eight existing bits keep their positions. |
+| 1.6 | **Additive.** Adds the `LINE_REGS`, `LINE_CRAM` and `LINE_CELLS` regions, the `AYTHER_SUB_LINE_STATE` / `AYTHER_SUB_LINE_CRAM` / `AYTHER_SUB_LINE_CELLS` subscriptions and `AYTHER_CAP_LINE_STATE_V1` (#42). `AYTHER_SUB_ALL` widens from `0xFF` to `0x7FF`; the eight existing bits keep their positions. |
 
 Two earlier changes were shipped inside 1.0 without a bump, which is what this
 table exists to prevent from recurring:
@@ -493,6 +493,27 @@ The capture lives in the observed clone of `render_bg_m5*` and runs only under
 subscription: with no subscribers, nothing executes. The `-DAYTHER_METRICS`
 counters confirm it, and the CRAM copy is skipped entirely until the palette
 actually changes.
+
+### Per-cell provenance (`LINE_CELLS`)
+
+`LINE_CELLS` says, for each 16-pixel column of each line, **which name-table
+entry** the VDP read and **which row of the tile**. That is the last piece the
+cell→tile mapping needs: `LINE_REGS` gives the scroll, `LINE_CELLS` gives the
+entry the scroll landed on, and neither requires the consumer to reimplement the
+core's address arithmetic.
+
+The VDP reads the name table two cells at a time — one 32-bit access — and that
+is what is stored: `name_pair`, the raw value the renderer consumed. Storing
+pairs rather than individual cells is what makes the capture free: the value was
+already in a register.
+
+Row and fine shift are **per line and per plane**, not per column: the renderer
+computes them once. Storing them per column would repeat the same byte 21 times.
+
+The region declares `AYTHER_REGION_WORD_SWAPPED_LE`, because "raw" includes byte
+order: on a little-endian host the core keeps VRAM byte-swapped. Reading the
+region without honouring that flag yields reversed cells with no symptom to give
+it away — which is exactly what the flag exists to prevent.
 
 ### The predicate that decides the clone
 

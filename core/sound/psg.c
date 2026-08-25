@@ -42,6 +42,8 @@
 
 #include "shared.h"
 #include "blip_buf.h"
+/* #43.3: el patron fast/observed y sus atributos, en un solo lugar. */
+#include "ayther/ayther_dual_path.h"
 
 extern int8 audio_hard_disable;
 
@@ -546,15 +548,7 @@ void psg_end_frame(unsigned int clocks)
   }
 }
 
-#if defined(AYTHER_EXTENSIONS) && (defined(__GNUC__) || defined(__clang__))
-#define AYTHER_PSG_INLINE static inline __attribute__((always_inline))
-#define AYTHER_PSG_NOINLINE __attribute__((noinline))
-#else
-#define AYTHER_PSG_INLINE INLINE
-#define AYTHER_PSG_NOINLINE
-#endif
-
-AYTHER_PSG_INLINE void psg_update_impl(unsigned int clocks,
+AYTHER_HOT_INLINE void psg_update_impl(unsigned int clocks,
                                       int ayther_audio_controls)
 {
   int i, timestamp, polarity;
@@ -699,29 +693,10 @@ AYTHER_PSG_INLINE void psg_update_impl(unsigned int clocks,
   }
 }
 
-#ifdef AYTHER_EXTENSIONS
-static AYTHER_PSG_NOINLINE void psg_update_fast_path(unsigned int clocks)
-{
-  psg_update_impl(clocks, 0);
-}
-
-static AYTHER_PSG_NOINLINE void psg_update_observed_path(unsigned int clocks)
-{
-  psg_update_impl(clocks, 1);
-}
-#endif
-
-static void psg_update(unsigned int clocks)
-{
-#ifdef AYTHER_EXTENSIONS
-  if (AYTHER_SUBSCRIBED(AYTHER_SUB_RENDER_CONTROLS))
-    psg_update_observed_path(clocks);
-  else
-    psg_update_fast_path(clocks);
-#else
-  psg_update_impl(clocks, 0);
-#endif
-}
+/* Los controles de audio se resuelven una vez por update, no por sample. */
+AYTHER_DUAL_PATH_STATIC(psg_update, psg_update,
+                        AYTHER_SUBSCRIBED(AYTHER_SUB_RENDER_CONTROLS),
+                        (unsigned int clocks), clocks)
 
 #ifdef SOUND_PROBE
 /* Snapshot the resolved voice of PSG channel 'ch' (0-3): tone period in

@@ -63,6 +63,8 @@ extern sms_ntsc_t *sms_ntsc;
    interno, porque el recompositor tambien los necesita y ya no se compila
    pegado adentro de este archivo. */
 #include "vdp_render_internal.h"
+/* #43.3: el patron fast/observed y sus atributos, en un solo lugar. */
+#include "ayther/ayther_dual_path.h"
 
 
 /* Pixel priority look-up tables information */
@@ -1568,11 +1570,6 @@ static void ayther_attrib_bg(const uint8 *srca, const uint8 *srcb,
 #endif
 
 #ifdef AYTHER_EXTENSIONS
-#if defined(__GNUC__) || defined(__clang__)
-#define AYTHER_NOINLINE __attribute__((noinline))
-#else
-#define AYTHER_NOINLINE
-#endif
 
 /* Fuera de `merge` y sin inlinear a proposito: `merge` es INLINE y se expande en
    cada renderer, asi que meterle este cuerpo adentro engorda todos los sitios de
@@ -2286,11 +2283,6 @@ INLINE uint32 *ayther_draw_col_im2(uint32 *dst, uint32 atbuf, uint32 v_line,
 #define DRAW_COLUMN_IM2_AE(ATTR, LINE, PS) DRAW_COLUMN_IM2((ATTR), (LINE))
 #endif
 
-#if defined(AYTHER_EXTENSIONS) && defined(__GNUC__)
-#define AYTHER_HOT_INLINE static inline __attribute__((always_inline))
-#else
-#define AYTHER_HOT_INLINE INLINE
-#endif
 
 
 /* Mode 5 */
@@ -2539,30 +2531,8 @@ AYTHER_HOT_INLINE void render_bg_m5_impl(int line, int ayther_observed)
                lut[(reg[12] & 0x08) >> 2], bitmap.viewport.w);
 }
 
-#ifdef AYTHER_EXTENSIONS
-static AYTHER_NOINLINE void render_bg_m5_fast_path(int line)
-{
-  render_bg_m5_impl(line, 0);
-}
-
-static AYTHER_NOINLINE void render_bg_m5_observed_path(int line)
-{
-  render_bg_m5_impl(line, 1);
-}
-#endif
-
-void render_bg_m5(int line)
-{
-#ifdef AYTHER_EXTENSIONS
-  /* #41: OBSERVED, no CONTROLS: ver la nota en AYTHER_OBSERVED_ACTIVE. */
-  if (AYTHER_OBSERVED_ACTIVE)
-    render_bg_m5_observed_path(line);
-  else
-    render_bg_m5_fast_path(line);
-#else
-  render_bg_m5_impl(line, 0);
-#endif
-}
+/* #41: OBSERVED, no CONTROLS: ver la nota en AYTHER_OBSERVED_ACTIVE. */
+AYTHER_DUAL_PATH(render_bg_m5, render_bg_m5, AYTHER_OBSERVED_ACTIVE, (int line), line)
 
 AYTHER_HOT_INLINE void render_bg_m5_vs_impl(int line, int ayther_observed)
 {
@@ -2805,30 +2775,8 @@ AYTHER_HOT_INLINE void render_bg_m5_vs_impl(int line, int ayther_observed)
                lut[(reg[12] & 0x08) >> 2], bitmap.viewport.w);
 }
 
-#ifdef AYTHER_EXTENSIONS
-static AYTHER_NOINLINE void render_bg_m5_vs_fast_path(int line)
-{
-  render_bg_m5_vs_impl(line, 0);
-}
-
-static AYTHER_NOINLINE void render_bg_m5_vs_observed_path(int line)
-{
-  render_bg_m5_vs_impl(line, 1);
-}
-#endif
-
-void render_bg_m5_vs(int line)
-{
-#ifdef AYTHER_EXTENSIONS
-  /* #41: OBSERVED, no CONTROLS: ver la nota en AYTHER_OBSERVED_ACTIVE. */
-  if (AYTHER_OBSERVED_ACTIVE)
-    render_bg_m5_vs_observed_path(line);
-  else
-    render_bg_m5_vs_fast_path(line);
-#else
-  render_bg_m5_vs_impl(line, 0);
-#endif
-}
+/* #41: OBSERVED, no CONTROLS: ver la nota en AYTHER_OBSERVED_ACTIVE. */
+AYTHER_DUAL_PATH(render_bg_m5_vs, render_bg_m5_vs, AYTHER_OBSERVED_ACTIVE, (int line), line)
 
 /* Enhanced function that allows each cell to be vscrolled individually, instead of being limited to 2-cell */
 void render_bg_m5_vs_enhanced(int line)
@@ -5032,32 +4980,11 @@ AYTHER_HOT_INLINE void render_obj_m5_impl(int line, int ayther_observed)
   spr_ovr = 0;
 }
 
-#ifdef AYTHER_EXTENSIONS
-static AYTHER_NOINLINE void render_obj_m5_fast_path(int line)
-{
-  render_obj_m5_impl(line, 0);
-}
-
-static AYTHER_NOINLINE void render_obj_m5_observed_path(int line)
-{
-  render_obj_m5_impl(line, 1);
-}
-#endif
-
-void render_obj_m5(int line)
-{
-#ifdef AYTHER_EXTENSIONS
-  /* #31/#37/#41: el clon observado es el que escribe el bit de sprite exacto.
-     Solo hace falta cuando alguien va a leerlo -- dim o atribucion-, y el
-     predicado ya lo calculo render_line: viaja en `ayther_obj_pass`. */
-  if (ayther_obj_pass)
-    render_obj_m5_observed_path(line);
-  else
-    render_obj_m5_fast_path(line);
-#else
-  render_obj_m5_impl(line, 0);
-#endif
-}
+/* #31/#37/#41: el clon observado es el que escribe el bit de sprite
+   exacto. Solo hace falta cuando alguien va a leerlo -- dim o
+   atribucion-, y el predicado ya lo calculo render_line: viaja en
+   `ayther_obj_pass`. */
+AYTHER_DUAL_PATH(render_obj_m5, render_obj_m5, ayther_obj_pass, (int line), line)
 
 void render_obj_m5_ste(int line)
 {
@@ -5321,29 +5248,8 @@ AYTHER_HOT_INLINE void render_obj_m5_im2_impl(int line, int ayther_observed)
   spr_ovr = 0;
 }
 
-#ifdef AYTHER_EXTENSIONS
-static AYTHER_NOINLINE void render_obj_m5_im2_fast_path(int line)
-{
-  render_obj_m5_im2_impl(line, 0);
-}
-
-static AYTHER_NOINLINE void render_obj_m5_im2_observed_path(int line)
-{
-  render_obj_m5_im2_impl(line, 1);
-}
-#endif
-
-void render_obj_m5_im2(int line)
-{
-#ifdef AYTHER_EXTENSIONS
-  if (ayther_obj_pass)
-    render_obj_m5_im2_observed_path(line);
-  else
-    render_obj_m5_im2_fast_path(line);
-#else
-  render_obj_m5_im2_impl(line, 0);
-#endif
-}
+/* #31/#37/#41: mismo predicado que render_obj_m5. */
+AYTHER_DUAL_PATH(render_obj_m5_im2, render_obj_m5_im2, ayther_obj_pass, (int line), line)
 
 void render_obj_m5_im2_ste(int line)
 {
@@ -6419,29 +6325,8 @@ AYTHER_HOT_INLINE void render_line_impl(int line, int ayther_observed)
   remap_line(line);
 }
 
-#ifdef AYTHER_EXTENSIONS
-static AYTHER_NOINLINE void render_line_fast_path(int line)
-{
-  render_line_impl(line, 0);
-}
-
-static AYTHER_NOINLINE void render_line_observed_path(int line)
-{
-  render_line_impl(line, 1);
-}
-#endif
-
-void render_line(int line)
-{
-#ifdef AYTHER_EXTENSIONS
-  if (AYTHER_OBSERVED_ACTIVE)
-    render_line_observed_path(line);
-  else
-    render_line_fast_path(line);
-#else
-  render_line_impl(line, 0);
-#endif
-}
+/* #41: OBSERVED, no CONTROLS: ver la nota en AYTHER_OBSERVED_ACTIVE. */
+AYTHER_DUAL_PATH(render_line, render_line, AYTHER_OBSERVED_ACTIVE, (int line), line)
 
 void blank_line(int line, int offset, int width)
 {

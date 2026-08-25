@@ -148,6 +148,8 @@
 /************************************************************************/
 
 #include "shared.h"
+/* #43.3: el patron fast/observed y sus atributos, en un solo lugar. */
+#include "ayther/ayther_dual_path.h"
 
 /* envelope generator */
 #define ENV_BITS    10
@@ -2016,15 +2018,7 @@ unsigned int YM2612Read(void)
 }
 
 /* Generate samples for ym2612 */
-#if defined(AYTHER_EXTENSIONS) && (defined(__GNUC__) || defined(__clang__))
-#define AYTHER_YM_INLINE static inline __attribute__((always_inline))
-#define AYTHER_YM_NOINLINE __attribute__((noinline))
-#else
-#define AYTHER_YM_INLINE INLINE
-#define AYTHER_YM_NOINLINE
-#endif
-
-AYTHER_YM_INLINE void ym2612_update_impl(int *buffer, int length,
+AYTHER_HOT_INLINE void ym2612_update_impl(int *buffer, int length,
                                         int ayther_audio_controls)
 {
   int i;
@@ -2242,30 +2236,10 @@ AYTHER_YM_INLINE void ym2612_update_impl(int *buffer, int length,
   INTERNAL_TIMER_B(length);
 }
 
-#ifdef AYTHER_EXTENSIONS
-static AYTHER_YM_NOINLINE void ym2612_update_fast_path(int *buffer, int length)
-{
-  ym2612_update_impl(buffer, length, 0);
-}
-
-static AYTHER_YM_NOINLINE void ym2612_update_observed_path(int *buffer,
-                                                           int length)
-{
-  ym2612_update_impl(buffer, length, 1);
-}
-#endif
-
-void YM2612Update(int *buffer, int length)
-{
-#ifdef AYTHER_EXTENSIONS
-  if (AYTHER_SUBSCRIBED(AYTHER_SUB_RENDER_CONTROLS))
-    ym2612_update_observed_path(buffer, length);
-  else
-    ym2612_update_fast_path(buffer, length);
-#else
-  ym2612_update_impl(buffer, length, 0);
-#endif
-}
+/* El nombre publico no es el del cuerpo: por eso el macro los toma aparte. */
+AYTHER_DUAL_PATH(YM2612Update, ym2612_update,
+                 AYTHER_SUBSCRIBED(AYTHER_SUB_RENDER_CONTROLS),
+                 (int *buffer, int length), buffer, length)
 
 void YM2612Config(int type)
 {

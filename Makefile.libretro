@@ -925,6 +925,20 @@ else
 # clases cosmeticas que upstream si dispara (sign-compare, unused-*,
 # parentheses, return-type) quedan como advertencia.
 ifneq (,$(filter $(platform),unix win64 win32 osx))
+# AYTHER (#43 punto 5): LTO opcional, para MEDIRLO.
+#
+# Va como variable propia y no pasando CFLAGS por linea de comando: CFLAGS es
+# donde este Makefile arma sus -D, y sobreescribirla desde afuera deja el build
+# sin ellos. La primera medicion de LTO murio asi -- LzmaEnc.c dejo de encontrar
+# un header porque se perdio un -D-, y el sintoma no se parecia en nada a la
+# causa.
+#
+# Solo unix/win64/osx: los targets de consola traen su propio juego de flags.
+ifeq ($(AYTHER_LTO), 1)
+LIBRETRO_CFLAGS += -flto
+LDFLAGS += -flto
+endif
+
 LIBRETRO_CFLAGS += -Wall -Wextra
 
 AYTHER_OWN_OBJECTS := $(foreach o,$(OBJECTS),$(if $(findstring /ayther/,$(o)),$(o)))

@@ -792,3 +792,67 @@ jobs:
             tests/artifacts/
           if-no-files-found: ignore
           retention-days: 14
+  # #43 punto 5: LTO. El issue pedia un job que compile con -flto y compare, y
+  # que se adopte si mejora >= 3% sin romper goldens. Medido en Linux/gcc:
+  #
+  #   sin LTO   .so 12.917.992   .text 1.211.647
+  #   con LTO   .so 11.224.584   .text 1.267.191
+  #
+  # El .so total baja 13%, pero eso es casi todo simbolos y debug, que no se
+  # cargan. Lo que corre -- .text-- CRECE 4,6%: LTO inlinea entre unidades y la
+  # presion sobre la i-cache sube. Sobre velocidad no se puede decidir con este
+  # harness: el bench tiene +-3% de ruido y el umbral del issue es exactamente
+  # 3%, asi que cualquier veredicto seria ruido con forma de conclusion.
+  #
+  # Conclusion: NO se adopta por defecto. Queda como `AYTHER_LTO=1`, y este job
+  # existe para que siga funcionando -- un build con LTO es donde aparece el UB
+  # entre unidades- y para que los 14 clones fast/observed sigan separados: si
+  # LTO los fusionara, el patron que sostiene el "cero costo en idle" se cae.
+  lto-build:
+    name: LTO build (opt-in, no adoptado)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Build with and without LTO
+        run: |
+          set -euo pipefail
+          make -B -f Makefile.libretro platform=unix AYTHER_EXTENSIONS=1 SOUND_PROBE=1 -j2
+          cp genesis_plus_gx_libretro.so base.so
+          make -B -f Makefile.libretro platform=unix AYTHER_EXTENSIONS=1 SOUND_PROBE=1 \
+            AYTHER_LTO=1 -j2
+
+      - name: Report both sizes
+        run: |
+          set -euo pipefail
+          for f in base.so genesis_plus_gx_libretro.so; do
+            printf '%-28s total=%-10s .text=%s\n' "$f" "$(stat -c%s "$f")" \
+              "$(size -A "$f" | awk '$1==".text"{print $2}')"
+          done
+
+      # Lo que este job protege de verdad: que LTO no deshaga el patron
+      # fast/observed. Son 7 pares; si aparecen menos, alguno se fusiono.
+      - name: The fast/observed clones survive LTO
+        run: |
+          set -euo pipefail
+          n=$(nm genesis_plus_gx_libretro.so | grep -cE '_(fast|observed)_path')
+          echo "clones separados: $n"
+          test "$n" -eq 14
+
+      - name: Verify shared-library exports
+        run: |
+          set -euo pipefail
+          nm -D --defined-only genesis_plus_gx_libretro.so | sed 's/.* //' > exports.txt
+          bash tests/ci/check_exports.sh exports.txt 1 0 1
+
+      - name: Goldens hold under LTO
+        run: |
+          set -euo pipefail
+          make -C tests check
+          for t in check-full-core check-scenes check-line-state check-determinism \
+                   check-abi-dynamic check-multilayer check-observability; do
+            make -C tests "$t" CORE=../genesis_plus_gx_libretro.so
+          done

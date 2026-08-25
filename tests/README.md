@@ -366,3 +366,25 @@ is not a defect (the per-line case is `LINE_CRAM`), but it is a property that
 has to be measured where it holds, so the palette check runs on the S/H fixture,
 which has no H-int. The contract is now written down in `ayther_api.h` and in
 `docs/ayther_abi_v1.md` instead of being folklore.
+## LTO: measured, not adopted (#43.5)
+
+The issue asked for a CI job that builds with `-flto` and compares, adopting it
+if it improves by >= 3% without breaking goldens. Measured on Linux/gcc:
+
+| | `.so` total | `.text` |
+|---|---:|---:|
+| without LTO | 12,917,992 | 1,211,647 |
+| with LTO | 11,224,584 | 1,267,191 |
+
+The total drops 13%, but that is almost entirely symbols and debug info, which
+are never loaded. What actually runs -- `.text` -- **grows 4.6%**: LTO inlines
+across translation units and i-cache pressure goes up. On speed there is no
+honest verdict available from this harness: the bench carries +-3% noise and the
+issue's threshold is exactly 3%, so any answer would be noise shaped like a
+conclusion.
+
+So it is **not adopted by default**. It stays as `AYTHER_LTO=1`, and the
+`lto-build` job keeps it working -- an LTO build is where cross-unit UB shows up
+-- and asserts the 14 fast/observed clones are still separate functions. If LTO
+merged them, the pattern the whole "zero cost when idle" claim rests on would
+quietly collapse.

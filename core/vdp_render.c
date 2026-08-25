@@ -563,6 +563,10 @@ static const uint32 tms_palette[16] =
 };
 #endif
 
+/* AYTHER (#31): el cuarteo por canal vive en su propio header para que el
+   test pueda verificar los valores sin levantar el core. */
+#include "ayther/ayther_dim.h"
+
 /* Cached and flipped patterns */
 static uint8 ALIGNED_(4) bg_pattern_cache[0x80000];
 
@@ -1213,11 +1217,15 @@ static void ayther_peel_merge(uint8 *srca, uint8 *srcb, uint8 *dst, uint8 *table
     if (seg > width) seg = width;
     if (fcol < AYTHER_TILE_COLS && AYTHER_TILE_SUPPRESSED(ayther_peel_row, fcol))
     {
-      int has_fg = 0;                   /* ¿algún pixel de primer plano (A/W) en la celda? */
-      for (i = 0; i < seg; i++) if (srca[i]) { has_fg = 1; break; }
+      /* #31: "hay primer plano en esta celda" es OPACIDAD, no "el byte no es
+         cero". Un píxel de plano A transparente pero con el bit de prioridad
+         puesto vale 0x40, y contaba como primer plano para las ocho columnas de
+         la celda. Lo que decide es el índice de color. */
+      int has_fg = 0;                   /* ¿algún pixel OPACO de A/W en la celda? */
+      for (i = 0; i < seg; i++) if (srca[i] & 0x0F) { has_fg = 1; break; }
       for (i = 0; i < seg; i++)
         dst[i] = has_fg ? table[(srcb[i] << 8)]   /* pela A/W → revela Plano B */
-                        : 0x40;                    /* fondo (B puro) → backdrop */
+                        : table[0];               /* fondo (B puro) → backdrop */
     }
     else
     {
@@ -5942,24 +5950,19 @@ void remap_line(int line)
 #ifdef AYTHER_EXTENSIONS
     else if (AYTHER_LAYER_DIM_ACTIVE)
     {
-      /* AYTHER dim (id 0x108): los píxeles que NO son sprite se emiten al 25%
-         (cuarteo por canal RGB565). ayther_sprite_px es paralelo a linebuf[0], con
-         el mismo offset que src. Asume PIXEL_OUT_T = uint16 RGB565 (build del fork). */
+      /* AYTHER dim (id 0x108): los píxeles que NO son sprite se emiten al 25%.
+         `ayther_sprite_px` es paralelo a linebuf[0], con el mismo offset que src.
+
+         #31: el cuarteo estaba escrito con máscaras RGB565 a mano. Ése es el
+         formato del build del fork, pero no el único que el core compila: bajo
+         USE_15BPP_RENDERING los canales viven en otros bits, y esas máscaras no
+         daban "más oscuro" sino OTRO color. Ahora sale de AYTHER_DIM_QUARTER,
+         que tiene una definición por formato. */
       uint8 *spx = &ayther_sprite_px[0x20 - bitmap.viewport.x];
       do
       {
         PIXEL_OUT_T p = pixel[*src++];
-        if (*spx++)
-        {
-          *dst++ = p;
-        }
-        else
-        {
-          unsigned r = (p >> 11) & 0x1F;
-          unsigned g = (p >>  5) & 0x3F;
-          unsigned b =  p        & 0x1F;
-          *dst++ = (PIXEL_OUT_T)(((r >> 2) << 11) | ((g >> 2) << 5) | (b >> 2));
-        }
+        *dst++ = *spx++ ? p : AYTHER_DIM_QUARTER(p);
       }
       while (--width);
     }

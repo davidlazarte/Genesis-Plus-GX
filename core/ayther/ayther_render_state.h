@@ -496,6 +496,9 @@ uint64_t ayther_controls_fingerprint(void)
 #define AYTHER_RC_NOMASK_ACTIVE 0
 #define AYTHER_SPR_SUPPRESSED_ACTIVE(active, slot) ((void)(active), 0)
 #define AYTHER_PSUP(plane) ((const uint8 *)0)
+/* #40: render_bg_m4 consulta la supresion por plano; sin extensiones el
+   puntero es NULL y la rama es codigo muerto, pero tiene que compilar. */
+#define AYTHER_PTSUP(ps, cell) ((void)(ps), (void)(cell), 0)
 #define ayther_sprite_capture_record(yr, xr, attr, w, h, sat_idx, chain_pos) ((void)0)
 #define AYTHER_CELL_RECORD(pair) ((void)0)
 #define AYTHER_LINE_CELLS_ACTIVE 0

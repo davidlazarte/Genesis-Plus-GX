@@ -34,15 +34,18 @@ if [ ! -d "$rom_dir" ]; then
 fi
 
 # Los ROMs se buscan por extension, no por contenido: si el directorio tiene
-# otra cosa, es mejor no cargarla que adivinar.
+# otra cosa, es mejor no cargarla que adivinar. Mega Drive y tambien
+# Master System / Game Gear: el probe verifica el contrato de
+# recomposicion, y ese contrato tiene que valer en los dos modos.
 roms=()
 while IFS= read -r -d '' f; do roms+=("$f"); done < <(
   find "$rom_dir" -maxdepth 1 -type f \
-    \( -iname '*.md' -o -iname '*.bin' -o -iname '*.gen' -o -iname '*.smd' \) \
+    \( -iname '*.md' -o -iname '*.bin' -o -iname '*.gen' -o -iname '*.smd' \
+       -o -iname '*.sms' -o -iname '*.gg' -o -iname '*.sg' \) \
     -print0 | sort -z)
 
 if [ "${#roms[@]}" -eq 0 ]; then
-  echo "no hay ROMs (.md .bin .gen .smd) en $rom_dir" >&2
+  echo "no hay ROMs (.md .bin .gen .smd .sms .gg .sg) en $rom_dir" >&2
   exit 2
 fi
 

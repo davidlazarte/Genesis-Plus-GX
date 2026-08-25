@@ -552,11 +552,36 @@ static int probe_rom(const struct core_api *api, const char *path, int frames,
     stats->recompose_height = out_height;
     if (!available)
     {
-      if (abi_status != AYTHER_STATUS_UNSUPPORTED)
+      /* #40: "no puedo con este modo" es una RESPUESTA, no un fallo. El
+         probe solo conocia AYTHER_STATUS_UNSUPPORTED, que era el unico
+         codigo que existia cuando se escribio; desde entonces la ABI
+         desglosa el motivo, y con un cartucho de Master System devuelve
+         RC_NOT_MODE5. Tratar eso como violacion del contrato hacia que el
+         probe se negara a validar el modo entero -- justo el que #40
+         viene a cubrir-. Lo que SI es una violacion es no poder recomponer
+         y no decir por que, y eso se sigue contando aparte. */
+      if (abi_status != AYTHER_STATUS_UNSUPPORTED &&
+          abi_status != AYTHER_STATUS_UNSUPPORTED_MODE &&
+          abi_status != AYTHER_STATUS_RC_NOT_MODE5 &&
+          abi_status != AYTHER_STATUS_RC_INTERLACE2 &&
+          abi_status != AYTHER_STATUS_RC_NTSC_FILTER &&
+          abi_status != AYTHER_STATUS_RC_JOURNAL_OVERFLOW)
       {
         fprintf(stderr, "ABI recomposition failed in %s frame %d: %d\n",
                 path, frame, (int)abi_status);
         goto cleanup;
+      }
+      /* Los motivos que la ABI nombra explicitamente ya vienen guardados
+         por su propio codigo: no hace falta que ademas esten en la mascara
+         de raster, que es del frame y no de la llamada. */
+      if (abi_status == AYTHER_STATUS_RC_NOT_MODE5 ||
+          abi_status == AYTHER_STATUS_RC_INTERLACE2 ||
+          abi_status == AYTHER_STATUS_RC_NTSC_FILTER ||
+          abi_status == AYTHER_STATUS_RC_JOURNAL_OVERFLOW ||
+          abi_status == AYTHER_STATUS_UNSUPPORTED_MODE)
+      {
+        ++stats->unsupported_guarded;
+        continue;
       }
       if (mask & AYTHER_RASTER_REASON_UNSUPPORTED_MODE)
         ++stats->unsupported_guarded;

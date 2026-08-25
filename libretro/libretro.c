@@ -4686,19 +4686,26 @@ static int32_t AYTHER_CALL ayther_write_control_v1(uint32_t region_id,
       original-, asi que ahora se dice. */
    if (!ayther_mode5_controls_supported())
    {
+      /* #40 fase 2: lo que YA funciona en Mode 4 deja de rechazarse. La lista
+         de arriba era correcta en fase 1 -- contestar UNSUPPORTED_MODE es mejor
+         que aceptar y no hacer nada-, pero hoy `parse_satb_m4` suprime por slot
+         y `render_bg_m4` suprime por (patron, paleta) y respeta la capa de
+         fondo. Seguir rechazandolos seria el error simetrico del que fase 1
+         arreglo: negar algo que si se puede cumplir. */
       switch (region_id)
       {
-         case AYTHER_REGION_SPRITE_SUPPRESS:
          case AYTHER_REGION_TILE_SUPPRESS:
-         case AYTHER_REGION_PLANE_TILE_SUPPRESS:
-         case AYTHER_REGION_PLANE_SUPPRESS_ACTIVE:
+            /* La supresion por CELDA de pantalla (0x104) sigue sin existir en
+               Mode 4: `render_bg_m4` no pasa por el merge donde vive el peel.
+               Se dice, en vez de aceptarla y no hacer nada. */
             ayther_raster_dirty |= AYTHER_RASTER_REASON_UNSUPPORTED_CONTROLS;
             return AYTHER_STATUS_UNSUPPORTED_MODE;
          case AYTHER_REGION_LAYER_MASK:
-            /* Los bits A/B/W no significan nada con un solo plano de fondo; el
-               de sprites SI aplica, porque se resuelve en render_line, que es
-               comun a los dos modos. Se rechaza solo lo que no puede cumplir. */
-            if ((*(const uint8_t *)data & UINT8_C(0x07)) != UINT8_C(0x07))
+            /* En Mode 4 hay UN plano de fondo: el bit de "Plano A" se
+               reinterpreta como ese fondo y los de B y Window no significan
+               nada. Apagarlos no puede cumplirse, asi que se rechaza; apagar A
+               o los sprites si. */
+            if ((*(const uint8_t *)data & UINT8_C(0x06)) != UINT8_C(0x06))
             {
                ayther_raster_dirty |= AYTHER_RASTER_REASON_UNSUPPORTED_CONTROLS;
                return AYTHER_STATUS_UNSUPPORTED_MODE;

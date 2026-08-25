@@ -41,6 +41,7 @@ PLANE_SUP_BIN := $(BUILD_DIR)/plane_suppress$(EXE_EXT)
 MULTILAYER_BIN := $(BUILD_DIR)/multilayer$(EXE_EXT)
 OBSERVABILITY_BIN := $(BUILD_DIR)/observability$(EXE_EXT)
 SPR_OUTCOME_BIN := $(BUILD_DIR)/sprite_outcome$(EXE_EXT)
+MODE4_BIN := $(BUILD_DIR)/mode4_controls$(EXE_EXT)
 ABI_DYNAMIC_BIN := $(BUILD_DIR)/verify_ayther_api$(EXE_EXT)
 SCENES_BIN := $(BUILD_DIR)/scenes$(EXE_EXT)
 LINE_STATE_BIN := $(BUILD_DIR)/line_state$(EXE_EXT)
@@ -74,7 +75,7 @@ PROFILE_COMPARISON := $(ARTIFACT_DIR)/feature_gate_profiles.json
 .PHONY: all check check-unit check-concurrency check-determinism \
 	check-full-core check-profile-comparison raster-rom-probe \
 	full-core-replay check-idle-metrics check-attribution-scene check-plane-suppress check-multilayer \
-	check-observability check-abi-dynamic check-fuzz check-fuzz-ring validate-roms \
+	check-observability check-abi-dynamic check-fuzz check-fuzz-ring validate-roms check-mode4 \
 	check-sprite-outcome \
 	regen-multilayer check-scenes regen-scenes check-line-state clean
 
@@ -251,6 +252,20 @@ $(SPR_OUTCOME_BIN): ayther/sprite_outcome.c ayther/generated_rom.c \
 		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include \
 		-Iayther -o $@ ayther/sprite_outcome.c ayther/generated_rom.c \
 		$(LDFLAGS) $(ROM_PROBE_LIBS)
+
+$(MODE4_BIN): ayther/mode4_controls.c $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther \
+		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include \
+		-o $@ ayther/mode4_controls.c $(LDFLAGS) $(ROM_PROBE_LIBS)
+
+# #40 fase 2: los controles del fork en Mode 4, contra un cartucho real.
+# OPT-IN: sin AYTHER_SMS_ROM apuntando a un .sms, el test se saltea y lo dice.
+# Un ROM comercial no puede estar en el repo, y mientras no exista un fixture
+# SMS -- el generador emite 68000 y un cartucho de Master System corre Z80--
+# esto es lo que hay, y es mucho mejor que nada.
+check-mode4: $(MODE4_BIN)
+	$(call require_core)
+	$(MODE4_BIN) "$(CORE)"
 
 # #39.C: por que cada sprite se dibujo o no.
 check-sprite-outcome: $(SPR_OUTCOME_BIN)

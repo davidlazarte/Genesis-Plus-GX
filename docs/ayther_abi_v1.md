@@ -444,21 +444,46 @@ do not simply returned `AYTHER_STATUS_OK` and did nothing, which is the worst
 contract available: a frontend believes it hid a sprite and draws its HD
 replacement on top of the original.
 
+Phase 2 implemented most of what phase 1 could only report. The remaining
+`UNSUPPORTED_MODE` rows are the ones that still have no referent or no
+implementation — and saying so is still better than accepting and doing nothing.
+
 | Control | Mode 5 (MD) | Mode 4 (SMS/GG/PBC) |
 |---|---|---|
 | `LAYER_MASK` sprite bit | yes | yes — resolved in `render_line`, shared by both |
-| `LAYER_MASK` A/B/W bits | yes | **`UNSUPPORTED_MODE`** — one background plane, the bits have no referent |
-| `SPRITE_SUPPRESS` (0x103) | yes | **`UNSUPPORTED_MODE`** — `parse_satb_m4` has no suppression |
-| `TILE_SUPPRESS` / peel (0x104) | yes | **`UNSUPPORTED_MODE`** — `render_bg_m4` has no hooks and does not merge |
-| `PLANE_TILE_SUPPRESS` (0x105/0x106) | yes | **`UNSUPPORTED_MODE`** — same reason |
+| `LAYER_MASK` A bit | yes — plane A | yes — **reinterpreted as *the* background**, the only one Mode 4 has |
+| `LAYER_MASK` B/W bits | yes | **`UNSUPPORTED_MODE`** — those planes do not exist, the bits have no referent |
+| `SPRITE_SUPPRESS` (0x103) | yes | yes — same mask; the Mode 4 SAT has 64 entries and the mask holds 128 |
+| `TILE_SUPPRESS` / peel (0x104) | yes | **`UNSUPPORTED_MODE`** — `render_bg_m4` does not go through the merge where the peel lives |
+| `PLANE_TILE_SUPPRESS` (0x105/0x106) | yes | yes — same key shape (pattern, palette); in Mode 4 the fields are 9 and 1 bits instead of 11 and 2 |
 | `LAYER_DIM` (0x108) | yes | yes — `remap_line` is shared |
 | Audio mute and gain (0x10D) | yes | yes |
 | `ATTRIBUTION` | yes | background layer only |
-| Recomposition | yes | `AYTHER_STATUS_RC_NOT_MODE5` |
+| `SPRITE_OUTCOME` (#39.C) | six bits | `PARSED`, `DRAWN`, `DROP_LINE`, `SUPPRESSED` — Mode 4 has no x=0 mask and no pixel budget |
+| Recomposition | yes | yes — pixel-perfect, measured |
+| Sprite capture | yes | yes — same layout; in Mode 4 height is 8 or 16, width is always 8, and the palette is one of **two** of 16 |
 
 A rejected write also raises `AYTHER_RASTER_REASON_UNSUPPORTED_CONTROLS` in
 `0x10E`, so a frontend polling the fallback reasons sees it without having to
 check every return value.
+
+**Measured, not assumed.** `tests/ayther/mode4_controls.c` runs against a real
+Master System cartridge: the system descriptor reports mode 4 at 256×192, hiding
+the background changes the frame, hiding plane B is rejected, 9 sprites are
+captured, suppressing a drawn slot changes the frame and reports `SUPPRESSED`
+rather than `DRAWN`, and recomposition returns **0 differing pixels out of
+49,152**. `tests/ci/validate_roms.sh` extends that to 300 consecutive frames,
+all `clean_equal` with no fallback reason at all.
+
+That last part also fixed a lie: `ayther_recompose_mode_supported()` rejected
+everything that was not Mode 5, so the core was recomposing an SMS frame
+pixel-perfect *while* flagging it as an unsupported mode. A frontend trusting
+the mask would have skipped a recomposition that works.
+
+The test is opt-in (`AYTHER_SMS_ROM`) because a commercial ROM cannot live in
+the repository, and it skips in CI. Closing that gap needs a synthetic SMS
+fixture, and the generator emits **68000** while a Master System cartridge runs
+**Z80** — a new emitter, not a parameter.
 
 `AYTHER_CAP_MODE4_CONTROLS` announces that the rows above have become "yes".
 While the bit is absent, the table is the contract.

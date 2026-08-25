@@ -322,15 +322,31 @@ INLINE void ayther_raster_mark_vram(unsigned int address, uint16_t data,
   }
 }
 
+/* #40 fase 2: este predicado decide si el frame se marca como "no puedo
+   recomponer este modo". Rechazaba TODO lo que no fuera Mode 5 en un Mega
+   Drive, y desde que la recomposicion soporta Mode 4 eso paso a ser mentira:
+   el core recomponia Sonic de Master System pixel a pixel y al mismo tiempo
+   marcaba el frame como modo no soportado. Un frontend que se fia de la
+   mascara se saltearia una recomposicion que funciona.
+
+   Lo que sigue rechazando es lo que de verdad no se puede reproducir:
+   interlace 2 y el filtro NTSC (los dos, solo posibles en Mode 5). */
 static int ayther_recompose_mode_supported(void)
 {
 #ifdef USE_16BPP_RENDERING
-  if ((system_hw & SYSTEM_PBC) != SYSTEM_MD) return 0;
-  if (!(reg[1] & 0x04)) return 0;
-  if ((reg[12] & 0x06) == 0x06) return 0;
-  if (interlaced && config.render) return 0;
   if (config.ntsc) return 0;
-  return 1;
+  if (reg[1] & 0x04)
+  {
+    /* Mode 5 */
+    if ((system_hw & SYSTEM_PBC) != SYSTEM_MD) return 0;
+    if ((reg[12] & 0x06) == 0x06) return 0;
+    if (interlaced && config.render) return 0;
+    return 1;
+  }
+  /* Mode 4: Master System, Game Gear, Mark III y el Mega Drive en modo
+     compatibilidad. Los TMS de 8 bits (SG-1000) usan otros renderers y
+     quedan fuera de alcance. */
+  return (system_hw >= SYSTEM_MARKIII);
 #else
   return 0;
 #endif

@@ -278,3 +278,63 @@ like coverage.
 The golden is **shared by Linux and Windows**, and all eight scenes match on
 both. That is an independent confirmation of the #45 fix above: eight different
 video modes, byte-identical across platforms.
+## Plane tile suppression (#37.4)
+
+`make -C tests check-plane-suppress CORE=...` is the first test to check that
+region `0x105` actually *hides* something. The two that touched it before write
+it to prove that writing it does not break determinism — a different claim.
+
+The S/H fixture is the oracle, and it needs no reimplementation of the renderer:
+planes A and B hold the same content and A covers B. So hiding the tile in A
+must leave the **image identical** and move the attribution to plane B; hiding
+it in B as well must leave the backdrop; clearing the mask must restore the
+original frame exactly.
+
+That middle state is also the case the per-plane gate introduced. Before #37.4,
+`ayther_plane_suppress_active` was one flag for all three planes: hiding a tile
+in A made B and Window lose the `DRAW_COLUMN` fast path and consult an entirely
+empty mask, once per column and per line. Now each plane decides on its own,
+and this test is what keeps a plane from being marked empty when it is not.
+
+## The five recomposition layers (#37.6)
+
+`make -C tests check-multilayer CORE=...` is the first test to look at what
+`recompose_multilayer` **returns**. The function has existed since #12C; the
+only test that called it asks for two layers and verifies something else — that
+recomposing does not perturb emulation.
+
+Two fixtures, because one is not enough. The S/H ROM has A and B with identical
+content, so it exercises the shadow/highlight operator but cannot tell one plane
+from the other; the `window` scene from #35 gives five distinct hashes, so
+confusing two layers shows up.
+
+Two of the assertions need no golden at all:
+
+- Asking for one layer alone must return exactly what asking for all five
+  returns. A frontend that draws its inspector layer by layer and one that asks
+  for them at once cannot see different images.
+- Where the attribution says "plane X won" and no sprite covers the pixel, layer
+  X and the composite must agree. The one measured exception is the 64 pixels of
+  the **brightness operator**: it carries no sprite bit — it is not a visible
+  sprite, and counting it as one was the #31 bug — but it changes the intensity
+  of what is underneath, and in the layer-alone render that sprite does not
+  exist. In the scene without operators the difference is 0.
+
+Regenerate with `make -C tests regen-multilayer CORE=...`.
+
+The golden is what made #37.6 safe to attempt: plane B used to be drawn on
+**every** pass and erased right before the merge, and three of the five passes
+hide it. Removing that work had to leave all ten hashes untouched, and it did —
+with the `bg_b_skipped` counter reading exactly `3 x 224` lines per multilayer
+call, so the saving is counted rather than asserted.
+
+## macOS in CI (#35.2)
+
+The `macos-core` job is the only place the goldens run outside x86-64: GitHub's
+macOS runners are arm64. Until it exists, "the golden is architecture
+independent" is a supposition — the two goldens unified in #45.B were both
+verified on x86-64 hosts.
+
+It deliberately does not run the export closure: `check_exports.sh` reads
+symbols the ELF/PE way, and Mach-O prefixes them with an underscore. A green
+check that verifies nothing is worse than no check.

@@ -69,11 +69,11 @@ extern void restore_sound_buffer();
  * v1 hace que el core reinicie contadores/overflow por frame; la escritura de
  * reset por IDs legacy sigue aceptada durante la transición.
  *
- * OJO (#32): el productor vive en core/debug/audio_probe.c, así que este buffer
- * SÓLO se llena con SOUND_PROBE=1. Los hooks de sound.c/psg.c están vacíos. El
- * comentario anterior decía "sound.c" y hacía pensar que el log era
- * independiente del probe; corregir el comportamiento —o dejar de anunciar la
- * capability cuando no hay productor— es #29.
+ * El productor vive AQUÍ, en el core (#29): el log se llena con extensions=1,
+ * con o sin SOUND_PROBE, porque la capability AYTHER_CAP_AUDIO_WRITES_V1
+ * pertenece a la ABI y no al probe. core/debug/audio_probe.c es un consumidor
+ * más. Hasta #29 el único productor vivía en el probe y la región venía vacía
+ * para siempre con `extensions=1 probe=0`, con la capability igual anunciada.
  * -------------------------------------------------------------------------- */
 #ifdef AYTHER_EXTENSIONS
 

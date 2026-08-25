@@ -26,6 +26,9 @@ typedef void *library_t;
 #include "ayther/ayther_api.h"
 #include "ayther_raster.h"   /* #27: capacidad del journal raster */
 #include "generated_rom.h"
+/* #45.A: convierte un __fastfail de UCRT en un mensaje con nombre. Sin
+   -DAYTHER_UCRT_DIAG se pliega a nada. */
+#include "ucrt_diag.h"
 
 #define REPLAY_FRAMES 120u
 #define BOOTSTRAP_FRAMES 8u
@@ -1915,6 +1918,9 @@ static void usage(const char *program)
 int main(int argc, char **argv)
 {
   struct core_api api;
+  /* Antes de cualquier otra cosa: el fallo que se busca puede ocurrir
+     durante la carga del core. */
+  ayther_ucrt_diag_install();
   struct retro_game_info game;
   struct frame_record idle[REPLAY_FRAMES];
   struct frame_record reference[REPLAY_FRAMES];

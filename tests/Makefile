@@ -135,7 +135,7 @@ raster-rom-probe: $(ROM_PROBE_BIN)
 $(FULL_CORE_BIN): ayther/full_core_replay.c ayther/generated_rom.c \
 		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core \
-		-I$(CORE_DIR)/libretro/libretro-common/include -Iayther \
+		-I$(CORE_DIR)/libretro/libretro-common/include -Iayther -Ici \
 		-o $@ ayther/full_core_replay.c ayther/generated_rom.c \
 		$(LDFLAGS) $(ROM_PROBE_LIBS)
 

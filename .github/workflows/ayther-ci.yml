@@ -15,6 +15,9 @@ concurrency:
 env:
   LLVM_MINGW_VERSION: "20260519"
   LLVM_MINGW_SHA256: "2fa481d30909cbdcf740c6dce11a3f1e72224070cde76c0683289f0bb44f4dd9"
+  # #45.A: el mismo release, la otra CRT. Sale del digest que publica la API
+  # de releases de GitHub, no de bajarlo y confiar.
+  LLVM_MINGW_UCRT_SHA256: "72dbd6e64614e3b3401998992d1bd9c8ace29e74611d71c80309ea71c3fb26f9"
 
 jobs:
   source-quality:
@@ -856,3 +859,79 @@ jobs:
                    check-abi-dynamic check-multilayer check-observability; do
             make -C tests "$t" CORE=../genesis_plus_gx_libretro.so
           done
+  # #45.A: el fallo con UCRT, reproducido y con nombre.
+  #
+  # #38 dejo la causa acotada pero no demostrada: el build UCRT muere con
+  # STATUS_STACK_BUFFER_OVERRUN (0xC0000409), que NO es agotamiento de pila
+  # -- eso es 0xC00000FD-- sino lo que produce `__fastfail`. En UCRT `abort()`
+  # y el *invalid parameter handler* estan implementados sobre el, y MSVCRT no
+  # tiene ese handler: no es que MSVCRT funcione, es que no valida.
+  #
+  # El problema para cerrarlo era que `__fastfail` mata el proceso sin pasar por
+  # el filtro de excepciones, asi que sin depurador no quedaba ni un mensaje. El
+  # harness ahora se engancha ANTES (tests/ci/ucrt_diag.h): si el fallo llega por
+  # un parametro invalido, el log dice que funcion y que expresion.
+  #
+  # `continue-on-error`: este job es un DIAGNOSTICO, no una puerta. El perfil que
+  # el fork publica es msvcrt, y bloquear merges con un fallo conocido y acotado
+  # de otro perfil seria confundir "sabemos que pasa" con "esta roto lo nuestro".
+  # Cuando se arregle, se saca esta linea y pasa a ser puerta.
+  windows-ucrt-diagnosis:
+    name: Windows UCRT (diagnostico de #45.A)
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned llvm-mingw UCRT toolchain
+        shell: pwsh
+        run: >-
+          ./.github/scripts/setup-llvm-mingw.ps1
+          -Version $env:LLVM_MINGW_VERSION
+          -Sha256 $env:LLVM_MINGW_UCRT_SHA256
+          -Crt ucrt
+
+      - name: Build the core with UCRT
+        shell: pwsh
+        run: >-
+          make -f Makefile.libretro platform=win64
+          AYTHER_EXTENSIONS=1 SOUND_PROBE=1 -j2
+
+      - name: Confirm it really links against ucrtbase
+        shell: pwsh
+        run: |
+          $out = & llvm-readobj --coff-imports genesis_plus_gx_libretro.dll |
+                 Select-String -Pattern 'ucrtbase|msvcrt'
+          $out
+          if (-not ($out -match 'ucrtbase')) {
+            throw 'este build no importa ucrtbase: el diagnostico no aplica'
+          }
+
+      # El harness con los handlers puestos. Si el proceso muere igual, el codigo
+      # de salida y el log dicen por donde: 3 = abort(), 4 = parametro invalido,
+      # 0xC0000409 crudo = fastfail por otro camino.
+      - name: Run the full replay under UCRT, with the handlers installed
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          make -C tests full-core-replay CC=clang CPPFLAGS=-DAYTHER_UCRT_DIAG
+          $core = (Resolve-Path genesis_plus_gx_libretro.dll).Path
+          & tests/.build/full_core_replay.exe $core 2>&1 | Tee-Object -FilePath ucrt-replay.log
+          $code = $LASTEXITCODE
+          Write-Host "exit code: $code (0x$('{0:X8}' -f $code))"
+          Write-Host "3 = abort(), 4 = parametro invalido, 0xC0000409 = fastfail crudo"
+          "UCRT_EXIT=$code" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Upload the UCRT diagnosis
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ayther-ucrt-diagnosis
+          path: |
+            ucrt-replay.log
+            genesis_plus_gx_libretro.dll
+          if-no-files-found: warn
+          retention-days: 30

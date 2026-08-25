@@ -58,6 +58,7 @@ ATTRIB_SCENE_BIN := $(BUILD_DIR)/attribution_scene$(EXE_EXT)
 PLANE_SUP_BIN := $(BUILD_DIR)/plane_suppress$(EXE_EXT)
 MULTILAYER_BIN := $(BUILD_DIR)/multilayer$(EXE_EXT)
 OBSERVABILITY_BIN := $(BUILD_DIR)/observability$(EXE_EXT)
+ABI_DYNAMIC_BIN := $(BUILD_DIR)/verify_ayther_api$(EXE_EXT)
 SCENES_BIN := $(BUILD_DIR)/scenes$(EXE_EXT)
 LINE_STATE_BIN := $(BUILD_DIR)/line_state$(EXE_EXT)
 SCENES_GOLDEN := ayther/golden/scenes.txt
@@ -90,7 +91,7 @@ PROFILE_COMPARISON := $(ARTIFACT_DIR)/feature_gate_profiles.json
 .PHONY: all check check-unit check-concurrency check-determinism \
 	check-full-core check-profile-comparison raster-rom-probe \
 	full-core-replay check-idle-metrics check-attribution-scene check-plane-suppress check-multilayer \
-	check-observability \
+	check-observability check-abi-dynamic \
 	regen-multilayer check-scenes regen-scenes check-line-state clean
 
 all: $(UNIT_BIN) $(CONCURRENCY_BIN) $(API_BIN) $(RASTER_BIN) \
@@ -229,6 +230,22 @@ $(OBSERVABILITY_BIN): ayther/observability.c ayther/generated_rom.c \
 		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include \
 		-Iayther -o $@ ayther/observability.c ayther/generated_rom.c \
 		$(LDFLAGS) $(ROM_PROBE_LIBS)
+
+# #55: el contrato dinamico de la ABI contra el core REAL. Vivia solo en el
+# workflow -- se compilaba a mano dentro del job de exports-, asi que no habia
+# forma de correrlo antes de pushear. Siete afirmaciones rotas viajaron hasta
+# CI por eso: las tres regiones de #42 declaraban byte_size != element_size *
+# capacity, y el rechazo de Mode 4 de #40 contestaba UNSUPPORTED_MODE con el
+# VDP todavia sin elegir modo. Un test que solo corre despues del push no es
+# una red, es un aviso tardio.
+$(ABI_DYNAMIC_BIN): $(CORE_DIR)/tests/ci/verify_ayther_api.c \
+		$(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core \
+		-o $@ ci/verify_ayther_api.c $(LDFLAGS) $(ROM_PROBE_LIBS)
+
+check-abi-dynamic: $(ABI_DYNAMIC_BIN)
+	$(call require_core)
+	$(ABI_DYNAMIC_BIN) "$(CORE)"
 
 # #39 A/D/E: journal raster, hashes del frame y paleta resuelta.
 check-observability: $(OBSERVABILITY_BIN)

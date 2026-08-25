@@ -4331,9 +4331,20 @@ static int32_t ayther_map_region(uint32_t region_id,
          /* #42: se arma al leer, como el descriptor de sistema y por la misma
             razon: son hasta 7,5 KB que nadie mira en la mayoria de los frames. */
          ayther_fill_line_regs();
+         /* #42/#55: `byte_size == element_size * capacity` es una promesa
+            que la ABI publica para TODA region, y estas tres la rompian: el
+            buffer es una cabecera de 24 B seguida de N entradas, y ningun par
+            (tamanio, cantidad) describe eso. Un consumidor que dimensionara
+            su buffer con la multiplicacion se quedaba 24 bytes corto, y sin
+            suscripcion la region declaraba capacity=0 con byte_size=24.
+
+            Se declaran como bytes crudos, igual que VRAM: el LAYOUT lo dice
+            `data_version`, y `entry_size` y `lines` viajan DENTRO de la
+            cabecera, que es donde el consumidor ya los tenia que leer. No se
+            pierde informacion; se deja de mentir sobre la forma. */
          mapping->data = ayther_line_regs_buf;
-         mapping->element_size = sizeof(ayther_line_regs_v1);
-         mapping->capacity = ayther_line_count;
+         mapping->element_size = 1;
+         mapping->capacity = ayther_line_regs_bytes;
          mapping->byte_size = ayther_line_regs_bytes;
          mapping->data_version = AYTHER_LAYOUT_LINE_REGS_V1;
          mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_NONE;
@@ -4342,9 +4353,20 @@ static int32_t ayther_map_region(uint32_t region_id,
          break;
       case AYTHER_REGION_LINE_CRAM:
          ayther_fill_line_cram();
+         /* #42/#55: `byte_size == element_size * capacity` es una promesa
+            que la ABI publica para TODA region, y estas tres la rompian: el
+            buffer es una cabecera de 24 B seguida de N entradas, y ningun par
+            (tamanio, cantidad) describe eso. Un consumidor que dimensionara
+            su buffer con la multiplicacion se quedaba 24 bytes corto, y sin
+            suscripcion la region declaraba capacity=0 con byte_size=24.
+
+            Se declaran como bytes crudos, igual que VRAM: el LAYOUT lo dice
+            `data_version`, y `entry_size` y `lines` viajan DENTRO de la
+            cabecera, que es donde el consumidor ya los tenia que leer. No se
+            pierde informacion; se deja de mentir sobre la forma. */
          mapping->data = ayther_line_cram_buf;
-         mapping->element_size = 128;
-         mapping->capacity = ayther_line_count;
+         mapping->element_size = 1;
+         mapping->capacity = ayther_line_cram_bytes;
          mapping->byte_size = ayther_line_cram_bytes;
          mapping->data_version = AYTHER_LAYOUT_LINE_CRAM_V1;
          mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_NONE;
@@ -4353,9 +4375,20 @@ static int32_t ayther_map_region(uint32_t region_id,
          break;
       case AYTHER_REGION_LINE_CELLS:
          ayther_fill_line_cells();
+         /* #42/#55: `byte_size == element_size * capacity` es una promesa
+            que la ABI publica para TODA region, y estas tres la rompian: el
+            buffer es una cabecera de 24 B seguida de N entradas, y ningun par
+            (tamanio, cantidad) describe eso. Un consumidor que dimensionara
+            su buffer con la multiplicacion se quedaba 24 bytes corto, y sin
+            suscripcion la region declaraba capacity=0 con byte_size=24.
+
+            Se declaran como bytes crudos, igual que VRAM: el LAYOUT lo dice
+            `data_version`, y `entry_size` y `lines` viajan DENTRO de la
+            cabecera, que es donde el consumidor ya los tenia que leer. No se
+            pierde informacion; se deja de mentir sobre la forma. */
          mapping->data = ayther_line_cells_buf;
-         mapping->element_size = sizeof(ayther_line_cells_v1);
-         mapping->capacity = ayther_line_count;
+         mapping->element_size = 1;
+         mapping->capacity = ayther_line_cells_bytes;
          mapping->byte_size = ayther_line_cells_bytes;
          mapping->data_version = AYTHER_LAYOUT_LINE_CELLS_V1;
          mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_NONE;
@@ -4550,9 +4583,27 @@ static int32_t AYTHER_CALL ayther_read_region_v1(uint32_t region_id,
 
 /* #40: el VDP esta en Mode 5. Es lo que decide si los controles de plano y de
    sprite pueden cumplir lo que prometen. */
-static int ayther_mode5_active(void)
+/* #40/#55: los controles que solo existen en Mode 5 se rechazan en Mode 4.
+   Pero "el VDP todavia no eligio modo" NO es Mode 4, y esto los confundia:
+   con `reg[1]` en cero -- un core recien cargado, o un programa que todavia
+   no escribio ese registro-- cualquier escritura de control se iba con
+   UNSUPPORTED_MODE. Un frontend que arma su estado inicial antes de correr
+   el primer frame recibia un "no podes" sobre algo que si va a poder.
+
+   El criterio es el mismo que ya usa `ayther_fill_system` para contestar
+   `vdp_mode`, y por la misma razon: en una maquina de la familia Mega Drive
+   el bit apagado significa "todavia no", y decir 4 seria inventar. En Mode 4
+   de verdad -- SMS, GG, Mark III-- el rechazo sigue igual, que es lo que #40
+   vino a arreglar. */
+static int ayther_mode5_controls_supported(void)
 {
-   return (reg[1] & 0x04) != 0;
+   if (reg[1] & 0x04)
+      return 1;
+   /* Sin contenido cargado no hay modo que declarar -- `system_hw` recien se
+      fija al abrir la ROM-, asi que tampoco hay nada que rechazar. */
+   if (!system_hw)
+      return 1;
+   return ((system_hw & SYSTEM_PBC) == SYSTEM_MD);
 }
 
 static int ayther_range_nonzero(const void *data, size_t n)
@@ -4617,7 +4668,7 @@ static int32_t AYTHER_CALL ayther_write_control_v1(uint32_t region_id,
       path. Un exito que no hace nada es el peor contrato posible -- el
       frontend cree que oculto el sprite y dibuja su reemplazo encima del
       original-, asi que ahora se dice. */
-   if (!ayther_mode5_active())
+   if (!ayther_mode5_controls_supported())
    {
       switch (region_id)
       {
@@ -4930,8 +4981,18 @@ static int32_t AYTHER_CALL ayther_set_subscriptions_v1(
    return AYTHER_STATUS_OK;
 }
 
+/* #55: este string decia 1.3 y el `abi_version` del descriptor 1.4, con el
+   header en 1.7. La negociacion de version es EL mecanismo por el que un
+   frontend descubre lo que el core sabe hacer: anunciar de menos es prometer
+   de menos, y un consumidor que exigiera >= 1.5 para usar SYSTEM concluia
+   que este core no la tiene, teniendola. Estuvo mal desde 1.5.
+
+   El campo numerico -- el que se usa para negociar-- sale ahora de
+   AYTHER_ABI_VERSION_LATEST y no de una constante copiada a mano, y
+   `verify_ayther_api` compara el descriptor contra el header. Este string es
+   informativo; si cambia la version, se cambia aca tambien. */
 static const char ayther_build_id[] =
-   "Genesis Plus GX AYTHER ABI 1.3; core v1.7.4" GIT_VERSION;
+   "Genesis Plus GX AYTHER ABI 1.7; core v1.7.4" GIT_VERSION;
 
 #if defined(LSB_FIRST) || defined(_WIN32) || defined(__LITTLE_ENDIAN__)
 #define AYTHER_HOST_ENDIANNESS AYTHER_ENDIAN_LITTLE
@@ -5033,7 +5094,7 @@ static int32_t AYTHER_CALL ayther_get_recompose_stats_v1(
 
 static const ayther_interface_v1 ayther_interface_1 =
 {
-   AYTHER_ABI_VERSION_1_4,
+   AYTHER_ABI_VERSION_LATEST,
    sizeof(ayther_interface_v1),
    AYTHER_CAP_LEGACY_MEMORY | AYTHER_CAP_REGION_QUERY |
       AYTHER_CAP_REGION_READ | AYTHER_CAP_CONTROL_WRITE |

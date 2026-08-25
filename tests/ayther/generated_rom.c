@@ -193,6 +193,48 @@ static void emit_fixture_data(struct rom_builder *builder)
   emit_vdp_words(builder, 0xd800u, words, 96u);
 }
 
+
+/* #29/#35: el fixture original hace key-on (0x28 = 0xF0) pero NUNCA programa
+ * los operadores: sin TL, sin attack rate y sin frecuencia, el YM2612 queda en
+ * silencio. Medido: silenciar el FM entero no movia un solo sample, asi que no
+ * habia forma de distinguir "el mute funciona" de "no habia nada que silenciar".
+ *
+ * Esto programa un canal con un patch minimo pero AUDIBLE. Algoritmo 7: los
+ * cuatro operadores van directo a la salida, que es la configuracion mas simple
+ * en la que cualquier operador con TL bajo suena.
+ *
+ * Vive en un ROM APARTE (ayther_build_generated_rom_fm) y no toca el fixture de
+ * siempre: mezclarlos habria movido los goldens de las dos plataformas sin
+ * ninguna necesidad. */
+static void emit_ym_write(struct rom_builder *builder, uint8_t reg, uint8_t value)
+{
+  emit_move_byte_immediate_absolute(builder, reg, YM_ADDRESS_0);
+  emit_move_byte_immediate_absolute(builder, value, YM_DATA_0);
+}
+
+static void emit_fm_voice(struct rom_builder *builder, uint8_t channel,
+                          uint8_t block_fnum_hi, uint8_t fnum_lo)
+{
+  uint8_t op;
+  for (op = 0u; op < 4u; ++op)
+  {
+    uint8_t slot = (uint8_t)(channel + op * 4u);
+    emit_ym_write(builder, (uint8_t)(0x30u + slot), 0x01u); /* DT=0 MUL=1     */
+    emit_ym_write(builder, (uint8_t)(0x40u + slot), 0x00u); /* TL=0 (maximo)  */
+    emit_ym_write(builder, (uint8_t)(0x50u + slot), 0x1fu); /* RS=0 AR=31     */
+    emit_ym_write(builder, (uint8_t)(0x60u + slot), 0x00u); /* AM=0 D1R=0     */
+    emit_ym_write(builder, (uint8_t)(0x70u + slot), 0x00u); /* D2R=0          */
+    emit_ym_write(builder, (uint8_t)(0x80u + slot), 0x0fu); /* D1L=0 RR=15    */
+    emit_ym_write(builder, (uint8_t)(0x90u + slot), 0x00u); /* SSG-EG off     */
+  }
+  /* Frecuencia: el orden importa, el alto se latchea al escribir el bajo. */
+  emit_ym_write(builder, (uint8_t)(0xa4u + channel), block_fnum_hi);
+  emit_ym_write(builder, (uint8_t)(0xa0u + channel), fnum_lo);
+  emit_ym_write(builder, (uint8_t)(0xb0u + channel), 0x07u); /* FB=0 ALG=7    */
+  emit_ym_write(builder, (uint8_t)(0xb4u + channel), 0xc0u); /* pan L+R       */
+  emit_ym_write(builder, 0x28u, (uint8_t)(0xf0u | channel)); /* key-on 4 ops  */
+}
+
 static void emit_reset_program(struct rom_builder *builder)
 {
   unsigned int index;
@@ -238,6 +280,41 @@ static void emit_reset_program(struct rom_builder *builder)
   emit_u16(builder, 0x4e72u); /* stop #$2300 */
   emit_u16(builder, 0x2300u);
   emit_u16(builder, 0x60fau); /* bra.s back to stop */
+}
+
+
+/* Igual que emit_reset_program pero con tres canales de FM sonando a distinta
+ * frecuencia. Tres y no uno: con un solo canal, "mutear el canal 1" y "mutear
+ * todo" darian el mismo resultado, y el test no podria distinguir un mute por
+ * canal de un mute global. */
+static void emit_reset_program_fm(struct rom_builder *builder)
+{
+  unsigned int index;
+
+  emit_move_word_immediate_absolute(builder, 0x0100u, Z80_BUS_REQUEST);
+  emit_move_word_immediate_absolute(builder, 0x0100u, Z80_RESET);
+  emit_move_long_immediate_absolute(builder, 0x53454741u, TMSS);
+  emit_fixture_data(builder);
+
+  emit_ym_write(builder, 0x22u, 0x00u); /* LFO off  */
+  emit_ym_write(builder, 0x27u, 0x00u); /* ch3 normal */
+  emit_ym_write(builder, 0x2bu, 0x00u); /* DAC off: que suene el FM, no el DAC */
+
+  emit_fm_voice(builder, 0u, 0x22u, 0x69u);
+  emit_fm_voice(builder, 1u, 0x24u, 0x1au);
+  emit_fm_voice(builder, 2u, 0x26u, 0xa3u);
+
+  for (index = 0; index < 8u; ++index)
+    emit_move_byte_immediate_absolute(builder,
+      (uint8_t)(0x9fu | ((index * 3u) & 0x0fu)), PSG_PORT); /* PSG en silencio */
+
+  emit_move_word_immediate_absolute(builder, 0x0000u, Z80_BUS_REQUEST);
+  emit_vdp_register(builder, 0, 0x14u);
+  emit_vdp_register(builder, 1, 0x74u);
+
+  emit_u16(builder, 0x4e72u); /* stop #$2300 */
+  emit_u16(builder, 0x2300u);
+  emit_u16(builder, 0x60fau);
 }
 
 static uint32_t emit_horizontal_handler(struct rom_builder *builder)
@@ -315,7 +392,11 @@ static void write_checksum(uint8_t *rom)
   put_u16(rom + 0x18eu, (uint16_t)checksum);
 }
 
-size_t ayther_build_generated_rom(uint8_t *rom, size_t capacity)
+/* El armado es identico para los dos ROMs; lo unico que cambia es el programa
+   de reset. Parametrizarlo evita que las dos copias se separen con el tiempo,
+   que es como el fixture original termino con un key-on sin operadores. */
+static size_t build_rom(uint8_t *rom, size_t capacity,
+                        void (*emit_reset)(struct rom_builder *))
 {
   struct rom_builder builder;
   uint32_t horizontal_handler;
@@ -332,7 +413,7 @@ size_t ayther_build_generated_rom(uint8_t *rom, size_t capacity)
   builder.pc = RESET_PC;
   builder.failed = 0;
 
-  emit_reset_program(&builder);
+  emit_reset(&builder);
   horizontal_handler = emit_horizontal_handler(&builder);
   vertical_handler = emit_vertical_handler(&builder);
   default_handler = (uint32_t)builder.pc;
@@ -348,4 +429,14 @@ size_t ayther_build_generated_rom(uint8_t *rom, size_t capacity)
   put_u32(rom + 30u * 4u, vertical_handler);
   write_checksum(rom);
   return AYTHER_GENERATED_ROM_SIZE;
+}
+
+size_t ayther_build_generated_rom(uint8_t *rom, size_t capacity)
+{
+  return build_rom(rom, capacity, emit_reset_program);
+}
+
+size_t ayther_build_generated_rom_fm(uint8_t *rom, size_t capacity)
+{
+  return build_rom(rom, capacity, emit_reset_program_fm);
 }

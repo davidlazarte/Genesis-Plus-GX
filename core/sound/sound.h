@@ -127,6 +127,11 @@ extern uint32 ayther_audio_mute;
 
 #define AYTHER_FM_MUTED(ch) 0
 #define AYTHER_PSG_MUTED(ch) 0
+/* #29: faltaba. Hoy no rompe el build porque el unico uso, en cd_hw/pcm.c, esta
+   bajo #ifdef AYTHER_EXTENSIONS y nunca llega aca -- pero la asimetria es una
+   trampa: el primer uso de PCM_MUTED fuera de ese guard rompe el perfil
+   extensions=0, y ese perfil es el que se publica como core stock. */
+#define AYTHER_PCM_MUTED(ch) 0
 
 #endif /* AYTHER_EXTENSIONS */
 

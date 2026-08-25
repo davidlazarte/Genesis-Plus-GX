@@ -72,6 +72,7 @@ ROM_PROBE_BIN := $(BUILD_DIR)/raster_rom_probe$(EXE_EXT)
 FULL_CORE_BIN := $(BUILD_DIR)/full_core_replay$(EXE_EXT)
 STATE_GUARD_BIN := $(BUILD_DIR)/state_guard$(EXE_EXT)
 STATE_LAYOUT_BIN := $(BUILD_DIR)/state_layout$(EXE_EXT)
+AUDIO_CTRL_BIN := $(BUILD_DIR)/audio_controls$(EXE_EXT)
 TRACE_BIN := $(BUILD_DIR)/audio_probe_trace$(EXE_EXT)
 TRACE_GOLDEN := ayther/golden/audio_probe_trace.json
 TRACE_ACTUAL := $(ARTIFACT_DIR)/audio_probe_trace.actual.json
@@ -165,6 +166,15 @@ $(STATE_LAYOUT_BIN): ayther/state_layout.c | $(BUILD_DIR)
 # en el log de CADA plataforma, para que comparar sea leer dos logs.
 state-layout: $(STATE_LAYOUT_BIN)
 	$(STATE_LAYOUT_BIN)
+
+$(AUDIO_CTRL_BIN): ayther/audio_controls.c ayther/generated_rom.c 		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther 		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include 		-Iayther -o $@ ayther/audio_controls.c ayther/generated_rom.c 		$(LDFLAGS) $(ROM_PROBE_LIBS)
+
+# #29: necesita el core REAL. Lo que se verifica es que la mascara de mute
+# llegue al chip de FM seleccionado, y eso solo lo contesta el binario.
+check-audio-controls: $(AUDIO_CTRL_BIN)
+	$(call require_core)
+	$(AUDIO_CTRL_BIN) "$(CORE)"
 
 full-core-replay: $(FULL_CORE_BIN)
 

@@ -11,4 +11,11 @@
  * or the generated 68000 program does not fit. */
 size_t ayther_build_generated_rom(uint8_t *rom, size_t capacity);
 
+/* Variante con TRES canales de FM sonando. El fixture de arriba hace key-on
+ * pero no programa los operadores, asi que el YM2612 queda mudo: sirve para
+ * determinismo de video, no para verificar los controles de audio (#29).
+ * Va aparte a proposito -- cambiar el de arriba habria movido los goldens de
+ * las dos plataformas sin necesidad. */
+size_t ayther_build_generated_rom_fm(uint8_t *rom, size_t capacity);
+
 #endif

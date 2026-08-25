@@ -30,6 +30,16 @@
 
 #include <string.h>
 #include "ym3438.h"
+#ifdef AYTHER_EXTENSIONS
+/* #29: mute y gain por canal. ym2612.c los aplica sobre out_fm[6];
+   aca no hay un arreglo por canal a la salida -Nuked emite UN valor
+   por ciclo, con el canal implicito en el contador-, asi que el hook
+   va donde el canal se conoce: el lock de ch_out. */
+/* types.h antes que sound.h: este archivo es de Nuked y no incluye
+   shared.h, asi que sound.h no encuentra uint8/uint32 por su cuenta. */
+#include "types.h"
+#include "sound.h"
+#endif
 
 #define SIGN_EXTEND(bit_index, value) (((value) & ((1u << (bit_index)) - 1u)) - ((value) & (1u << (bit_index))))
 
@@ -966,6 +976,16 @@ static void OPN2_ChOutput(ym3438_t *chip)
         {
             /* Lock value */
             chip->ch_lock = chip->ch_out[channel];
+#ifdef AYTHER_EXTENSIONS
+            /* #29: el canal se silencia al LOCKEAR, no al mezclar. El chip
+               evoluciona identico con el mute puesto y sin el -- ch_acc, los
+               envelopes y los fases siguen su curso-; a cero sale solo lo que
+               se propaga a la salida. Es la misma regla que cd_hw/pcm.c. */
+            if (AYTHER_FM_MUTED(channel))
+            {
+                chip->ch_lock = 0;
+            }
+#endif
         }
         chip->ch_lock_l = chip->pan_l[channel];
         chip->ch_lock_r = chip->pan_r[channel];
@@ -975,6 +995,14 @@ static void OPN2_ChOutput(ym3438_t *chip)
     {
         out = (Bit16s)chip->dacdata;
         out = SIGN_EXTEND(8, out);
+#ifdef AYTHER_EXTENSIONS
+        /* El canal 6 con DAC activo NO pasa por ch_lock, asi que necesita su
+           propio silencio. En ym2612.c esto es el caso `(ch == 5) && dacen`. */
+        if (AYTHER_FM_MUTED(5))
+        {
+            out = 0;
+        }
+#endif
     }
     else
     {

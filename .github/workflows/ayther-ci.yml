@@ -274,6 +274,13 @@ jobs:
       - name: Report serialized struct layout
         run: make -C tests state-layout CC=clang
 
+      # #29: que la mascara de mute llegue a los DOS cores de FM.
+      - name: Audio controls reach every FM core
+        run: >-
+          make -C tests check-audio-controls
+          CC=clang
+          CORE=../genesis_plus_gx_libretro.so
+
       # El numero se publica pero NO bloquea. Evidencia: dos corridas PARALELAS
       # del mismo commit midieron 1,023% y 1,708% -0,7 puntos de spread sobre
       # binarios identicos-, o sea que el ruido del runner compartido es mayor
@@ -488,6 +495,14 @@ jobs:
         if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
         shell: pwsh
         run: make -C tests state-layout CC=clang
+
+      - name: Audio controls reach every FM core
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        shell: pwsh
+        run: >-
+          make -C tests check-audio-controls
+          CC=clang
+          CORE=../genesis_plus_gx_libretro.dll
 
       - name: Compare extensions-off and compiled-idle profiles
         continue-on-error: true

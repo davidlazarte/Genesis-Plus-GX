@@ -58,8 +58,10 @@ int main(void)
         "ABI 1.3 is a minor bump over 1.2");
   CHECK(AYTHER_ABI_VERSION_1_4 == UINT32_C(0x00010004),
         "ABI 1.4 is a minor bump over 1.3");
-  CHECK(AYTHER_ABI_VERSION_LATEST == AYTHER_ABI_VERSION_1_4,
-        "latest ABI is 1.4");
+  CHECK(AYTHER_ABI_VERSION_1_5 == UINT32_C(0x00010005),
+        "ABI 1.5 is a minor bump over 1.4");
+  CHECK(AYTHER_ABI_VERSION_LATEST == AYTHER_ABI_VERSION_1_5,
+        "latest ABI is 1.5");
 
   /* #30: la 1.4 es ADITIVA. Lo que hay que fijar no es que los campos nuevos
      existan -- eso lo dice el compilador-- sino que los viejos NO se movieron:
@@ -107,12 +109,30 @@ int main(void)
   CHECK(AYTHER_STATUS_RC_JOURNAL_OVERFLOW == -24 &&
         AYTHER_RC_ERR_JOURNAL_OVERFLOW == -5,
         "the journal-overflow status codes are stable");
-  CHECK(AYTHER_REGION_COUNT == 18, "every region is inventoried");
-  /* #41: la region nueva va al FINAL del enum. Meterla en el medio correria
-     los ids de todas las siguientes, y los ids viajan por la ABI. */
-  CHECK(AYTHER_REGION_ATTRIBUTION == AYTHER_REGION_COUNT - 1 &&
+  CHECK(AYTHER_REGION_COUNT == 19, "every region is inventoried");
+  /* #41/#39: la region nueva va al FINAL del enum. Meterla en el medio
+     correria los ids de todas las siguientes, y los ids viajan por la ABI. */
+  CHECK(AYTHER_REGION_SYSTEM == AYTHER_REGION_COUNT - 1 &&
+        AYTHER_REGION_ATTRIBUTION == AYTHER_REGION_SYSTEM - 1 &&
         AYTHER_REGION_RASTER_FALLBACK_REASONS == AYTHER_REGION_ATTRIBUTION - 1,
         "region ids are append-only");
+
+  /* #39.B: el descriptor de sistema. Los offsets se congelan aca porque el
+     struct viaja por la ABI: agregar campos al final es aditivo, moverlos no. */
+  CHECK(sizeof(ayther_system_v1) == 44,
+        "the system descriptor has a frozen size");
+  CHECK(offsetof(ayther_system_v1, struct_size) == 0 &&
+        offsetof(ayther_system_v1, layout_version) == 4 &&
+        offsetof(ayther_system_v1, system_hw) == 8 &&
+        offsetof(ayther_system_v1, lines_per_frame) == 14 &&
+        offsetof(ayther_system_v1, viewport_x) == 16 &&
+        offsetof(ayther_system_v1, master_clock) == 28 &&
+        offsetof(ayther_system_v1, rom_crc32) == 36 &&
+        offsetof(ayther_system_v1, rom_bytes) == 40,
+        "system descriptor fields are at frozen offsets");
+  CHECK(AYTHER_SYSTEM_HW_MD == 0x80 && AYTHER_SYSTEM_HW_MCD == 0x84 &&
+        AYTHER_SYSTEM_HW_GG == 0x40 && AYTHER_SYSTEM_HW_SMS == 0x20,
+        "system_hw uses the core SYSTEM_* values");
   CHECK(AYTHER_LEGACY_MEMORY_CRAM == 0x100,
         "legacy memory IDs remain stable");
   CHECK(AYTHER_LEGACY_MEMORY_RASTER_DIRTY == 0x10E,

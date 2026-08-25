@@ -900,14 +900,21 @@ jobs:
           make -f Makefile.libretro platform=win64
           AYTHER_EXTENSIONS=1 SOUND_PROBE=1 -j2
 
-      - name: Confirm it really links against ucrtbase
+      # Un build UCRT de mingw NO importa ucrtbase.dll directamente: importa los
+      # *API sets* (api-ms-win-crt-runtime-l1-1-0.dll y companiia), que es como
+      # Windows expone la UCRT desde Windows 10. Buscar el nombre del DLL a secas
+      # da un falso negativo, y este job lo encontro en su primera corrida.
+      - name: Confirm it really links against the UCRT
         shell: pwsh
         run: |
           $out = & llvm-readobj --coff-imports genesis_plus_gx_libretro.dll |
-                 Select-String -Pattern 'ucrtbase|msvcrt'
+                 Select-String -Pattern 'ucrtbase|api-ms-win-crt|msvcrt'
           $out
-          if (-not ($out -match 'ucrtbase')) {
-            throw 'este build no importa ucrtbase: el diagnostico no aplica'
+          if (-not ($out -match 'ucrtbase|api-ms-win-crt')) {
+            throw 'este build no usa la UCRT: el diagnostico no aplica'
+          }
+          if ($out -match 'msvcrt\.dll') {
+            throw 'este build importa msvcrt: el toolchain elegido no es el UCRT'
           }
 
       # El harness con los handlers puestos. Si el proceso muere igual, el codigo

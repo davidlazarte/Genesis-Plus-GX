@@ -40,6 +40,7 @@ ATTRIB_SCENE_BIN := $(BUILD_DIR)/attribution_scene$(EXE_EXT)
 PLANE_SUP_BIN := $(BUILD_DIR)/plane_suppress$(EXE_EXT)
 MULTILAYER_BIN := $(BUILD_DIR)/multilayer$(EXE_EXT)
 OBSERVABILITY_BIN := $(BUILD_DIR)/observability$(EXE_EXT)
+SPR_OUTCOME_BIN := $(BUILD_DIR)/sprite_outcome$(EXE_EXT)
 ABI_DYNAMIC_BIN := $(BUILD_DIR)/verify_ayther_api$(EXE_EXT)
 SCENES_BIN := $(BUILD_DIR)/scenes$(EXE_EXT)
 LINE_STATE_BIN := $(BUILD_DIR)/line_state$(EXE_EXT)
@@ -74,6 +75,7 @@ PROFILE_COMPARISON := $(ARTIFACT_DIR)/feature_gate_profiles.json
 	check-full-core check-profile-comparison raster-rom-probe \
 	full-core-replay check-idle-metrics check-attribution-scene check-plane-suppress check-multilayer \
 	check-observability check-abi-dynamic check-fuzz check-fuzz-ring \
+	check-sprite-outcome \
 	regen-multilayer check-scenes regen-scenes check-line-state clean
 
 all: $(UNIT_BIN) $(CONCURRENCY_BIN) $(API_BIN) $(RASTER_BIN) \
@@ -228,6 +230,18 @@ $(ABI_DYNAMIC_BIN): $(CORE_DIR)/tests/ci/verify_ayther_api.c \
 check-abi-dynamic: $(ABI_DYNAMIC_BIN)
 	$(call require_core)
 	$(ABI_DYNAMIC_BIN) "$(CORE)"
+
+$(SPR_OUTCOME_BIN): ayther/sprite_outcome.c ayther/generated_rom.c \
+		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther \
+		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include \
+		-Iayther -o $@ ayther/sprite_outcome.c ayther/generated_rom.c \
+		$(LDFLAGS) $(ROM_PROBE_LIBS)
+
+# #39.C: por que cada sprite se dibujo o no.
+check-sprite-outcome: $(SPR_OUTCOME_BIN)
+	$(call require_core)
+	$(SPR_OUTCOME_BIN) "$(CORE)"
 
 # #39 A/D/E: journal raster, hashes del frame y paleta resuelta.
 check-observability: $(OBSERVABILITY_BIN)

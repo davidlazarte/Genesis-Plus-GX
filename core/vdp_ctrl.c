@@ -457,6 +457,10 @@ void vdp_ayther_begin_frame(void)
      eventos fósiles del arranque a cada línea que recomponía. */
   ayther_raster_journal_count = 0;
   ayther_raster_journal_dropped = 0;
+  /* #39.C: el resultado por sprite es de ESTE frame. Sin limpiarlo, un sprite
+     descartado una vez quedaria descartado para siempre. */
+  memset(ayther_spr_outcome, 0, sizeof(ayther_spr_outcome));
+
   /* #42: lo que sigue pertenece a ESTE frame. */
   ayther_line_state_begin_frame();
   /* #37.4: `ayther_write_control_v1` ya mantiene el resumen al escribir la

@@ -41,6 +41,11 @@ typedef struct
   uint16 xpos;
   uint16 attr;
   uint16 size;
+  /* #39.C: el slot de la SAT del que salio. Sin esto, el renderer sabe que
+     descarto un sprite pero no CUAL, y el frontend recibe un contador en vez
+     de una respuesta. `obj_info` no se serializa, asi que agregarlo no toca
+     el savestate. */
+  uint16 sat_idx;
 } object_info_t;
 
 /* AYTHER (#270): 80 en vez de MAX_SPRITES_PER_LINE (20) -- headroom para la

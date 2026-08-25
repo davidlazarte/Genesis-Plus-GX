@@ -437,3 +437,27 @@ On Windows the replay build runs without sanitizers: the llvm-mingw toolchain
 this fork uses ships no ASan runtime for `x86_64-w64-windows-gnu`. It still
 catches aborts and crashes there; the magnifying glass is on Linux, which is
 where the nightly job runs.
+## Why each sprite drew or did not (#39.C)
+
+`make -C tests check-sprite-outcome CORE=...`. `PARSED_SPRITES` says which
+sprites the parser saw. It does not say what happened to them afterwards, and
+"is in the list" is not "was drawn": the VDP can still drop it for the
+per-line sprite limit, for the pixel budget, or hide it behind the x=0 mask.
+
+The fixture is the oracle. 24 sprites on the **same line** -- four more than the
+20 H40 draws -- with slot 12 at x=0. That makes both acceptance criteria exact
+rather than approximate, and the measured result is what the hardware rules
+predict:
+
+```
+ 0..11  parsed drawn
+   12   parsed masked-x0     <- the one at x=0
+13..19  parsed masked-x0     <- everything below it in the chain
+20..23  drop-line            <- never entered the list
+```
+
+A third assertion is not in the issue but is the one most used in practice:
+suppressing a slot through mask `0x103` must report `suppressed`, not a hardware
+drop. "It did not draw because you asked" and "it did not draw because the VDP
+ran out" are different answers, and a frontend debugging its own overlay needs
+to tell them apart.

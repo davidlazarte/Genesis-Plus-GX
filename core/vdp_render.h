@@ -142,6 +142,12 @@ extern ayther_line_cells_v1 ayther_line_cells[AYTHER_LINE_MAX];
 void ayther_line_state_begin_frame(void);
 /* #36.7: suelta los caches de recomposicion pedidos al primer uso. */
 void ayther_recompose_release(void);
+#ifdef AYTHER_EXTENSIONS
+/* #39.C: que le paso a cada sprite de la SAT en este frame (bits acumulados,
+   se limpian en vdp_ayther_begin_frame). */
+extern uint8 ayther_spr_outcome[AYTHER_SPRITE_SAT_SLOTS];
+#endif
+
 /* #39.E: la LUT de color resuelto (formato del build, S/H ya aplicado). */
 const void *ayther_palette_data(void);
 unsigned ayther_palette_entry_size(void);

@@ -4449,6 +4449,19 @@ static int32_t ayther_map_region(uint32_t region_id,
          mapping->access_flags = AYTHER_REGION_ACCESS_READ |
             AYTHER_REGION_NATIVE_ENDIAN;
          break;
+      case AYTHER_REGION_SPRITE_OUTCOME:
+         /* #39.C: un byte por slot de la SAT, con los bits acumulados del
+            frame. El indice es el slot y no el orden de la cadena: el orden
+            cambia entre frames, el slot no. */
+         mapping->data = ayther_spr_outcome;
+         mapping->element_size = 1;
+         mapping->capacity = sizeof(ayther_spr_outcome);
+         mapping->byte_size = sizeof(ayther_spr_outcome);
+         mapping->data_version = AYTHER_LAYOUT_SPR_OUTCOME_V1;
+         mapping->legacy_memory_id = AYTHER_LEGACY_MEMORY_NONE;
+         mapping->access_flags = AYTHER_REGION_ACCESS_READ |
+            AYTHER_REGION_FRAME_SCOPED | AYTHER_REGION_NATIVE_ENDIAN;
+         break;
       case AYTHER_REGION_RASTER_FALLBACK_REASONS:
          mapping->data = &ayther_raster_dirty;
          mapping->element_size = sizeof(ayther_raster_dirty);
@@ -4481,6 +4494,9 @@ static uint32_t ayther_region_subscription(uint32_t region_id)
          return AYTHER_SUB_AUDIO_WRITES;
       case AYTHER_REGION_PARSED_SPRITES:
       case AYTHER_REGION_PARSED_SPRITE_COUNT:
+      /* #39.C: misma suscripcion que los sprites parseados. Es la respuesta a
+         "que le paso a ESTE sprite", y el que la pregunta ya pidio la lista. */
+      case AYTHER_REGION_SPRITE_OUTCOME:
          return AYTHER_SUB_SPRITE_CAPTURE;
       case AYTHER_REGION_RASTER_FALLBACK_REASONS:
       /* #39.A: el journal EXISTE porque alguien se suscribio al tracking
@@ -4992,7 +5008,7 @@ static int32_t AYTHER_CALL ayther_set_subscriptions_v1(
    `verify_ayther_api` compara el descriptor contra el header. Este string es
    informativo; si cambia la version, se cambia aca tambien. */
 static const char ayther_build_id[] =
-   "Genesis Plus GX AYTHER ABI 1.7; core v1.7.4" GIT_VERSION;
+   "Genesis Plus GX AYTHER ABI 1.8; core v1.7.4" GIT_VERSION;
 
 #if defined(LSB_FIRST) || defined(_WIN32) || defined(__LITTLE_ENDIAN__)
 #define AYTHER_HOST_ENDIANNESS AYTHER_ENDIAN_LITTLE
@@ -5104,7 +5120,7 @@ static const ayther_interface_v1 ayther_interface_1 =
       AYTHER_CAP_FRAME_DELTA_V1 | AYTHER_CAP_RECOMPOSE_STATS_V1 |
       AYTHER_CAP_ATTRIBUTION_V1 | AYTHER_CAP_FRAME_DELTA_SINCE_V1 |
       AYTHER_CAP_SYSTEM_V1 | AYTHER_CAP_LINE_STATE_V1 |
-      AYTHER_CAP_OBSERVABILITY_V1 |
+      AYTHER_CAP_OBSERVABILITY_V1 | AYTHER_CAP_SPRITE_OUTCOME_V1 |
       AYTHER_AUDIO_PROBE_CAPABILITY,
    AYTHER_HOST_ENDIANNESS,
    sizeof(void *),

@@ -61,6 +61,7 @@ second one read zero. |
 | 1.5 | **Additive.** Adds the `SYSTEM` region and `AYTHER_CAP_SYSTEM_V1` (#39.B), plus the `AYTHER_STATUS_UNSUPPORTED_MODE` status and `AYTHER_CAP_MODE4_CONTROLS` (#40). No existing field moved. Controls that only exist in Mode 5 now say so instead of accepting the write and doing nothing. |
 | 1.6 | **Additive.** Adds the `LINE_REGS`, `LINE_CRAM` and `LINE_CELLS` regions, the `AYTHER_SUB_LINE_STATE` / `AYTHER_SUB_LINE_CRAM` / `AYTHER_SUB_LINE_CELLS` subscriptions and `AYTHER_CAP_LINE_STATE_V1` (#42). `AYTHER_SUB_ALL` widens from `0xFF` to `0x7FF`; the eight existing bits keep their positions. |
 | 1.7 | **Additive.** Adds the `RASTER_JOURNAL`, `FRAME_HASH` and `PALETTE` regions, the `AYTHER_SUB_FRAME_HASH` subscription and `AYTHER_CAP_OBSERVABILITY_V1` (#39 A/D/E). `AYTHER_SUB_ALL` widens to `0xFFF`. No existing structure changes size or order. |
+| 1.8 | **Additive.** Adds the `SPRITE_OUTCOME` region and `AYTHER_CAP_SPRITE_OUTCOME_V1` (#39.C). Deliberately a parallel region rather than new fields on `ayther_sprite_v1`: that struct travels with its size announced in the descriptor, and a 1.0 consumer that transcribed it with its own types would read the array shifted from the second element on. |
 
 Two earlier changes were shipped inside 1.0 without a bump, which is what this
 table exists to prevent from recurring:
@@ -172,6 +173,7 @@ single-byte commands and report `addr = 0`.
 | `RASTER_JOURNAL` | `ayther_journal_v1` | 1 / 2,064 | frame read | — |
 | `FRAME_HASH` | `ayther_frame_hash_v1` | 1 / 56 | frame read | — |
 | `PALETTE` | build pixel type | 256 / 512 (16bpp) | read | — |
+| `SPRITE_OUTCOME` | `uint8_t` bitfield | 80 / 80 | frame read | — |
 
 The public ABI treats emulated memory and frame counters as read-only. The
 legacy pointers preserve their historical mutability for the transition.

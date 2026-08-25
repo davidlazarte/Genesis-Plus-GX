@@ -464,6 +464,106 @@ static void emit_fixture_data_sh(struct rom_builder *builder)
   emit_vdp_words(builder, 0xd800u, words, 12u);
 }
 
+/* #39.C: mas sprites en una linea de los que el VDP dibuja, y uno en x=0.
+ *
+ * El limite por linea en H40 son 20 sprites; este ROM pone 24 en la MISMA linea.
+ * Los primeros 20 entran y los cuatro ultimos se caen por el limite, que es
+ * exactamente el criterio de aceptacion del issue.
+ *
+ * Y el slot 12 va en x=0: en el VDP real, un sprite en x=0 -- cuando ya hubo
+ * otro con x>0 en la linea-- oculta a todos los de MENOR prioridad, o sea a los
+ * que vienen despues en la cadena. Los dos efectos conviven en el mismo frame a
+ * proposito: separarlos en dos ROMs no probaria que el core los distingue.
+ *
+ * Todos comparten Y para que caigan en la misma linea; lo que cambia es X, y el
+ * orden de la cadena es el orden de los slots.
+ */
+#define SPR_COUNT       24u
+#define SPR_SCREEN_Y    64u
+#define SPR_MASK_SLOT   12u   /* el que va en x=0 */
+
+static void emit_fixture_data_sprites(struct rom_builder *builder)
+{
+  static const uint16_t palette[16] =
+  {
+    0x0000u, 0x000eu, 0x00e0u, 0x0e00u,
+    0x00eeu, 0x0e0eu, 0x0ee0u, 0x0eeeu,
+    0x0008u, 0x0080u, 0x0800u, 0x0088u,
+    0x0808u, 0x0880u, 0x0444u, 0x0aaau
+  };
+  uint16_t words[512];
+  size_t index;
+
+  emit_move_long_immediate_absolute(builder, cram_write_command(0), VDP_CONTROL);
+  for (index = 0; index < 16u; ++index)
+    emit_move_word_immediate_absolute(builder, palette[index], VDP_DATA);
+
+  /* Un solo pattern opaco alcanza: lo que se mide es CUALES se dibujan. */
+  for (index = 0; index < 16u; ++index) words[index] = 0x1111u;
+  emit_vdp_words(builder, 0x0020u, words, 16u);
+
+  /* Fondo vacio: sin celdas escritas, los planos quedan transparentes. */
+  for (index = 0; index < 256u; ++index) words[index] = 0u;
+  emit_vdp_words(builder, 0xc000u, words, 256u);
+  emit_vdp_words(builder, 0xe000u, words, 256u);
+
+  /* Sin scroll por linea. */
+  for (index = 0; index < 448u; ++index) words[index] = 0u;
+  emit_vdp_words(builder, 0xf000u, words, 448u);
+
+  /* La SAT: 24 sprites de 8x8 en la misma Y, encadenados por slot. */
+  for (index = 0; index < SPR_COUNT; ++index)
+  {
+    uint16_t link = (uint16_t)((index + 1u < SPR_COUNT) ? index + 1u : 0u);
+    words[index * 4u + 0u] = (uint16_t)(128u + SPR_SCREEN_Y);
+    words[index * 4u + 1u] = link;                 /* 8x8 + siguiente slot */
+    words[index * 4u + 2u] = 1u;                   /* pattern 1, paleta 0  */
+    words[index * 4u + 3u] = (index == SPR_MASK_SLOT)
+      ? 0u                                          /* x=0: el que enmascara */
+      : (uint16_t)(128u + 8u + index * 8u);
+  }
+  emit_vdp_words(builder, 0xd800u, words, SPR_COUNT * 4u);
+}
+
+static void emit_reset_program_sprites(struct rom_builder *builder)
+{
+  emit_u16(builder, 0x46fcu); /* move.w #$2700,sr */
+  emit_u16(builder, 0x2700u);
+  emit_move_long_immediate_absolute(builder, 0x53454741u, TMSS);
+  emit_move_word_immediate_absolute(builder, 0x0100u, Z80_BUS_REQUEST);
+  emit_move_word_immediate_absolute(builder, 0x0100u, Z80_RESET);
+  emit_move_word_immediate_absolute(builder, 0u, RAM_FRAME);
+  emit_move_word_immediate_absolute(builder, 0u, RAM_LINE);
+
+  emit_vdp_register(builder, 0, 0x04u);
+  emit_vdp_register(builder, 1, 0x14u);
+  emit_vdp_register(builder, 2, 0x30u);
+  emit_vdp_register(builder, 3, 0x3eu);
+  emit_vdp_register(builder, 4, 0x07u);
+  emit_vdp_register(builder, 5, 0x6cu);
+  emit_vdp_register(builder, 7, 0x00u);
+  emit_vdp_register(builder, 10, 0x00u);
+  emit_vdp_register(builder, 11, 0x00u);
+  emit_vdp_register(builder, 12, 0x81u);   /* H40, sin shadow/highlight */
+  emit_vdp_register(builder, 13, 0x3cu);
+  emit_vdp_register(builder, 15, 0x02u);
+  emit_vdp_register(builder, 16, 0x01u);
+  emit_vdp_register(builder, 17, 0x00u);
+  emit_vdp_register(builder, 18, 0x00u);
+
+  emit_fixture_data_sprites(builder);
+
+  emit_move_word_immediate_absolute(builder, 0x0000u, Z80_BUS_REQUEST);
+  /* Sin H-int: el handler del fixture de siempre reescribe el slot 0 de la SAT
+     una vez por scanline, y aca la SAT es justamente lo que se observa. */
+  emit_vdp_register(builder, 0, 0x04u);
+  emit_vdp_register(builder, 1, 0x74u);
+
+  emit_u16(builder, 0x4e72u); /* stop #$2300 */
+  emit_u16(builder, 0x2300u);
+  emit_u16(builder, 0x60fau);
+}
+
 static void emit_reset_program_sh(struct rom_builder *builder)
 {
   emit_u16(builder, 0x46fcu); /* move.w #$2700,sr */
@@ -770,6 +870,11 @@ size_t ayther_build_generated_rom_fm(uint8_t *rom, size_t capacity)
 size_t ayther_build_generated_rom_sh(uint8_t *rom, size_t capacity)
 {
   return build_rom(rom, capacity, emit_reset_program_sh);
+}
+
+size_t ayther_build_generated_rom_sprites(uint8_t *rom, size_t capacity)
+{
+  return build_rom(rom, capacity, emit_reset_program_sprites);
 }
 
 size_t ayther_build_generated_rom_scene(uint8_t *rom, size_t capacity,

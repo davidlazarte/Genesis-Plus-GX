@@ -79,7 +79,17 @@ extern "C" {
  *
  * Aditiva: ninguna estructura existente cambia de tamanio ni de orden. */
 #define AYTHER_ABI_VERSION_1_7 UINT32_C(0x00010007)
-#define AYTHER_ABI_VERSION_LATEST AYTHER_ABI_VERSION_1_7
+/* 1.8 (#39.C): resultado de render por sprite. Aditiva: una region nueva,
+ * indexada por slot de la SAT.
+ *
+ * El issue pedia ampliar `ayther_sprite_v1` con los bits de descarte. No se
+ * hizo asi a proposito: ese struct viaja por la ABI con su tamanio anunciado
+ * en el descriptor, y un consumidor de 1.0 que lo transcribio con sus propios
+ * tipos -- que es exactamente lo que hace `tests/ci/abi_compat_1_0.c`--
+ * leeria el array corrido a partir del segundo elemento. Una region paralela
+ * dice lo mismo sin romper a nadie. */
+#define AYTHER_ABI_VERSION_1_8 UINT32_C(0x00010008)
+#define AYTHER_ABI_VERSION_LATEST AYTHER_ABI_VERSION_1_8
 
 #define AYTHER_ABI_VERSION_MAJOR(v) ((uint32_t)(v) >> 16)
 #define AYTHER_ABI_VERSION_MINOR(v) ((uint32_t)(v) & UINT32_C(0xFFFF))
@@ -196,6 +206,8 @@ enum ayther_endianness
    juntas en un bit porque llegan juntas y ninguna tiene sentido sin la ABI
    1.7; separarlas seria prometer que una puede faltar, y no puede. */
 #define AYTHER_CAP_OBSERVABILITY_V1    (UINT64_C(1) << 18)
+/* #39.C: por que gano o perdio cada sprite. */
+#define AYTHER_CAP_SPRITE_OUTCOME_V1   (UINT64_C(1) << 19)
 
 /* Observation and control work is opt-in. A requested mask becomes active at
  * the beginning of the next frame; unknown bits are rejected. */
@@ -257,6 +269,8 @@ enum ayther_region_id
   AYTHER_REGION_FRAME_HASH,
   /* #39.E: la paleta ya resuelta al formato de pixel del build. */
   AYTHER_REGION_PALETTE,
+  /* #39.C: que le paso a cada sprite de la SAT en este frame. */
+  AYTHER_REGION_SPRITE_OUTCOME,
   AYTHER_REGION_COUNT
 };
 
@@ -331,6 +345,7 @@ enum ayther_legacy_memory_id
 #define AYTHER_LAYOUT_JOURNAL_V1     UINT32_C(1)
 #define AYTHER_LAYOUT_FRAME_HASH_V1  UINT32_C(1)
 #define AYTHER_LAYOUT_PALETTE_V1     UINT32_C(1)
+#define AYTHER_LAYOUT_SPR_OUTCOME_V1 UINT32_C(1)
 
 /* AYTHER (#42): el estado de render POR SCANLINE, capturado del lado de la
  * LECTURA -- cuando el renderer lo usa- y no reconstruido desde el lado de la
@@ -495,6 +510,44 @@ typedef struct ayther_frame_hash_v1
  * esta tabla explica todos los colores del frame; con eventos, no puede.
  */
 #define AYTHER_PALETTE_ENTRIES 256
+
+/* #39.C: el resultado de render de cada sprite, un byte por slot de la SAT.
+ *
+ * `PARSED_SPRITES` dice que sprites vio el parser. No dice que les paso
+ * despues, y "aparece en la lista" no es lo mismo que "se dibujo": entre una
+ * cosa y la otra el VDP puede descartarlo por el limite de sprites de la
+ * linea, por el presupuesto de pixeles, o taparlo con la mascara de x=0.
+ *
+ * Un frontend que quiere saber por que su sprite no aparece tenia que deducir
+ * esas tres reglas por su cuenta, contando sprites por linea y reimplementando
+ * el orden de la cadena de la SAT. El core ya las conoce: son las condiciones
+ * exactas que evalua mientras dibuja.
+ *
+ * Los bits se ACUMULAN sobre el frame, no por linea: un sprite de 32 px de
+ * alto puede dibujarse en las primeras lineas y caerse por presupuesto en las
+ * ultimas, y las dos cosas son ciertas. Un frontend que necesite el detalle
+ * por linea tiene el journal y el estado por scanline.
+ *
+ * El indice es el slot de la SAT -- el mismo espacio que la mascara de
+ * supresion (id 0x103) y que `sat_idx` de `ayther_sprite_v1`-, no el orden de
+ * la cadena: el orden cambia entre frames, el slot no.
+ */
+#define AYTHER_SPRITE_SAT_SLOTS 80
+
+/* Entro en la lista de la linea al menos una vez. */
+#define AYTHER_SPR_OUT_PARSED        UINT8_C(0x01)
+/* Llego al bucle de dibujo al menos una vez. */
+#define AYTHER_SPR_OUT_DRAWN         UINT8_C(0x02)
+/* Descartado por el limite de sprites POR LINEA (16 en H32, 20 en H40). */
+#define AYTHER_SPR_OUT_DROP_LINE     UINT8_C(0x04)
+/* Descartado por el presupuesto de PIXELES de la linea. */
+#define AYTHER_SPR_OUT_DROP_PIXEL    UINT8_C(0x08)
+/* Tapado por la mascara de sprites: alguno anterior estaba en x=0. */
+#define AYTHER_SPR_OUT_MASKED_X0     UINT8_C(0x10)
+/* Suprimido por el frontend con la mascara 0x103. Se distingue de los
+   descartes del hardware a proposito: "no se dibujo porque vos lo pediste"
+   y "no se dibujo porque el VDP no daba" son respuestas distintas. */
+#define AYTHER_SPR_OUT_SUPPRESSED    UINT8_C(0x20)
 
 /* La CRAM no cambio en todo el frame: solo la entrada 0 es significativa. */
 #define AYTHER_LINES_CRAM_UNIFORM   UINT32_C(0x01)

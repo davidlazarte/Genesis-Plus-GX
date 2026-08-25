@@ -25,6 +25,20 @@
 
 #ifdef AYTHER_EXTENSIONS
 
+/* #39.C: que le paso a cada sprite de la SAT en este frame. Los bits se
+   acumulan -- un sprite alto puede dibujarse arriba y caerse abajo-- y se
+   limpian en `vdp_ayther_begin_frame`. */
+uint8 ayther_spr_outcome[AYTHER_SPRITE_SAT_SLOTS];
+
+/* Se marca solo cuando alguien mira: el bucle de sprites es codigo caliente
+   y este store no tiene por que existir para quien no pidio la region. */
+#define AYTHER_SPR_OUT_ACTIVE  AYTHER_SUBSCRIBED(AYTHER_SUB_SPRITE_CAPTURE)
+#define AYTHER_SPR_OUT_MARK(idx, bits)                                       \
+  do {                                                                       \
+    if ((unsigned)(idx) < AYTHER_SPRITE_SAT_SLOTS)                               \
+      ayther_spr_outcome[(idx)] |= (uint8)(bits);                            \
+  } while (0)
+
 /* AYTHER (#28): ALT_RENDERER trae su propio juego de renderers Mode 5, sin
    ninguno de los gates de este fork. Sólo lo activan GameCube, Wii, GCW0, Vita
    y PSP2 —plataformas que este fork no compila: sus targets son win64, unix y
@@ -485,6 +499,10 @@ uint64_t ayther_controls_fingerprint(void)
 #define ayther_sprite_capture_record(yr, xr, attr, w, h, sat_idx, chain_pos) ((void)0)
 #define AYTHER_CELL_RECORD(pair) ((void)0)
 #define AYTHER_LINE_CELLS_ACTIVE 0
+#define AYTHER_SPR_OUT_ACTIVE 0
+/* Sin extensiones los bits ni siquiera existen -- viven en ayther_api.h-,
+   asi que el stub no puede tocar sus argumentos. */
+#define AYTHER_SPR_OUT_MARK(idx, bits) ((void)0)
 
 #endif /* AYTHER_EXTENSIONS */
 #endif /* AYTHER_RENDER_STATE_H */

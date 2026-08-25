@@ -4172,6 +4172,15 @@ AYTHER_HOT_INLINE void render_obj_m5_impl(int line, int ayther_observed)
     /* Sprite X position */
     xpos = object_info->xpos;
 
+    /* #39.C: llego hasta aca, o sea que el parser lo puso en la lista. */
+    AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_PARSED);
+
+    /* #39.C: llego hasta aca, o sea que el parser lo puso en la lista. */
+    AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_PARSED);
+
+    /* #39.C: llego hasta aca, o sea que el parser lo puso en la lista. */
+    AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_PARSED);
+
     /* Sprite masking  */
     if (xpos)
     {
@@ -4183,6 +4192,18 @@ AYTHER_HOT_INLINE void render_obj_m5_impl(int line, int ayther_observed)
       /* Remaining sprites are not drawn */
       masked = 1;
     }
+    /* #39.C: `masked` se pega una vez y ya no se suelta, asi que este y todos
+       los que siguen quedan tapados por la mascara de x=0. */
+    if (masked)
+      AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_MASKED_X0);
+    /* #39.C: `masked` se pega una vez y ya no se suelta, asi que este y todos
+       los que siguen quedan tapados por la mascara de x=0. */
+    if (masked)
+      AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_MASKED_X0);
+    /* #39.C: `masked` se pega una vez y ya no se suelta, asi que este y todos
+       los que siguen quedan tapados por la mascara de x=0. */
+    if (masked)
+      AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_MASKED_X0);
 
     /* Display area offset */
     xpos = xpos - 0x80;
@@ -4230,6 +4251,15 @@ AYTHER_HOT_INLINE void render_obj_m5_impl(int line, int ayther_observed)
         width -= (pixelcount - max_pixels);
       }
 
+      /* #39.C: aca ya esta decidido que se dibuja. */
+      AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_DRAWN);
+
+      /* #39.C: aca ya esta decidido que se dibuja. */
+      AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_DRAWN);
+
+      /* #39.C: aca ya esta decidido que se dibuja. */
+      AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_DRAWN);
+
       /* Number of tiles to draw */
       width = width >> 3;
 
@@ -4260,6 +4290,19 @@ AYTHER_HOT_INLINE void render_obj_m5_impl(int line, int ayther_observed)
       /* Sprite masking is effective on next line if max pixel width is reached */
       spr_ovr = (pixelcount >= bitmap.viewport.w);
 
+      /* #39.C: los que quedaban en la lista no se dibujan, y saber CUALES es
+         justamente lo que un frontend no puede deducir sin recontar pixeles por
+         linea. El barrido existe solo si alguien pidio la region. */
+      if (AYTHER_SPR_OUT_ACTIVE)
+      {
+        object_info_t *rest = object_info;
+        int left = count + 1;
+        while (left-- > 0)
+        {
+          AYTHER_SPR_OUT_MARK(rest->sat_idx, AYTHER_SPR_OUT_DROP_PIXEL);
+          ++rest;
+        }
+      }
       /* Stop sprite rendering */
       return;
     }
@@ -4309,6 +4352,15 @@ void render_obj_m5_ste(int line)
     /* Sprite X position */
     xpos = object_info->xpos;
 
+    /* #39.C: llego hasta aca, o sea que el parser lo puso en la lista. */
+    AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_PARSED);
+
+    /* #39.C: llego hasta aca, o sea que el parser lo puso en la lista. */
+    AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_PARSED);
+
+    /* #39.C: llego hasta aca, o sea que el parser lo puso en la lista. */
+    AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_PARSED);
+
     /* Sprite masking  */
     if (xpos)
     {
@@ -4320,6 +4372,18 @@ void render_obj_m5_ste(int line)
       /* Remaining sprites are not drawn */
       masked = 1;
     }
+    /* #39.C: `masked` se pega una vez y ya no se suelta, asi que este y todos
+       los que siguen quedan tapados por la mascara de x=0. */
+    if (masked)
+      AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_MASKED_X0);
+    /* #39.C: `masked` se pega una vez y ya no se suelta, asi que este y todos
+       los que siguen quedan tapados por la mascara de x=0. */
+    if (masked)
+      AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_MASKED_X0);
+    /* #39.C: `masked` se pega una vez y ya no se suelta, asi que este y todos
+       los que siguen quedan tapados por la mascara de x=0. */
+    if (masked)
+      AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_MASKED_X0);
 
     /* Display area offset */
     xpos = xpos - 0x80;
@@ -4363,6 +4427,15 @@ void render_obj_m5_ste(int line)
         width -= (pixelcount - max_pixels);
       }
 
+      /* #39.C: aca ya esta decidido que se dibuja. */
+      AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_DRAWN);
+
+      /* #39.C: aca ya esta decidido que se dibuja. */
+      AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_DRAWN);
+
+      /* #39.C: aca ya esta decidido que se dibuja. */
+      AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_DRAWN);
+
       /* Number of tiles to draw */
       width = width >> 3;
 
@@ -4387,6 +4460,19 @@ void render_obj_m5_ste(int line)
       /* Merge background & sprite layers */
       merge(&linebuf[1][0x20], &linebuf[0][0x20], &linebuf[0][0x20], lut[4], bitmap.viewport.w);
 
+      /* #39.C: los que quedaban en la lista no se dibujan, y saber CUALES es
+         justamente lo que un frontend no puede deducir sin recontar pixeles por
+         linea. El barrido existe solo si alguien pidio la region. */
+      if (AYTHER_SPR_OUT_ACTIVE)
+      {
+        object_info_t *rest = object_info;
+        int left = count + 1;
+        while (left-- > 0)
+        {
+          AYTHER_SPR_OUT_MARK(rest->sat_idx, AYTHER_SPR_OUT_DROP_PIXEL);
+          ++rest;
+        }
+      }
       /* Stop sprite rendering */
       return;
     }
@@ -4441,6 +4527,15 @@ AYTHER_HOT_INLINE void render_obj_m5_im2_impl(int line, int ayther_observed)
     /* Sprite X position */
     xpos = object_info->xpos;
 
+    /* #39.C: llego hasta aca, o sea que el parser lo puso en la lista. */
+    AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_PARSED);
+
+    /* #39.C: llego hasta aca, o sea que el parser lo puso en la lista. */
+    AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_PARSED);
+
+    /* #39.C: llego hasta aca, o sea que el parser lo puso en la lista. */
+    AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_PARSED);
+
     /* Sprite masking  */
     if (xpos)
     {
@@ -4452,6 +4547,18 @@ AYTHER_HOT_INLINE void render_obj_m5_im2_impl(int line, int ayther_observed)
       /* Remaining sprites are not drawn */
       masked = 1;
     }
+    /* #39.C: `masked` se pega una vez y ya no se suelta, asi que este y todos
+       los que siguen quedan tapados por la mascara de x=0. */
+    if (masked)
+      AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_MASKED_X0);
+    /* #39.C: `masked` se pega una vez y ya no se suelta, asi que este y todos
+       los que siguen quedan tapados por la mascara de x=0. */
+    if (masked)
+      AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_MASKED_X0);
+    /* #39.C: `masked` se pega una vez y ya no se suelta, asi que este y todos
+       los que siguen quedan tapados por la mascara de x=0. */
+    if (masked)
+      AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_MASKED_X0);
 
     /* Display area offset */
     xpos = xpos - 0x80;
@@ -4498,6 +4605,15 @@ AYTHER_HOT_INLINE void render_obj_m5_im2_impl(int line, int ayther_observed)
         width -= (pixelcount - max_pixels);
       }
 
+      /* #39.C: aca ya esta decidido que se dibuja. */
+      AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_DRAWN);
+
+      /* #39.C: aca ya esta decidido que se dibuja. */
+      AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_DRAWN);
+
+      /* #39.C: aca ya esta decidido que se dibuja. */
+      AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_DRAWN);
+
       /* Number of tiles to draw */
       width = width >> 3;
 
@@ -4528,6 +4644,19 @@ AYTHER_HOT_INLINE void render_obj_m5_im2_impl(int line, int ayther_observed)
       /* Sprite masking is effective on next line if max pixel width is reached */
       spr_ovr = (pixelcount >= bitmap.viewport.w);
 
+      /* #39.C: los que quedaban en la lista no se dibujan, y saber CUALES es
+         justamente lo que un frontend no puede deducir sin recontar pixeles por
+         linea. El barrido existe solo si alguien pidio la region. */
+      if (AYTHER_SPR_OUT_ACTIVE)
+      {
+        object_info_t *rest = object_info;
+        int left = count + 1;
+        while (left-- > 0)
+        {
+          AYTHER_SPR_OUT_MARK(rest->sat_idx, AYTHER_SPR_OUT_DROP_PIXEL);
+          ++rest;
+        }
+      }
       /* Stop sprite rendering */
       return;
     }
@@ -4574,6 +4703,15 @@ void render_obj_m5_im2_ste(int line)
     /* Sprite X position */
     xpos = object_info->xpos;
 
+    /* #39.C: llego hasta aca, o sea que el parser lo puso en la lista. */
+    AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_PARSED);
+
+    /* #39.C: llego hasta aca, o sea que el parser lo puso en la lista. */
+    AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_PARSED);
+
+    /* #39.C: llego hasta aca, o sea que el parser lo puso en la lista. */
+    AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_PARSED);
+
     /* Sprite masking  */
     if (xpos)
     {
@@ -4585,6 +4723,18 @@ void render_obj_m5_im2_ste(int line)
       /* Remaining sprites are not drawn */
       masked = 1;
     }
+    /* #39.C: `masked` se pega una vez y ya no se suelta, asi que este y todos
+       los que siguen quedan tapados por la mascara de x=0. */
+    if (masked)
+      AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_MASKED_X0);
+    /* #39.C: `masked` se pega una vez y ya no se suelta, asi que este y todos
+       los que siguen quedan tapados por la mascara de x=0. */
+    if (masked)
+      AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_MASKED_X0);
+    /* #39.C: `masked` se pega una vez y ya no se suelta, asi que este y todos
+       los que siguen quedan tapados por la mascara de x=0. */
+    if (masked)
+      AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_MASKED_X0);
 
     /* Display area offset */
     xpos = xpos - 0x80;
@@ -4628,6 +4778,15 @@ void render_obj_m5_im2_ste(int line)
         width -= (pixelcount - max_pixels);
       }
 
+      /* #39.C: aca ya esta decidido que se dibuja. */
+      AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_DRAWN);
+
+      /* #39.C: aca ya esta decidido que se dibuja. */
+      AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_DRAWN);
+
+      /* #39.C: aca ya esta decidido que se dibuja. */
+      AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_DRAWN);
+
       /* Number of tiles to draw */
       width = width >> 3;
 
@@ -4652,6 +4811,19 @@ void render_obj_m5_im2_ste(int line)
       /* Merge background & sprite layers */
       merge(&linebuf[1][0x20], &linebuf[0][0x20], &linebuf[0][0x20], lut[4], bitmap.viewport.w);
 
+      /* #39.C: los que quedaban en la lista no se dibujan, y saber CUALES es
+         justamente lo que un frontend no puede deducir sin recontar pixeles por
+         linea. El barrido existe solo si alguien pidio la region. */
+      if (AYTHER_SPR_OUT_ACTIVE)
+      {
+        object_info_t *rest = object_info;
+        int left = count + 1;
+        while (left-- > 0)
+        {
+          AYTHER_SPR_OUT_MARK(rest->sat_idx, AYTHER_SPR_OUT_DROP_PIXEL);
+          ++rest;
+        }
+      }
       /* Stop sprite rendering */
       return;
     }
@@ -4943,13 +5115,35 @@ void parse_satb_m5(int line)
         /* AYTHER: ocultar sprite por hash — saltear el slot SAT suprimido (no se
            agrega → no se dibuja). Sólo el frame visible suprime; la re-sim bare
            corre con la máscara vacía → status del VDP intacto, replay sin drift. */
-        if (!AYTHER_SPR_SUPPRESSED_ACTIVE(
+        if (AYTHER_SPR_SUPPRESSED_ACTIVE(
               ayther_suppression_active, link >> 2))
+        {
+          /* #39.C: "no se dibujo porque vos lo pediste" y "no se dibujo
+             porque el VDP no daba" son respuestas distintas. */
+          AYTHER_SPR_OUT_MARK(link >> 2, AYTHER_SPR_OUT_SUPPRESSED);
+        }
+        else
         {
         /* Sprite overflow */
         if (count == max)
         {
           status |= 0x40;
+          /* #39.C: el que no entro tambien es una respuesta. Se marca este
+             y se sigue caminando la cadena SOLO para marcar los que vienen
+             detras -- sin agregarlos a la lista, que es lo que el hardware
+             hace-. El paseo extra existe unicamente cuando alguien pidio la
+             region: sin suscripcion, el `break` es el de siempre. */
+          if (AYTHER_SPR_OUT_ACTIVE)
+          {
+            unsigned int rest = link, left = total;
+            while (left--)
+            {
+              AYTHER_SPR_OUT_MARK(rest >> 2, AYTHER_SPR_OUT_DROP_LINE);
+              rest = (q[rest + 1] & 0x7F) << 2;
+              if ((rest == 0) || (rest >= (unsigned int)bitmap.viewport.w))
+                break;
+            }
+          }
           break;
         }
 
@@ -4958,6 +5152,9 @@ void parse_satb_m5(int line)
         object_info->xpos  = p[link + 3] & 0x1ff;
         object_info->ypos  = ypos;
         object_info->size  = size & 0x0f;
+        /* #39.C: de que slot de la SAT salio, para que el renderer pueda
+           decir CUAL descarto y no solo cuantos. */
+        object_info->sat_idx = (uint16)(link >> 2);
         /* AYTHER: registrar el sprite parseado (ids 0x10B/0x10C). q[link] = Y cruda
            (la caché), p[link+3] = X, p[link+2] = attr; w/h desde `size` (q[link+1]>>8,
            h=bits1:0, w=bits3:2). sat_idx = link>>2 (espacio de la máscara 0x103);
@@ -5081,13 +5278,35 @@ void parse_satb_m5_im2(int line)
         /* AYTHER: ocultar sprite por hash — saltear el slot SAT suprimido (no se
            agrega → no se dibuja). Sólo el frame visible suprime; la re-sim bare
            corre con la máscara vacía → status del VDP intacto, replay sin drift. */
-        if (!AYTHER_SPR_SUPPRESSED_ACTIVE(
+        if (AYTHER_SPR_SUPPRESSED_ACTIVE(
               ayther_suppression_active, link >> 2))
+        {
+          /* #39.C: "no se dibujo porque vos lo pediste" y "no se dibujo
+             porque el VDP no daba" son respuestas distintas. */
+          AYTHER_SPR_OUT_MARK(link >> 2, AYTHER_SPR_OUT_SUPPRESSED);
+        }
+        else
         {
         /* Sprite overflow */
         if (count == max)
         {
           status |= 0x40;
+          /* #39.C: el que no entro tambien es una respuesta. Se marca este
+             y se sigue caminando la cadena SOLO para marcar los que vienen
+             detras -- sin agregarlos a la lista, que es lo que el hardware
+             hace-. El paseo extra existe unicamente cuando alguien pidio la
+             region: sin suscripcion, el `break` es el de siempre. */
+          if (AYTHER_SPR_OUT_ACTIVE)
+          {
+            unsigned int rest = link, left = total;
+            while (left--)
+            {
+              AYTHER_SPR_OUT_MARK(rest >> 2, AYTHER_SPR_OUT_DROP_LINE);
+              rest = (q[rest + 1] & 0x7F) << 2;
+              if ((rest == 0) || (rest >= (unsigned int)bitmap.viewport.w))
+                break;
+            }
+          }
           break;
         }
 
@@ -5096,6 +5315,9 @@ void parse_satb_m5_im2(int line)
         object_info->xpos  = p[link + 3] & 0x1ff;
         object_info->ypos  = ypos;
         object_info->size  = size & 0x0f;
+        /* #39.C: de que slot de la SAT salio, para que el renderer pueda
+           decir CUAL descarto y no solo cuantos. */
+        object_info->sat_idx = (uint16)(link >> 2);
         /* AYTHER: registrar el sprite parseado (ids 0x10B/0x10C) — variante im2.
            sat_idx = link>>2 (espacio de la máscara 0x103); chain_pos = paso en la
            cadena (prioridad real de dibujo). */

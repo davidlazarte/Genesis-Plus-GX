@@ -36,4 +36,21 @@ size_t ayther_build_generated_rom_sh(uint8_t *rom, size_t capacity);
 #define AYTHER_SH_BG_X 8
 #define AYTHER_SH_BG_Y 20
 
+/* #35: una escena por modo de video (#35 punto 1).
+ *
+ * El ROM de siempre ejercita Mode 5 H40 progresivo NTSC y nada mas, asi que los
+ * deltas del fork que tocan los otros modos no tenian con que probarse: #28
+ * arreglo las mascaras de render en interlace 2 y en vscroll enhanced sin un
+ * fixture que los ejercitara, y que hoy funcionen es una afirmacion que nadie
+ * puede rehacer.
+ *
+ * Cada escena es un ROM completo y estatico. Uno por escena, y no segmentos
+ * adentro de un solo ROM, porque asi no hace falta emitir un dispatcher en
+ * 68000 y porque lo que las escenas tienen que dar es un hash POR MODO: un
+ * golden agregado dice "algo se rompio", uno por escena dice cual. */
+size_t ayther_build_generated_rom_scene(uint8_t *rom, size_t capacity,
+                                        size_t scene);
+size_t ayther_scene_count(void);
+const char *ayther_scene_name(size_t index);
+
 #endif

@@ -247,3 +247,34 @@ types and uses it, the way a consumer from that era would.
 had been broken for a while: `cpuhook.h` *defined* `cpu_hook` instead of
 declaring it, which only linked under `-fcommon` (the default up to gcc 9 /
 clang 10).
+
+## Video mode scenes (#35)
+
+`make -C tests check-scenes CORE=...` runs eight ROMs, one per VDP
+configuration, and compares a per-scene video and audio hash against
+`ayther/golden/scenes.txt`.
+
+The deterministic fixture covers Mode 5, H40, progressive, NTSC, no window and
+no DMA — and nothing else. That is the gap these scenes close: #28 fixed the
+render masks for interlace 2 and enhanced vscroll *without a fixture that
+exercised either*, so "they work now" was a claim nobody could reproduce.
+
+Each scene is a complete, static ROM rather than a segment inside one. One ROM
+per scene avoids emitting a dispatcher in hand-written big-endian 68000, and it
+gives the thing the scenes exist for: a hash **per mode**. An aggregate golden
+says "something broke"; a per-scene golden says "interlace 2 broke".
+
+Regenerate with `make -C tests regen-scenes CORE=...`. A golden that can only be
+updated by editing it ends up edited without looking, which is how a golden
+stops meaning anything.
+
+The run ends with a distinctness count. A scene whose video hash equals
+another's does not discriminate: the mode it claims to cover could break and the
+golden would not notice. `interlace1` is currently such a scene — with
+`config.render` off, interlace 1 emits the same frame as progressive — and the
+warning keeps that visible instead of letting a useless scene sit there looking
+like coverage.
+
+The golden is **shared by Linux and Windows**, and all eight scenes match on
+both. That is an independent confirmation of the #45 fix above: eight different
+video modes, byte-identical across platforms.

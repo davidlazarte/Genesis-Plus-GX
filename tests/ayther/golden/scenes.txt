@@ -1,0 +1,10 @@
+# #35: un hash por escena. Regenerar con `make -C tests regen-scenes CORE=...`
+# escena video audio ancho alto frames
+h40 45cf12588c35d3a5 c510bdaa780b7ab1 320 224 30
+h32 cb7b6602a2a3afa5 c510bdaa780b7ab1 256 224 30
+window b9f5c3332cf2b6b5 e2ad86cf8398463d 320 224 30
+shadow 584a5b958b463d25 c510bdaa780b7ab1 320 224 30
+interlace1 45cf12588c35d3a5 c510bdaa780b7ab1 320 224 30
+interlace2 a1b216674209dc45 c510bdaa780b7ab1 320 224 30
+pal 4008fd8c57b273a5 c510bdaa780b7ab1 320 240 30
+dma_fill 2bd83591bb530265 f9ead42a844f0339 320 224 30

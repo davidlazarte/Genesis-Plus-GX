@@ -140,6 +140,8 @@ extern uint32 ayther_line_count;
 extern uint32 ayther_line_flags;
 extern ayther_line_cells_v1 ayther_line_cells[AYTHER_LINE_MAX];
 void ayther_line_state_begin_frame(void);
+/* #36.7: suelta los caches de recomposicion pedidos al primer uso. */
+void ayther_recompose_release(void);
 extern uint8 ayther_tile_suppress[512];    /* celdas de tile suprimidas (id 0x104, 64x64) */
 extern uint8 ayther_plane_tile_suppress[3 * 1024]; /* tiles de plano suprimidos (id 0x105) */
 extern uint8 ayther_plane_suppress_active;  /* id 0x106: 1 = hay algún tile de plano oculto */

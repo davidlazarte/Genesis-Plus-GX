@@ -5242,6 +5242,11 @@ void retro_deinit(void)
    g_rom_size = 0;
    is_running = false;
    ayther_reset_session(false);
+#ifdef AYTHER_EXTENSIONS
+   /* #36.7: los caches de recomposicion se piden al primer uso; lo que se pidio
+      se suelta. Un core que nunca recompuso no llego a reservarlos. */
+   ayther_recompose_release();
+#endif
 }
 
 void retro_reset(void)

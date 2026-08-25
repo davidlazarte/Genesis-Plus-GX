@@ -10,7 +10,24 @@ static uint64_t ayther_rc_cache_controls = 0;
 static int ayther_rc_cache_valid = 0;
 static int ayther_rc_cache_w = 0;
 static int ayther_rc_cache_h = 0;
-static uint16 ayther_rc_cache_pixels[320 * 300];
+/* #36 punto 7: los caches de recomposicion eran estaticos y sumaban 1,15 MB
+   residentes en TODA build con extensions, la mire alguien o no. Un core que
+   nadie observa cargaba con eso en memoria y, peor, en cache del procesador:
+   1,15 MB de datos que jamas se tocan igual desalojan lineas que si se usan.
+
+   Ahora se piden a malloc la primera vez que alguien recompone, y se sueltan en
+   retro_deinit. Un frontend que solo lee VRAM no paga un byte. */
+static uint16 *ayther_rc_cache_pixels;
+
+static int ayther_rc_cache_ensure(void)
+{
+  if (!ayther_rc_cache_pixels)
+  {
+    ayther_rc_cache_pixels = (uint16 *)malloc(sizeof(uint16) * 320 * 300);
+    if (!ayther_rc_cache_pixels) return 0;
+  }
+  return 1;
+}
 
 /* Telemetría de los dos caches (#26). Sin esto, "el cache sigue funcionando"
  * sólo se puede afirmar cronometrando, que en CI es una medición que flakea.
@@ -56,7 +73,29 @@ static uint64_t ayther_ml_cache_controls = 0;
 static uint8 ayther_ml_cache_have = 0;
 static int ayther_ml_cache_w = 0;
 static int ayther_ml_cache_h = 0;
-static uint16 ayther_ml_cache_px[5][320 * 300];
+static uint16 (*ayther_ml_cache_px)[320 * 300];
+
+static int ayther_ml_cache_ensure(void)
+{
+  if (!ayther_ml_cache_px)
+  {
+    ayther_ml_cache_px = (uint16 (*)[320 * 300])
+      malloc(sizeof(uint16) * 5 * 320 * 300);
+    if (!ayther_ml_cache_px) return 0;
+  }
+  return 1;
+}
+
+/* Llamado desde retro_deinit: lo que se pidio se suelta. */
+void ayther_recompose_release(void)
+{
+  free(ayther_rc_cache_pixels);
+  ayther_rc_cache_pixels = 0;
+  free(ayther_ml_cache_px);
+  ayther_ml_cache_px = 0;
+  ayther_rc_cache_valid = 0;
+  ayther_ml_cache_have = 0;
+}
 
 /* #27: aplicar un cambio de registro durante el raster replay.
  *
@@ -153,7 +192,11 @@ int ayther_recompose_frame(uint16 *out, int cap, unsigned int flags,
   rc_mask = ayther_rc_effective_mask(flags);
   ayther_rc_stat_single_calls++;
 
-  if (ayther_rc_cache_valid &&
+  /* #36.7: el cache se pide la primera vez que alguien recompone. Si no se
+     pudo, no hay cache -- se recompone igual, solo que sin memoria. */
+  if (!ayther_rc_cache_ensure()) ayther_rc_cache_valid = 0;
+
+  if (ayther_rc_cache_valid && ayther_rc_cache_pixels &&
       ayther_rc_cache_generation == ayther_core_frame_generation &&
       ayther_rc_cache_flags == flags &&
       ayther_rc_cache_mask == rc_mask &&
@@ -319,7 +362,8 @@ int ayther_recompose_frame(uint16 *out, int cap, unsigned int flags,
     ayther_rc_cache_w = w;
     ayther_rc_cache_h = h;
     ayther_rc_cache_valid = 1;
-    memcpy(ayther_rc_cache_pixels, out, w * h * 2);
+    if (ayther_rc_cache_pixels)
+      memcpy(ayther_rc_cache_pixels, out, w * h * 2);
   }
   else
   {
@@ -395,7 +439,9 @@ int ayther_core_recompose_multilayer(
     ml_want = want;
     ml_controls = ayther_controls_fingerprint();
     ayther_rc_stat_multi_calls++;
-    if (ayther_ml_cache_generation == ayther_core_frame_generation &&
+    if (!ayther_ml_cache_ensure()) ayther_ml_cache_have = 0;
+    if (ayther_ml_cache_px &&
+        ayther_ml_cache_generation == ayther_core_frame_generation &&
         ayther_ml_cache_flags == flags &&
         ayther_ml_cache_mask == ayther_layer_mask &&
         ayther_ml_cache_controls == ml_controls &&
@@ -653,12 +699,15 @@ int ayther_core_recompose_multilayer(
       ayther_ml_cache_h = h;
       ayther_ml_cache_have = 0;
     }
-    if (out_bg_a)      memcpy(ayther_ml_cache_px[0], out_bg_a,      n);
-    if (out_bg_b)      memcpy(ayther_ml_cache_px[1], out_bg_b,      n);
-    if (out_window)    memcpy(ayther_ml_cache_px[2], out_window,    n);
-    if (out_sprites)   memcpy(ayther_ml_cache_px[3], out_sprites,   n);
-    if (out_composite) memcpy(ayther_ml_cache_px[4], out_composite, n);
-    ayther_ml_cache_have |= ml_want;
+    if (ayther_ml_cache_px)
+    {
+      if (out_bg_a)      memcpy(ayther_ml_cache_px[0], out_bg_a,      n);
+      if (out_bg_b)      memcpy(ayther_ml_cache_px[1], out_bg_b,      n);
+      if (out_window)    memcpy(ayther_ml_cache_px[2], out_window,    n);
+      if (out_sprites)   memcpy(ayther_ml_cache_px[3], out_sprites,   n);
+      if (out_composite) memcpy(ayther_ml_cache_px[4], out_composite, n);
+      ayther_ml_cache_have |= ml_want;
+    }
   }
 
   if (out_w) *out_w = w;

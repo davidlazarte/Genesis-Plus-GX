@@ -191,7 +191,10 @@ int main(int argc, char **argv)
       return 2;
 
   if (regen) {
-    golden = fopen(golden_path, "w");
+    /* "wb": en Windows el modo texto escribe CRLF, y el arbol de tests esta
+       normalizado a LF. Sin esto, regenerar el golden en Windows lo deja
+       modificado para git aunque los hashes no hayan cambiado. */
+    golden = fopen(golden_path, "wb");
     if (!golden) { fprintf(stderr, "no se puede escribir %s\n", golden_path); return 2; }
     write_golden(golden, results, n);
     fclose(golden);

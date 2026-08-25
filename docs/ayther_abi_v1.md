@@ -58,6 +58,9 @@ consuming the bitmap: it now returns the frozen delta of the last completed
 frame, so two consumers of the same frame read the same thing. Before, the
 second one read zero. |
 | 1.2 | **Additive.** Appends `recompose_multilayer` to the descriptor and adds the `AYTHER_REGION_WORD_SWAPPED_LE` region flag (#32). The standalone `ayther_recompose_multilayer` export is now **deprecated** and is emitted only in the legacy profile. |
+| 1.5 | **Additive.** Adds the `SYSTEM` region and `AYTHER_CAP_SYSTEM_V1` (#39.B), plus the `AYTHER_STATUS_UNSUPPORTED_MODE` status and `AYTHER_CAP_MODE4_CONTROLS` (#40). No existing field moved. Controls that only exist in Mode 5 now say so instead of accepting the write and doing nothing. |
+| 1.6 | **Additive.** Adds the `LINE_REGS`, `LINE_CRAM` and `LINE_CELLS` regions, the `AYTHER_SUB_LINE_STATE` / `AYTHER_SUB_LINE_CRAM` / `AYTHER_SUB_LINE_CELLS` subscriptions and `AYTHER_CAP_LINE_STATE_V1` (#42). `AYTHER_SUB_ALL` widens from `0xFF` to `0x7FF`; the eight existing bits keep their positions. |
+| 1.7 | **Additive.** Adds the `RASTER_JOURNAL`, `FRAME_HASH` and `PALETTE` regions, the `AYTHER_SUB_FRAME_HASH` subscription and `AYTHER_CAP_OBSERVABILITY_V1` (#39 A/D/E). `AYTHER_SUB_ALL` widens to `0xFFF`. No existing structure changes size or order. |
 
 Two earlier changes were shipped inside 1.0 without a bump, which is what this
 table exists to prevent from recurring:
@@ -166,6 +169,9 @@ single-byte commands and report `addr = 0`.
 | `PARSED_SPRITE_COUNT` | `uint8_t` | 1 / 1 | frame read | `0x10C` |
 | `AUDIO_MUTE` | `uint32_t` | 1 / 4 | read/control | `0x10D` |
 | `RASTER_FALLBACK_REASONS` | `uint32_t` | 1 / 4 | frame read | `0x10E` |
+| `RASTER_JOURNAL` | `ayther_journal_v1` | 1 / 2,064 | frame read | — |
+| `FRAME_HASH` | `ayther_frame_hash_v1` | 1 / 56 | frame read | — |
+| `PALETTE` | build pixel type | 256 / 512 (16bpp) | read | — |
 
 The public ABI treats emulated memory and frame counters as read-only. The
 legacy pointers preserve their historical mutability for the transition.
@@ -377,13 +383,218 @@ won) only exists at the merge. Nothing is captured without
 `RENDER_CONTROLS`: a byte per pixel per frame is a different order of cost, and
 a consumer that only hides layers should not pay it.
 
-### Known limitation: the sprite bit
+### The sprite bit (#31/#37/#41)
 
-Bit 0 comes from comparing the line buffer before and after `render_obj`. A
-sprite pixel whose byte happens to equal the background byte is therefore **not**
-marked. The bit is conservative: it never marks a pixel that is not a sprite.
+Bit 0 used to come from comparing the line buffer before and after
+`render_obj`. That gave two wrong answers, and both mattered: a sprite pixel
+whose byte happened to equal the background byte was **not** marked — a hole
+inside the sprite — and a pixel that only changed because of a shadow/highlight
+operator **was** marked, though an operator places no colour at all.
 
-Marking those exactly requires `render_obj` to write the sprite id in its inner
-loop. That change also delivers `sat_idx` per pixel, fixes the same flaw in
-`layer_dim` (#31), and lets multilayer recomposition run in one pass (#37) — so
-it belongs with them rather than here.
+It is now written where the priority is decided, and that is not one place:
+`render_obj_m5` / `_im2` draw straight into `linebuf[0]` and the LUT resolves
+sprite-against-background pixel by pixel, so the store lives in the loop;
+`render_obj_m5_ste` / `_im2_ste` draw into `linebuf[1]` and merge afterwards, so
+the store lives in the merge. Answering the question where it is *not* decided
+is exactly the mistake the diff made.
+
+The rule is the one `make_lut_bgobj` applies, written as a predicate in
+`core/ayther/ayther_sprite_px.h`: the sprite has colour, and either it has
+priority, or the background does not, or the background is transparent.
+`test_sprite_px` checks that predicate against a copy of `make_lut_bgobj` over
+every unambiguous combination — replicating a rule without proving the replica
+agrees is how a copy drifts from the original.
+
+Neither store costs anything with no subscribers: the in-loop one lives under a
+clone parameter the compiler folds away, the merge one under a flag that is only
+raised when `layer_dim` or attribution is active.
+
+Mode 4 and TMS reach neither path and keep the old diff, with its known flaw,
+until #40 phase 2 brings those modes into scope.
+
+## System descriptor (#39.B)
+
+`AYTHER_REGION_SYSTEM` returns an `ayther_system_v1`: which hardware is running,
+which video mode the VDP is in, the emitted viewport, the clocks, which FM core
+is selected, and the identity of the loaded ROM.
+
+All of it was already derivable — by decoding `VDP_REGS` on the consumer side.
+H40 is bit 0 of register 12, interlace is bits 1-2, the active line count is
+bit 3 of register 1, and so on. Decoding it outside means reimplementing the
+core's rules in another repository, and when the core corrects them — which has
+happened: #28 fixed exactly those masks — nothing tells the copy it went stale.
+The core knows the answer; giving it costs a struct.
+
+The region is **read-only and needs no subscription**. It is filled *when read*,
+not once per frame: it is about forty bytes that nobody looks at in most frames,
+and filling them unconditionally is precisely the kind of idle work #36 removed
+from six other places. Between frames — which is when a frontend can read — the
+VDP state is the state of the frame that just finished, which is the right
+answer.
+
+`vdp_mode` is `0` on a Mega Drive cartridge until the program writes register 1:
+before that the VDP has not chosen, and answering "Mode 4" would be inventing.
+
+## Control × video mode (#40)
+
+Not every control means something in every video mode. Until #40 the ones that
+do not simply returned `AYTHER_STATUS_OK` and did nothing, which is the worst
+contract available: a frontend believes it hid a sprite and draws its HD
+replacement on top of the original.
+
+| Control | Mode 5 (MD) | Mode 4 (SMS/GG/PBC) |
+|---|---|---|
+| `LAYER_MASK` sprite bit | yes | yes — resolved in `render_line`, shared by both |
+| `LAYER_MASK` A/B/W bits | yes | **`UNSUPPORTED_MODE`** — one background plane, the bits have no referent |
+| `SPRITE_SUPPRESS` (0x103) | yes | **`UNSUPPORTED_MODE`** — `parse_satb_m4` has no suppression |
+| `TILE_SUPPRESS` / peel (0x104) | yes | **`UNSUPPORTED_MODE`** — `render_bg_m4` has no hooks and does not merge |
+| `PLANE_TILE_SUPPRESS` (0x105/0x106) | yes | **`UNSUPPORTED_MODE`** — same reason |
+| `LAYER_DIM` (0x108) | yes | yes — `remap_line` is shared |
+| Audio mute and gain (0x10D) | yes | yes |
+| `ATTRIBUTION` | yes | background layer only |
+| Recomposition | yes | `AYTHER_STATUS_RC_NOT_MODE5` |
+
+A rejected write also raises `AYTHER_RASTER_REASON_UNSUPPORTED_CONTROLS` in
+`0x10E`, so a frontend polling the fallback reasons sees it without having to
+check every return value.
+
+`AYTHER_CAP_MODE4_CONTROLS` announces that the rows above have become "yes".
+While the bit is absent, the table is the contract.
+
+## Per-scanline render state (#42)
+
+`LINE_REGS` and `LINE_CRAM` give the state the VDP actually used **on each
+scanline**: the resolved horizontal and vertical scroll, the resolved table
+bases, the registers that matter for reconstruction, the window clip, and the
+palette in force on that line.
+
+It is captured on the **read** side — where the renderer consumes it — not
+reconstructed from the write side. Reconstructing it from writes is what the
+raster journal does, and that is approximate by construction: you have to guess
+which cycle of which line each write landed on and what it affected. Capturing
+it where the renderer uses it is exact — it is literally the value it used — and
+cheaper, because there is nothing to rebuild.
+
+What it unlocks: the screen cell a frontend can hide today (`0x104`) is
+frame-space, and with per-line scroll it never lines up with a plane tile. With
+`xscroll_a` for the line, "cell (x,y) of the screen" maps to "this tile of plane
+A" — which is what an HD substitution pipeline needs in order to key an asset.
+
+### Layout
+
+Both regions are a header followed by entries, in one contiguous buffer. The
+header is *inside* because a consumer needs the line count and the frame
+generation in the **same** read: two separate reads can land on either side of a
+frame boundary.
+
+`LINE_CRAM` costs 128 bytes per line, so it does not pay it when nobody changed
+the palette: a frame with no mid-frame CRAM writes returns **one** entry and the
+`AYTHER_LINES_CRAM_UNIFORM` flag — 128 bytes instead of 30 KB.
+
+### Memory
+
+The recomposition caches (1.15 MB in total) used to be static, and therefore
+resident in every build with extensions whether anyone looked or not. A core
+nobody observes carried them in memory and, worse, in cache: 1.15 MB that is
+never touched still evicts lines that are. They are now requested on the first
+recomposition and released in `retro_deinit`, so a frontend that only reads VRAM
+pays nothing for them (#36).
+
+### Cost
+
+The capture lives in the observed clone of `render_bg_m5*` and runs only under
+subscription: with no subscribers, nothing executes. The `-DAYTHER_METRICS`
+counters confirm it, and the CRAM copy is skipped entirely until the palette
+actually changes.
+
+### Per-cell provenance (`LINE_CELLS`)
+
+`LINE_CELLS` says, for each 16-pixel column of each line, **which name-table
+entry** the VDP read and **which row of the tile**. That is the last piece the
+cell→tile mapping needs: `LINE_REGS` gives the scroll, `LINE_CELLS` gives the
+entry the scroll landed on, and neither requires the consumer to reimplement the
+core's address arithmetic.
+
+The VDP reads the name table two cells at a time — one 32-bit access — and that
+is what is stored: `name_pair`, the raw value the renderer consumed. Storing
+pairs rather than individual cells is what makes the capture free: the value was
+already in a register.
+
+Row and fine shift are **per line and per plane**, not per column: the renderer
+computes them once. Storing them per column would repeat the same byte 21 times.
+
+The region declares `AYTHER_REGION_WORD_SWAPPED_LE`, because "raw" includes byte
+order: on a little-endian host the core keeps VRAM byte-swapped. Reading the
+region without honouring that flag yields reversed cells with no symptom to give
+it away — which is exactly what the flag exists to prevent.
+
+### The predicate that decides the clone
+
+`AYTHER_OBSERVED_ACTIVE` must list **every** subscription whose data is captured
+inside the observed clone. Forgetting one does not raise an error: it produces a
+region that answers `OK` and comes back empty. That is how #41 was found, and it
+happened again while adding these regions. Any future region filled in there
+gets its bit added to that list.
+## Observability: journal, hashes and palette (#39 A/D/E)
+
+Three read-only regions, all for the same reason: the core already knows the
+answer, and the frontend was re-deriving it with its own copy of the rules.
+
+### `RASTER_JOURNAL`
+
+The journal already existed — it is what the raster replay consumes. The only
+thing exposed was its **count**. Knowing a frame had 17 events and not *which*
+is enough to decide "don't recompose this one" and nothing else; a frontend that
+wants to understand the split had to re-read VDP memory frame by frame and guess
+when it changed.
+
+`dropped` is a count and not a bit, matching the core: a frontend sizing its own
+buffer needs to tell "missed by one" from "this frame is a festival of splits".
+
+It is gated on `AYTHER_SUB_RASTER_TRACKING` — the subscription that makes the
+journal exist at all. Without it the region answers `NOT_SUBSCRIBED` instead of
+handing back the fossil journal of the last observed frame.
+
+### `FRAME_HASH`
+
+Answers "are we still in sync?" without serializing. Until now the only way was
+to ask for the whole savestate — ~1 MB — and hash it outside, once per frame, to
+compare one number.
+
+There is deliberately **no `state_hash`**: computing it requires serializing,
+which is exactly what this region exists to avoid. The four VDP memories plus
+the emitted video and audio cover the desync a frontend can actually see; for
+the rest of the state there is `retro_serialize`, which is where that question
+belongs.
+
+The algorithm is 64-bit FNV-1a over the bytes in the core's own order — the same
+one `full_core_replay` uses — so a frontend can recompute and compare rather
+than trust. The video hash walks the frame **row by row**, `width` pixels at a
+time, skipping by pitch: the pitch covers 720 px and the frame occupies less, so
+hashing in one shot would fold in padding nobody sees. `tests/ayther/observability.c`
+computes the same number from the `video_refresh` callback and requires the two
+to match.
+
+This is the only part of 1.7 that costs anything — about 100 KB walked per frame
+— and therefore the only one with its own subscription.
+
+### `PALETTE`
+
+The core builds this table anyway, in `color_update_m5`: indexed by the merged
+line-buffer byte, with shadow and highlight already applied. A frontend that
+wanted the colour of an index had to redo the 9-bit → pixel conversion and the
+S/H rules itself.
+
+The whole 256-entry table is exposed, not the 192 "useful" ones: the index *is*
+the line-buffer byte, and trimming it would force the consumer to know the trim
+in order to map back. Entry width comes from the region's `element_size`,
+because it depends on the pixel format the core was built with — a consumer that
+hardcodes 2 bytes misreads a 32bpp build with no symptom.
+
+**It is the current table, not one per line.** A game that writes CRAM mid-frame
+— a palette raster — produces an image with colours from several tables, and
+this region answers the last one. That is not a hidden limitation: `LINE_CRAM`
+(#42) covers the per-line case, and `RASTER_JOURNAL` says whether the frame had
+CRAM writes at all. With a journal free of CRAM events this table explains every
+colour in the frame; with them, it cannot. The test measures the property on the
+S/H fixture, which has no H-int and therefore a palette that does not move.

@@ -32,6 +32,11 @@ typedef void *library_t;
 #define EVENT_BATCH 256u
 #define MAX_RECOMPOSE_PIXELS (720u * 576u)
 #define FNV_OFFSET UINT64_C(14695981039346656037)
+
+/* #45: tamanio del tag de layout que retro_serialize escribe al final del
+   buffer (AYTHER_STATE_TAG_BYTES en libretro/libretro.c). Difiere entre
+   plataformas a proposito, asi que queda fuera del hash del estado. */
+#define AYTHER_TAG_BYTES ((size_t)16)
 #define FNV_PRIME UINT64_C(1099511628211)
 #define FIXTURE_CONFIGURATION \
   "region=auto;overscan=disabled;aspect=auto;sprite_limit=hardware;" \
@@ -1036,7 +1041,7 @@ static int check_savestate_roundtrip(const struct core_api *api,
      escrito en vez de descubrirlo comparando archivos. */
   {
     /* Espejo de AYTHER_STATE_TAG_BYTES en libretro/libretro.c. */
-    const size_t ayther_tag_bytes = 16;
+    const size_t ayther_tag_bytes = AYTHER_TAG_BYTES;
     size_t written_a = 0, written_b = 0, at;
     const size_t scan_limit =
       (state_size > ayther_tag_bytes) ? (state_size - ayther_tag_bytes) : state_size;
@@ -1172,13 +1177,8 @@ static int check_attribution(const struct core_api *api)
   static uint16_t isolated[2][MAX_RECOMPOSE_PIXELS];
   static uint16_t composite[MAX_RECOMPOSE_PIXELS];
   static uint16_t backdrop[MAX_RECOMPOSE_PIXELS];
-  static const struct { uint8_t mask; uint8_t layer; const char *name; } cases[] = {
-    { RC_LAYER_B, AYTHER_ATTRIB_LAYER_PLANE_B, "Plane B" },
-    { RC_LAYER_A, AYTHER_ATTRIB_LAYER_PLANE_A, "Plane A" }
-  };
   ayther_region_info_v1 info;
   uint32_t width = 0, height = 0, w0 = 0, h0 = 0;
-  size_t c;
   int ok = 1;
   int checked = 0;
 
@@ -1402,7 +1402,18 @@ static int run_pass(const struct core_api *api, const void *checkpoint,
     }
     record->video_hash = current_video_hash;
     record->audio_hash = current_audio_hash;
-    record->state_hash = hash_bytes(FNV_OFFSET, state_buffer, state_size);
+    /* #45: el hash NO incluye el tag de layout de AYTHER, que vive en los
+       ultimos AYTHER_TAG_BYTES del buffer. Ese tag codifica los tamanios de
+       las structs serializadas, asi que difiere entre plataformas A PROPOSITO
+       -- es lo que hace que un savestate de otro ABI se rechace en vez de
+       corromper en silencio-. Meterlo en el hash del estado emulado mezcla dos
+       cosas distintas: lo que el sistema emulado hizo, y como lo guarda ESTA
+       build. Sin excluirlo no puede existir un golden unico aunque la
+       emulacion coincida byte a byte, que es justo lo que pasaba. */
+    record->state_hash = hash_bytes(FNV_OFFSET, state_buffer,
+                                    (state_size > AYTHER_TAG_BYTES)
+                                      ? (state_size - AYTHER_TAG_BYTES)
+                                      : state_size);
     if (!expected && frame == 0u && reference_state_path[0])
     {
       FILE *state_file = fopen(reference_state_path, "wb");

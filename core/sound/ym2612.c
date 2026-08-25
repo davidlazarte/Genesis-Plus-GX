@@ -148,6 +148,8 @@
 /************************************************************************/
 
 #include "shared.h"
+/* #43.3: el patron fast/observed y sus atributos, en un solo lugar. */
+#include "ayther/ayther_dual_path.h"
 
 /* envelope generator */
 #define ENV_BITS    10
@@ -2016,15 +2018,7 @@ unsigned int YM2612Read(void)
 }
 
 /* Generate samples for ym2612 */
-#if defined(AYTHER_EXTENSIONS) && (defined(__GNUC__) || defined(__clang__))
-#define AYTHER_YM_INLINE static inline __attribute__((always_inline))
-#define AYTHER_YM_NOINLINE __attribute__((noinline))
-#else
-#define AYTHER_YM_INLINE INLINE
-#define AYTHER_YM_NOINLINE
-#endif
-
-AYTHER_YM_INLINE void ym2612_update_impl(int *buffer, int length,
+AYTHER_HOT_INLINE void ym2612_update_impl(int *buffer, int length,
                                         int ayther_audio_controls)
 {
   int i;
@@ -2057,16 +2051,29 @@ AYTHER_YM_INLINE void ym2612_update_impl(int *buffer, int length,
   refresh_fc_eg_chan(&ym2612.CH[4]);
   refresh_fc_eg_chan(&ym2612.CH[5]);
 
-#ifdef SOUND_PROBE
+#ifdef AYTHER_EXTENSIONS
+  /* #37 punto 1: el mute y el gain eran DOS pasadas sobre out_fm[] -- seis
+     comparaciones y seis saltos la primera, seis multiplicaciones la segunda-,
+     y las dos por sample. Son la misma operacion: silenciar es ganancia cero.
+     Plegados en una tabla, el mixer hace una pasada y no dos, y la tabla se
+     resuelve una vez por update en vez de por sample.
+     Ademas el gain deja de depender de SOUND_PROBE para EXISTIR: sin el probe
+     la tabla queda en 100 y el mute igual funciona, que es lo que un perfil
+     `extensions=1 probe=0` necesita. */
   int fm_gain[6] = {100, 100, 100, 100, 100, 100};
+  int fm_gain_any = 0;
   if (ayther_audio_controls)
   {
     int ch;
     for (ch = 0; ch < 6; ch++)
     {
+#ifdef SOUND_PROBE
       fm_gain[ch] = ((ch == 5) && ym2612.dacen)
         ? audio_probe_get_channel_gain(AP_SRC_DAC, 5)
         : audio_probe_get_channel_gain(AP_SRC_FM, ch);
+#endif
+      if (ayther_audio_mute & (1u << ch)) fm_gain[ch] = 0;
+      if (fm_gain[ch] < 100) fm_gain_any = 1;
     }
   }
 #endif
@@ -2132,21 +2139,6 @@ AYTHER_YM_INLINE void ym2612_update_impl(int *buffer, int length,
     if (out_fm[5] > 8191) out_fm[5] = 8191;
     else if (out_fm[5] < -8192) out_fm[5] = -8192;
 
-    /* AYTHER fork delta: silenciar canales FM seleccionados a nivel de SALIDA
-       (no toca el estado del chip → replay-safe). Cubre el modo DAC: out_fm[5]
-       ya tiene ym2612.dacout asignado, así que mutear el canal 5 también lo
-       silencia. La envolvente/fase del chip sigue avanzando idéntica. */
-#ifdef AYTHER_EXTENSIONS
-    if (ayther_audio_controls && (ayther_audio_mute & 0x3F))
-    {
-      if (ayther_audio_mute & (1u << 0)) out_fm[0] = 0;
-      if (ayther_audio_mute & (1u << 1)) out_fm[1] = 0;
-      if (ayther_audio_mute & (1u << 2)) out_fm[2] = 0;
-      if (ayther_audio_mute & (1u << 3)) out_fm[3] = 0;
-      if (ayther_audio_mute & (1u << 4)) out_fm[4] = 0;
-      if (ayther_audio_mute & (1u << 5)) out_fm[5] = 0;
-    }
-#endif
 
     #ifdef USE_PER_SOUND_CHANNELS_CONFIG
         /* apply user volume scaling */
@@ -2158,10 +2150,12 @@ AYTHER_YM_INLINE void ym2612_update_impl(int *buffer, int length,
         if (config.md_ch_volumes[5] < 100) out_fm[5] = (out_fm[5] * config.md_ch_volumes[5]) / 100;
     #endif
 
-#ifdef SOUND_PROBE
-    /* audio_probe per-channel gain (for HQ audio substitution); channel 6
-       reports as the DAC source while DAC mode is active */
-    if (ayther_audio_controls)
+#ifdef AYTHER_EXTENSIONS
+    /* #37.1: una sola pasada, y solo si algo pide atenuar. Ganancia 0 es el
+       mute: silenciar a la salida no toca el estado del chip, asi que el
+       replay sigue siendo identico con y sin mascara. Cubre el modo DAC --
+       out_fm[5] ya lleva ym2612.dacout- como antes. */
+    if (fm_gain_any)
     {
       if (fm_gain[0] < 100) out_fm[0] = (out_fm[0] * fm_gain[0]) / 100;
       if (fm_gain[1] < 100) out_fm[1] = (out_fm[1] * fm_gain[1]) / 100;
@@ -2242,30 +2236,10 @@ AYTHER_YM_INLINE void ym2612_update_impl(int *buffer, int length,
   INTERNAL_TIMER_B(length);
 }
 
-#ifdef AYTHER_EXTENSIONS
-static AYTHER_YM_NOINLINE void ym2612_update_fast_path(int *buffer, int length)
-{
-  ym2612_update_impl(buffer, length, 0);
-}
-
-static AYTHER_YM_NOINLINE void ym2612_update_observed_path(int *buffer,
-                                                           int length)
-{
-  ym2612_update_impl(buffer, length, 1);
-}
-#endif
-
-void YM2612Update(int *buffer, int length)
-{
-#ifdef AYTHER_EXTENSIONS
-  if (AYTHER_SUBSCRIBED(AYTHER_SUB_RENDER_CONTROLS))
-    ym2612_update_observed_path(buffer, length);
-  else
-    ym2612_update_fast_path(buffer, length);
-#else
-  ym2612_update_impl(buffer, length, 0);
-#endif
-}
+/* El nombre publico no es el del cuerpo: por eso el macro los toma aparte. */
+AYTHER_DUAL_PATH(YM2612Update, ym2612_update,
+                 AYTHER_SUBSCRIBED(AYTHER_SUB_RENDER_CONTROLS),
+                 (int *buffer, int length), buffer, length)
 
 void YM2612Config(int type)
 {

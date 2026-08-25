@@ -57,6 +57,36 @@ static uint8 tmss[4];     /* TMSS security register */
 
 extern uint8 reset_do_not_clear_buffers;
 
+/* AYTHER fork delta (#45): el punto del frame en que arranca el 68k tras un
+   reset por BOTON salia de `rand()`, que es de la libc -- y dos libcs no dan
+   la misma secuencia: glibc y MSVCRT difieren en el generador Y en RAND_MAX
+   (2147483647 contra 32767).
+
+   Esa era la causa de que los goldens del replay fueran POR PLATAFORMA. Con el
+   mismo codigo, el mismo ROM y el mismo input, Linux arrancaba el 68k en un
+   punto del frame y Windows en otro; a partir de ahi Windows corria un frame
+   entero por delante y divergian video, audio y estado desde el frame 0. Se
+   convivio con dos goldens sin saber por que, y "divergencia real de
+   emulacion" era la hipotesis mas grave sobre la mesa. Era la libc.
+
+   Lo que el reset por boton NECESITA es que el 68k no caiga SIEMPRE en el
+   mismo lugar -- Bonkers, Eternal Champions y X-Men 2 dependen de eso--, no
+   entropia de verdad. Un xorshift propio da exactamente esa variedad y ademas
+   da lo mismo en todas las plataformas.
+
+   Se resiembra en el reset EN FRIO, no en el tibio: una sesion desde power-on
+   es reproducible de punta a punta, y resets sucesivos siguen cayendo en
+   puntos distintos, que es la propiedad que los juegos usan. */
+static uint32 gen_reset_rng = 0x9E3779B9u;
+
+static uint32 gen_reset_random(void)
+{
+  gen_reset_rng ^= gen_reset_rng << 13;
+  gen_reset_rng ^= gen_reset_rng >> 17;
+  gen_reset_rng ^= gen_reset_rng << 5;
+  return gen_reset_rng;
+}
+
 /*--------------------------------------------------------------------------*/
 /* Init, reset, shutdown functions                                          */
 /*--------------------------------------------------------------------------*/
@@ -253,6 +283,10 @@ void gen_reset(int hard_reset)
     /* on line 192 */
     m68k.cycles = ((lines_per_frame - 192 + 159 - (27 * vdp_pal)) * MCYCLES_PER_LINE) + 1004;
 
+    /* AYTHER (#45): power-on resiembra el PRNG del reset tibio, para que una
+       sesion entera sea reproducible desde el encendido. */
+    gen_reset_rng = 0x9E3779B9u;
+
     /* clear RAM (on real hardware, RAM values are random / undetermined on Power ON) */
     if (!reset_do_not_clear_buffers)
     {
@@ -263,7 +297,9 @@ void gen_reset(int hard_reset)
   else
   {
     /* when RESET button is pressed, 68k could be anywhere in VDP frame (Bonkers, Eternal Champions, X-Men 2) */
-    m68k.cycles = (uint32)((MCYCLES_PER_LINE * lines_per_frame) * ((double)rand() / (double)RAND_MAX));
+    /* AYTHER (#45): xorshift propio en vez de rand(); ver gen_reset_random. */
+    m68k.cycles = gen_reset_random() %
+                  (uint32)(MCYCLES_PER_LINE * lines_per_frame);
 
     /* reset YM2612 (on hard reset, this is done by sound_reset) */
     fm_reset(0);

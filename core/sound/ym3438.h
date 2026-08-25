@@ -201,6 +201,10 @@ void OPN2_SetChipType(Bit32u type);
 void OPN2_Clock(ym3438_t *chip, Bit16s *buffer);
 void OPN2_Write(ym3438_t *chip, Bit32u port, Bit8u data);
 void OPN2_SetTestPin(ym3438_t *chip, Bit32u value);
+#if defined(AYTHER_EXTENSIONS) && defined(SOUND_PROBE)
+/* #29: gain por canal (0-100). sound.c lo refresca una vez por YM3438_Update. */
+void OPN2_AytherSetGain(Bit32u channel, Bit32s gain);
+#endif
 Bit32u OPN2_ReadTestPin(ym3438_t *chip);
 Bit32u OPN2_ReadIRQPin(ym3438_t *chip);
 Bit8u OPN2_Read(ym3438_t *chip, Bit32u port);

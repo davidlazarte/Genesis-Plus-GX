@@ -92,33 +92,16 @@ jobs:
       - name: EOL style must match upstream
         shell: bash
         env:
-          EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           UPSTREAM_URL: https://github.com/libretro/Genesis-Plus-GX.git
         run: |
           set -euo pipefail
           git remote get-url upstream >/dev/null 2>&1 || git remote add upstream "$UPSTREAM_URL"
           git fetch --no-tags --quiet upstream master || {
             echo "AVISO: fetch de upstream fallo; no se puede comparar." >&2; exit 0; }
-          if [ "$EVENT_NAME" = "pull_request" ]; then base="$BASE_SHA"; else base="HEAD~1"; fi
-          status=0
-          # numstat marca los binarios con '-': asi se saltean sin buscar NUL.
-          while IFS=$'\t' read -r add del path; do
-            [ "$add" != "-" ] || continue
-            git cat-file -e "upstream/master:$path" 2>/dev/null || continue
-            u=$(git cat-file blob "upstream/master:$path" | tr -cd '\r' | wc -c)
-            m=$(git cat-file blob "HEAD:$path" | tr -cd '\r' | wc -c)
-            if { [ "$u" -eq 0 ] && [ "$m" -gt 0 ]; } ||\
-               { [ "$u" -gt 0 ] && [ "$m" -eq 0 ]; }; then
-              echo "EOL distinto al de upstream: $path (upstream $u CR, nosotros $m CR)" >&2
-              status=1
-            fi
-          done < <(git -c core.quotePath=false diff --numstat --no-renames "$base...HEAD")
-          if [ "$status" -ne 0 ]; then
-            echo "Un archivo con otro fin de linea que upstream diverge entero," >&2
-            echo "a cambio de nada, y en cada sync conflictua. Ver .gitattributes." >&2
-          fi
-          exit "$status"
+          # #43: la regla vive en tests/ci/check_eol.sh para poder correrla ANTES
+          # de pushear, y barre todo lo que difiere de upstream en vez de solo los
+          # archivos que toco este PR.
+          bash tests/ci/check_eol.sh
 
       - name: Enforce LF in AYTHER automation and fixtures
         shell: bash
@@ -331,6 +314,75 @@ jobs:
           make -C tests check-frame-delta
           CC=clang
           CORE=../genesis_plus_gx_libretro.so
+
+      # #36: la promesa de "cero trabajo sin subscribers", CONTADA. El gate de
+      # tiempo de mas abajo no puede sostenerla -- su ruido medido es de +-3%,
+      # del mismo orden que lo que mediria--; un contador en cero si. Este build
+      # es de diagnostico y no se publica.
+      - name: Build a metrics core
+        env:
+          CC: clang
+          CXX: clang++
+        run: >-
+          make -B -f Makefile.libretro platform=unix
+          AYTHER_EXTENSIONS=1 SOUND_PROBE=1 AYTHER_METRICS=1 -j2
+
+      - name: Idle does exactly zero work
+        run: >-
+          make -C tests check-idle-metrics
+          CC=clang
+          CORE=../genesis_plus_gx_libretro.so
+
+      # #41: la region de atribucion con una suscripcion que pide SOLO
+      # atribucion. Ese caso devolvia cero bytes y un OK.
+      - name: Attribution answers a subscription that asks only for it
+        run: >-
+          make -C tests check-attribution-scene
+          CC=clang
+          CORE=../genesis_plus_gx_libretro.so
+
+      # #42: el estado de render por scanline, contra la tabla de hscroll que
+      # el propio ROM escribe. El oraculo sale del generador, no del core.
+      - name: Plane tile suppression hides one plane at a time
+        run: >-
+          make -C tests check-plane-suppress
+          CORE=../genesis_plus_gx_libretro.so
+
+      - name: The five recomposition layers match their golden
+        run: >-
+          make -C tests check-multilayer
+          CORE=../genesis_plus_gx_libretro.so
+
+      - name: Journal, frame hashes and resolved palette
+        run: >-
+          make -C tests check-observability
+          CORE=../genesis_plus_gx_libretro.so
+
+      - name: Per-scanline state matches the ROM's own scroll table
+        run: >-
+          make -C tests check-line-state
+          CC=clang
+          CORE=../genesis_plus_gx_libretro.so
+
+      # #35: un hash por modo de video. El fixture determinista cubre Mode 5
+      # H40 progresivo NTSC y nada mas; estas ocho escenas cubren H32, window,
+      # shadow/highlight, los dos interlaces, PAL y DMA fill. Un golden POR
+      # ESCENA es lo que convierte "algo se rompio" en "se rompio el interlace".
+      - name: Video modes match their per-scene golden
+        run: >-
+          make -C tests check-scenes
+          CC=clang
+          CORE=../genesis_plus_gx_libretro.so
+
+      # El core de metricas queda en el arbol; los pasos que siguen necesitan el
+      # normal de vuelta.
+      - name: Rebuild the telemetry core
+        env:
+          CC: clang
+          CXX: clang++
+        run: >-
+          make -B -f Makefile.libretro platform=unix
+          AYTHER_EXTENSIONS=1 SOUND_PROBE=1 -j2
 
       # El numero se publica pero NO bloquea. Evidencia: dos corridas PARALELAS
       # del mismo commit midieron 1,023% y 1,708% -0,7 puntos de spread sobre
@@ -597,5 +649,146 @@ jobs:
         with:
           name: ayther-windows-msvcrt-extensions-${{ matrix.ayther_extensions }}-probe-${{ matrix.sound_probe }}-legacy-${{ matrix.legacy_profile }}-diagnostics
           path: ayther-artifacts/
+          if-no-files-found: ignore
+          retention-days: 14
+  # #35 punto 2: macOS en CI.
+  #
+  # No es "una plataforma mas". Los runners de macOS son arm64, asi que este
+  # job es lo unico que corre los goldens fuera de x86-64, y es la unica
+  # forma de saber si el fixture generado y las tablas del VDP dependen de la
+  # arquitectura o solo del endianness. Si un golden se mueve aca, lo que hay
+  # que mirar es el golden, no el job.
+  #
+  # Lo que este job NO hace, a proposito: el cierre de exports. `check_exports.sh`
+  # lee simbolos con nm/objdump al estilo ELF/PE, y en Mach-O los simbolos llevan
+  # un guion bajo delante. Correrlo aca sin adaptarlo daria un verde que no
+  # verifica nada, que es peor que no correrlo.
+  macos-core:
+    name: macOS arm64 (extensions=${{ matrix.ayther_extensions }}, probe=${{ matrix.sound_probe }}, legacy=${{ matrix.legacy_profile }})
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - ayther_extensions: 0
+            sound_probe: 0
+            legacy_profile: 0
+          - ayther_extensions: 1
+            sound_probe: 0
+            legacy_profile: 0
+          - ayther_extensions: 1
+            sound_probe: 1
+            legacy_profile: 0
+          - ayther_extensions: 1
+            sound_probe: 1
+            legacy_profile: 1
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Build libretro core
+        run: >-
+          make -f Makefile.libretro platform=osx
+          AYTHER_EXTENSIONS=${{ matrix.ayther_extensions }}
+          AYTHER_LEGACY_PROFILE=${{ matrix.legacy_profile }}
+          SOUND_PROBE=${{ matrix.sound_probe }} -j3
+
+      - name: Report the built dylib
+        run: |
+          set -euo pipefail
+          test -f genesis_plus_gx_libretro.dylib
+          file genesis_plus_gx_libretro.dylib
+          otool -L genesis_plus_gx_libretro.dylib
+
+      - name: Run unit and golden-trace tests
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: make -C tests check
+
+      - name: Replay generated ROM across save/load boundary
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -C tests check-full-core
+          CORE=../genesis_plus_gx_libretro.dylib
+
+      - name: Reject a savestate written by a different ABI
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -C tests check-state-guard
+          CORE=../genesis_plus_gx_libretro.dylib
+
+      - name: Report serialized struct layout
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: make -C tests state-layout
+
+      - name: Audio controls reach every FM core
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -C tests check-audio-controls
+          CORE=../genesis_plus_gx_libretro.dylib
+
+      - name: Frame delta survives a second reader
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -C tests check-frame-delta
+          CORE=../genesis_plus_gx_libretro.dylib
+
+      - name: Attribution answers a subscription that asks only for it
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -C tests check-attribution-scene
+          CORE=../genesis_plus_gx_libretro.dylib
+
+      - name: Plane tile suppression hides one plane at a time
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -C tests check-plane-suppress
+          CORE=../genesis_plus_gx_libretro.dylib
+
+      - name: The five recomposition layers match their golden
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -C tests check-multilayer
+          CORE=../genesis_plus_gx_libretro.dylib
+
+      - name: Journal, frame hashes and resolved palette
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -C tests check-observability
+          CORE=../genesis_plus_gx_libretro.dylib
+
+      - name: Per-scanline state matches the ROM's own scroll table
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -C tests check-line-state
+          CORE=../genesis_plus_gx_libretro.dylib
+
+      - name: Video modes match their per-scene golden
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -C tests check-scenes
+          CORE=../genesis_plus_gx_libretro.dylib
+
+      - name: Build a metrics core
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -B -f Makefile.libretro platform=osx
+          AYTHER_EXTENSIONS=1 SOUND_PROBE=1 AYTHER_METRICS=1 -j3
+
+      - name: Idle does exactly zero work
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -C tests check-idle-metrics
+          CORE=../genesis_plus_gx_libretro.dylib
+
+      - name: Preserve macOS diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ayther-macos-extensions-${{ matrix.ayther_extensions }}-probe-${{ matrix.sound_probe }}-legacy-${{ matrix.legacy_profile }}-diagnostics
+          path: |
+            ayther-artifacts/
+            tests/artifacts/
           if-no-files-found: ignore
           retention-days: 14

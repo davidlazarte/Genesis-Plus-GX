@@ -58,8 +58,14 @@ int main(void)
         "ABI 1.3 is a minor bump over 1.2");
   CHECK(AYTHER_ABI_VERSION_1_4 == UINT32_C(0x00010004),
         "ABI 1.4 is a minor bump over 1.3");
-  CHECK(AYTHER_ABI_VERSION_LATEST == AYTHER_ABI_VERSION_1_4,
-        "latest ABI is 1.4");
+  CHECK(AYTHER_ABI_VERSION_1_5 == UINT32_C(0x00010005),
+        "ABI 1.5 is a minor bump over 1.4");
+  CHECK(AYTHER_ABI_VERSION_1_7 == UINT32_C(0x00010007),
+        "ABI 1.7 keeps its encoding");
+  CHECK(AYTHER_ABI_VERSION_1_6 == UINT32_C(0x00010006),
+        "ABI 1.6 is a minor bump over 1.5");
+  CHECK(AYTHER_ABI_VERSION_LATEST == AYTHER_ABI_VERSION_1_7,
+        "latest ABI is 1.6");
 
   /* #30: la 1.4 es ADITIVA. Lo que hay que fijar no es que los campos nuevos
      existan -- eso lo dice el compilador-- sino que los viejos NO se movieron:
@@ -107,12 +113,52 @@ int main(void)
   CHECK(AYTHER_STATUS_RC_JOURNAL_OVERFLOW == -24 &&
         AYTHER_RC_ERR_JOURNAL_OVERFLOW == -5,
         "the journal-overflow status codes are stable");
-  CHECK(AYTHER_REGION_COUNT == 18, "every region is inventoried");
-  /* #41: la region nueva va al FINAL del enum. Meterla en el medio correria
-     los ids de todas las siguientes, y los ids viajan por la ABI. */
-  CHECK(AYTHER_REGION_ATTRIBUTION == AYTHER_REGION_COUNT - 1 &&
+  CHECK(AYTHER_REGION_COUNT == 25, "every region is inventoried");
+  /* #41/#39: la region nueva va al FINAL del enum. Meterla en el medio
+     correria los ids de todas las siguientes, y los ids viajan por la ABI. */
+  CHECK(AYTHER_REGION_PALETTE == AYTHER_REGION_COUNT - 1 &&
+        AYTHER_REGION_FRAME_HASH == AYTHER_REGION_PALETTE - 1 &&
+        AYTHER_REGION_RASTER_JOURNAL == AYTHER_REGION_FRAME_HASH - 1 &&
+        AYTHER_REGION_LINE_CELLS == AYTHER_REGION_RASTER_JOURNAL - 1 &&
+        AYTHER_REGION_LINE_CRAM == AYTHER_REGION_LINE_CELLS - 1 &&
+        AYTHER_REGION_LINE_REGS == AYTHER_REGION_LINE_CRAM - 1 &&
+        AYTHER_REGION_SYSTEM == AYTHER_REGION_LINE_REGS - 1 &&
+        AYTHER_REGION_ATTRIBUTION == AYTHER_REGION_SYSTEM - 1 &&
         AYTHER_REGION_RASTER_FALLBACK_REASONS == AYTHER_REGION_ATTRIBUTION - 1,
         "region ids are append-only");
+
+  /* #39.B: el descriptor de sistema. Los offsets se congelan aca porque el
+     struct viaja por la ABI: agregar campos al final es aditivo, moverlos no. */
+  CHECK(sizeof(ayther_system_v1) == 44,
+        "the system descriptor has a frozen size");
+  CHECK(offsetof(ayther_system_v1, struct_size) == 0 &&
+        offsetof(ayther_system_v1, layout_version) == 4 &&
+        offsetof(ayther_system_v1, system_hw) == 8 &&
+        offsetof(ayther_system_v1, lines_per_frame) == 14 &&
+        offsetof(ayther_system_v1, viewport_x) == 16 &&
+        offsetof(ayther_system_v1, master_clock) == 28 &&
+        offsetof(ayther_system_v1, rom_crc32) == 36 &&
+        offsetof(ayther_system_v1, rom_bytes) == 40,
+        "system descriptor fields are at frozen offsets");
+  CHECK(AYTHER_SYSTEM_HW_MD == 0x80 && AYTHER_SYSTEM_HW_MCD == 0x84 &&
+        AYTHER_SYSTEM_HW_GG == 0x40 && AYTHER_SYSTEM_HW_SMS == 0x20,
+        "system_hw uses the core SYSTEM_* values");
+
+  /* #42: el estado por linea. Los offsets se congelan porque el struct viaja
+     por la ABI: agregar campos al final es aditivo, moverlos no lo es. */
+  CHECK(sizeof(ayther_line_regs_v1) == 32,
+        "one scanline of register state fits in 32 bytes");
+  CHECK(offsetof(ayther_line_regs_v1, xscroll_a) == 0 &&
+        offsetof(ayther_line_regs_v1, yscroll_a) == 4 &&
+        offsetof(ayther_line_regs_v1, ntab) == 8 &&
+        offsetof(ayther_line_regs_v1, reg1) == 18 &&
+        offsetof(ayther_line_regs_v1, clip_a_start) == 26 &&
+        offsetof(ayther_line_regs_v1, flags) == 30,
+        "line register fields are at frozen offsets");
+  CHECK(sizeof(ayther_line_header_v1) == 24 &&
+        offsetof(ayther_line_header_v1, lines) == 8 &&
+        offsetof(ayther_line_header_v1, frame_generation) == 16,
+        "the per-line header is frozen");
   CHECK(AYTHER_LEGACY_MEMORY_CRAM == 0x100,
         "legacy memory IDs remain stable");
   CHECK(AYTHER_LEGACY_MEMORY_RASTER_DIRTY == 0x10E,
@@ -128,8 +174,35 @@ int main(void)
   CHECK(AYTHER_CAP_FRAME_DELTA_V1 == (UINT64_C(1) << 11) &&
         AYTHER_CAP_RECOMPOSE_STATS_V1 == (UINT64_C(1) << 12),
         "capability bits added after v1 keep their positions");
-  CHECK(AYTHER_SUB_ALL == UINT32_C(0xFF),
+  /* #42: dos bits nuevos al final. Los ocho de antes no se mueven: los ids de
+     suscripcion viajan por la ABI igual que los de region. */
+  CHECK(AYTHER_SUB_ALL == UINT32_C(0xFFF),
         "all subscription bits are accounted for");
+  CHECK(AYTHER_SUB_LINE_STATE == (UINT32_C(1) << 8) &&
+        AYTHER_SUB_LINE_CRAM == (UINT32_C(1) << 9) &&
+        AYTHER_SUB_LINE_CELLS == (UINT32_C(1) << 10) &&
+        AYTHER_SUB_ATTRIBUTION == (UINT32_C(1) << 7) &&
+        AYTHER_SUB_FRAME_HASH == (UINT32_C(1) << 11),
+        "subscription bits are append-only");
+  /* #39.A/D/E: las tres regiones nuevas y sus tamanios. El journal es el
+     unico con un array adentro, y su tope tiene que seguir siendo el mismo
+     que el del core: si uno de los dos crece sin el otro, la region entrega
+     menos eventos de los que hubo y nadie se entera. */
+  CHECK(AYTHER_JOURNAL_MAX_EVENTS == 256 &&
+        sizeof(ayther_journal_event_v1) == 8 &&
+        sizeof(ayther_journal_v1) == 16 + 256 * 8,
+        "the journal region keeps its size");
+  CHECK(sizeof(ayther_frame_hash_v1) == 56 &&
+        AYTHER_PALETTE_ENTRIES == 256,
+        "frame hash and palette keep their layout");
+  CHECK(AYTHER_CAP_OBSERVABILITY_V1 == (UINT64_C(1) << 18),
+        "the observability capability keeps its bit");
+  /* #42.C: el par de celdas se entrega tal como el renderer lo cargo, que en
+     little-endian significa con los bytes dados vuelta. Congelar el tamanio
+     evita que una entrada crezca sin bump. */
+  CHECK(sizeof(ayther_line_cells_v1) == 264 &&
+        AYTHER_LINE_CELL_COLUMNS == 21,
+        "the per-line cell record is frozen");
   CHECK((AYTHER_SUB_ALL & UINT32_C(0x7F)) == UINT32_C(0x7F) &&
         AYTHER_SUB_ATTRIBUTION == (UINT32_C(1) << 7),
         "the v1 subscription bits keep their positions");

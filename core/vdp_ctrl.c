@@ -64,7 +64,24 @@ static void vdp_set_all_vram(const uint8 *src);
    cambiado entera sin que corriera un solo frame. */
 #ifdef AYTHER_EXTENSIONS
 uint8 ayther_vram_dirty[0x800];
-#define AYTHER_MARK_VRAM_DIRTY(n, bits) ayther_vram_dirty[(n)] |= (uint8)(bits)
+/* #36: la marca corre SOLO si alguien mira. Antes corria en CADA escritura a
+   VRAM con extensions compilado -- un `|=` por write, en un path que un juego
+   recorre miles de veces por frame-- aunque no hubiera un solo subscriber, y
+   eso contradecia la promesa de "cero trabajo en idle" que el fork vende.
+
+   El estado previo no se pierde: al ACTIVAR la suscripcion se marca todo sucio
+   (ver ayther_begin_frame en libretro.c), igual que ya se hacia en load y en
+   reset. El primer delta despues de suscribirse dice "todo", que es la
+   respuesta correcta para quien no estaba mirando antes. */
+#define AYTHER_MARK_VRAM_DIRTY(n, bits)                             \
+  do {                                                              \
+    if (AYTHER_SUBSCRIBED(AYTHER_SUB_VDP_MEMORY |                    \
+                          AYTHER_SUB_RASTER_TRACKING))              \
+    {                                                               \
+      ayther_vram_dirty[(n)] |= (uint8)(bits);                      \
+      AYTHER_METRIC_INC(vram_dirty_marks);                          \
+    }                                                               \
+  } while (0)
 #else
 #define AYTHER_MARK_VRAM_DIRTY(n, bits) do {} while (0)
 #endif
@@ -440,6 +457,13 @@ void vdp_ayther_begin_frame(void)
      eventos fósiles del arranque a cada línea que recomponía. */
   ayther_raster_journal_count = 0;
   ayther_raster_journal_dropped = 0;
+  /* #42: lo que sigue pertenece a ESTE frame. */
+  ayther_line_state_begin_frame();
+  /* #37.4: `ayther_write_control_v1` ya mantiene el resumen al escribir la
+     región, pero la interfaz legacy entrega el puntero crudo y el frontend
+     puede escribirlo sin avisar. Recalcularlo acá cierra ese caso: 3 KB una
+     vez por frame, y sólo mientras la supresión esté activa. */
+  ayther_psup_refresh();
   if (AYTHER_SUBSCRIBED(AYTHER_SUB_RASTER_TRACKING))
     ayther_raster_dirty = ayther_recompose_mode_supported()
       ? 0u : AYTHER_RASTER_REASON_UNSUPPORTED_MODE;

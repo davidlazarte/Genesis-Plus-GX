@@ -41,6 +41,26 @@
 #include "sound.h"
 #endif
 
+#if defined(AYTHER_EXTENSIONS) && defined(SOUND_PROBE)
+/* #29: gain por canal, el companiero del mute. ym2612.c lo resuelve una vez por
+   ym2612_update en un fm_gain[6] local; aca no hay un "por update" al que
+   colgarse -Nuked corre por ciclo-, asi que la tabla es de archivo y sound.c la
+   refresca al entrar a YM3438_Update. Fuera de la struct del chip a proposito:
+   ym3438_t se serializa, y un campo nuevo ahi cambiaria el layout del savestate.
+
+   Se aplica en los MISMOS dos puntos que el mute (lock de ch_out y salida DAC),
+   por la misma razon: el chip evoluciona igual, se atenua solo lo que sale. */
+static Bit32s ym3438_ayther_gain[6] = {100, 100, 100, 100, 100, 100};
+
+void OPN2_AytherSetGain(Bit32u channel, Bit32s gain)
+{
+    if (channel < 6)
+    {
+        ym3438_ayther_gain[channel] = (gain < 0) ? 0 : ((gain > 100) ? 100 : gain);
+    }
+}
+#endif
+
 #define SIGN_EXTEND(bit_index, value) (((value) & ((1u << (bit_index)) - 1u)) - ((value) & (1u << (bit_index))))
 
 enum {
@@ -985,6 +1005,13 @@ static void OPN2_ChOutput(ym3438_t *chip)
             {
                 chip->ch_lock = 0;
             }
+#ifdef SOUND_PROBE
+            else if (ym3438_ayther_gain[channel] < 100)
+            {
+                chip->ch_lock = (Bit16s)(((Bit32s)chip->ch_lock *
+                                          ym3438_ayther_gain[channel]) / 100);
+            }
+#endif
 #endif
         }
         chip->ch_lock_l = chip->pan_l[channel];
@@ -1002,6 +1029,12 @@ static void OPN2_ChOutput(ym3438_t *chip)
         {
             out = 0;
         }
+#ifdef SOUND_PROBE
+        else if (ym3438_ayther_gain[5] < 100)
+        {
+            out = (Bit16s)(((Bit32s)out * ym3438_ayther_gain[5]) / 100);
+        }
+#endif
 #endif
     }
     else

@@ -167,6 +167,14 @@ int main(int argc, char **argv)
   CHECK(api->struct_size >= offsetof(ayther_interface_v1, poll_frame_delta) +
         sizeof(api->poll_frame_delta),
         "the descriptor covers every field this client knows");
+  /* #55: y este cliente NO es uno cualquiera -- se compila del mismo arbol
+     que el core-, asi que puede exigir igualdad donde un frontend ajeno solo
+     puede exigir "minor suficiente". La diferencia importa: el descriptor
+     anunciaba 1.4 con el header en 1.7, y como ningun test comparaba las dos
+     cosas, tres bumps aditivos quedaron invisibles para cualquiera que
+     negociara por version. Anunciar de menos es prometer de menos. */
+  CHECK(api->abi_version == AYTHER_ABI_VERSION_LATEST,
+        "the core advertises the ABI version its header declares");
   /* Un cliente 1.0 pide 1.0 y tiene que recibir un descriptor usable, aunque el
      core ya sea 1.1: esto es el test de compatibilidad hacia atras. */
   CHECK(get_interface(AYTHER_ABI_VERSION_1_0) != NULL &&

@@ -24,11 +24,10 @@ known="$here/known_ub.txt"
 log=$(mktemp)
 trap 'rm -f "$log"' EXIT
 
+# #45: un solo golden. Dejo de depender del sistema operativo desde que la
+# emulacion coincide byte a byte entre plataformas (ver tests/Makefile).
 if [ -z "$golden" ]; then
-  case $(uname -s) in
-    Linux)  golden="$tests_dir/ayther/golden/full_core_replay-linux-x64.json" ;;
-    *)      golden="$tests_dir/ayther/golden/full_core_replay-windows-x64.json" ;;
-  esac
+  golden="$tests_dir/ayther/golden/full_core_replay-x64.json"
 fi
 
 mkdir -p "$tests_dir/artifacts"

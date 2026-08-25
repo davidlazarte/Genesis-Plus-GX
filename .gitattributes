@@ -28,6 +28,11 @@
 tests/**        text=auto eol=lf
 bench/**        text=auto eol=lf
 core/ayther/**  text=auto eol=lf
+# #43.2: nuestro, aunque viva al lado de un archivo de upstream. Declara los
+# estaticos que vdp_render.c comparte con el recompositor; upstream no lo
+# tiene, asi que no hay bytes que respetar -- y sin regla explicita quedaria
+# bajo el `* -text` de arriba, que no convierte pero tampoco promete nada.
+core/vdp_render_internal.h text=auto eol=lf
 docs/**         text=auto eol=lf
 
 # Los .sh ademas lo NECESITAN, no es preferencia: Git Bash aborta un script con

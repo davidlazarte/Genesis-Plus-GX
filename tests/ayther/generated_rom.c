@@ -494,6 +494,187 @@ static void emit_reset_program_sh(struct rom_builder *builder)
   emit_u16(builder, 0x60fau);
 }
 
+/* #35: el mismo fixture, una configuracion de VDP por ESCENA.
+ *
+ * El ROM de siempre ejercita un solo modo -- Mode 5 H40 progresivo NTSC, sin
+ * window y sin DMA-- y por eso los deltas del fork que tocan los otros modos
+ * no tenian con que probarse. #28 arreglo las mascaras de render en interlace 2
+ * y en vscroll enhanced SIN un fixture que los ejercitara; que hoy funcionen es
+ * una afirmacion que nadie puede rehacer.
+ *
+ * Cada escena es un ROM COMPLETO Y ESTATICO, no un segmento adentro de uno solo.
+ * Un ROM por escena evita tener que emitir un dispatcher en 68000 -- ramas
+ * condicionales escritas a mano en big-endian-- y da lo mismo para lo que las
+ * escenas existen: hashear por separado para saber CUAL modo se rompio. Un
+ * golden por escena localiza la regresion; uno agregado solo dice "algo".
+ *
+ * El fixture de siempre NO se toca: es el ancla de regresion de los goldens que
+ * ya existen, y moverlo por agregar cobertura habria mezclado dos cosas.
+ */
+struct ayther_scene
+{
+  const char *name;
+  uint8_t reg1;      /* modo de video y altura activa   */
+  uint8_t reg11;     /* modos de scroll                 */
+  uint8_t reg12;     /* H40, interlace, shadow/highlight*/
+  uint8_t reg16;     /* tamanio de los planos           */
+  uint8_t window;    /* 1 = programa el plano window    */
+  uint8_t pal;       /* 1 = fuerza 313 lineas           */
+  uint8_t dma_fill;  /* 1 = hace un DMA fill a VRAM     */
+};
+
+static const struct ayther_scene ayther_scenes[] =
+{
+  /* name          reg1  reg11 reg12 reg16 win pal dma */
+  { "h40",         0x74u, 0x03u, 0x81u, 0x01u, 0u, 0u, 0u },
+  { "h32",         0x74u, 0x03u, 0x80u, 0x01u, 0u, 0u, 0u },
+  { "window",      0x74u, 0x03u, 0x81u, 0x01u, 1u, 0u, 0u },
+  { "shadow",      0x74u, 0x00u, 0x89u, 0x01u, 0u, 0u, 0u },
+  { "interlace1",  0x74u, 0x03u, 0x83u, 0x01u, 0u, 0u, 0u },
+  { "interlace2",  0x74u, 0x03u, 0x87u, 0x01u, 0u, 0u, 0u },
+  { "pal",         0x7cu, 0x03u, 0x81u, 0x01u, 0u, 1u, 0u },
+  { "dma_fill",    0x74u, 0x03u, 0x81u, 0x01u, 0u, 0u, 1u }
+};
+
+size_t ayther_scene_count(void)
+{
+  return sizeof(ayther_scenes) / sizeof(ayther_scenes[0]);
+}
+
+const char *ayther_scene_name(size_t index)
+{
+  if (index >= ayther_scene_count()) return 0;
+  return ayther_scenes[index].name;
+}
+
+static const struct ayther_scene *ayther_current_scene;
+
+static void emit_scene_data(struct rom_builder *builder)
+{
+  static const uint16_t palette[16] =
+  {
+    0x0000u, 0x000eu, 0x00e0u, 0x0e00u,
+    0x00eeu, 0x0e0eu, 0x0ee0u, 0x0eeeu,
+    0x0008u, 0x0080u, 0x0800u, 0x0088u,
+    0x0808u, 0x0880u, 0x0444u, 0x0aaau
+  };
+  const struct ayther_scene *scene = ayther_current_scene;
+  uint16_t words[512];
+  size_t index;
+
+  emit_move_long_immediate_absolute(builder, cram_write_command(0),
+                                    VDP_CONTROL);
+  for (index = 0; index < 16u; ++index)
+    emit_move_word_immediate_absolute(builder, palette[index], VDP_DATA);
+  emit_move_long_immediate_absolute(builder, cram_write_command(96),
+                                    VDP_CONTROL);
+  for (index = 0; index < 16u; ++index)
+    emit_move_word_immediate_absolute(builder, palette[index], VDP_DATA);
+
+  /* pattern 1 = indice 1; pattern 2 = indice 2; pattern 3 = indice 14, que con
+     paleta 3 y S/H puesto es un operador de brillo. */
+  for (index = 0; index < 16u; ++index) words[index] = 0x1111u;
+  for (index = 16u; index < 32u; ++index) words[index] = 0x2222u;
+  for (index = 32u; index < 48u; ++index) words[index] = 0xeeeeu;
+  emit_vdp_words(builder, 0x0020u, words, 48u);
+
+  /* Fondo con los dos patterns alternados, cuatro filas de celdas. */
+  for (index = 0; index < 256u; ++index)
+    words[index] = (uint16_t)(1u + (index & 1u));
+  emit_vdp_words(builder, 0xc000u, words, 256u);
+  for (index = 0; index < 256u; ++index)
+    words[index] = (uint16_t)(2u - (index & 1u));
+  emit_vdp_words(builder, 0xe000u, words, 256u);
+
+  /* Plano window: solo si la escena lo pide. Va a su propia tabla (reg 3) y
+     ocupa las columnas de la derecha, para que se distinga de A por posicion. */
+  if (scene->window)
+  {
+    for (index = 0; index < 128u; ++index) words[index] = 3u;
+    emit_vdp_words(builder, 0xf800u, words, 128u);
+  }
+
+  /* Scroll por linea, que es lo que hace que interlace y H32 se vean distinto
+     entre si en el hash en vez de dar la misma imagen corrida. */
+  for (index = 0; index < 224u; ++index)
+  {
+    words[index * 2u] = (uint16_t)(0u - (uint16_t)(index & 31u));
+    words[index * 2u + 1u] = (uint16_t)(index & 31u);
+  }
+  emit_vdp_words(builder, 0xf000u, words, 448u);
+
+  /* Doce sprites en dos bandas: suficientes para que el limite por linea entre
+     en juego en H32 y no en H40, que es una de las diferencias que la escena
+     tiene que capturar. */
+  for (index = 0; index < 12u; ++index)
+  {
+    words[index * 4u] = (uint16_t)(140u + (index & 1u) * 40u);
+    words[index * 4u + 1u] = (uint16_t)((index + 1u < 12u) ? index + 1u : 0u);
+    words[index * 4u + 2u] = (uint16_t)(1u + (index % 3u));
+    words[index * 4u + 3u] = (uint16_t)(136u + ((index * 21u) % 280u));
+  }
+  emit_vdp_words(builder, 0xd800u, words, 48u);
+}
+
+static void emit_reset_program_scene(struct rom_builder *builder)
+{
+  const struct ayther_scene *scene = ayther_current_scene;
+
+  emit_u16(builder, 0x46fcu); /* move.w #$2700,sr */
+  emit_u16(builder, 0x2700u);
+  emit_move_long_immediate_absolute(builder, 0x53454741u, TMSS);
+  emit_move_word_immediate_absolute(builder, 0x0100u, Z80_BUS_REQUEST);
+  emit_move_word_immediate_absolute(builder, 0x0100u, Z80_RESET);
+  emit_move_word_immediate_absolute(builder, 0u, RAM_FRAME);
+  emit_move_word_immediate_absolute(builder, 0u, RAM_LINE);
+
+  emit_vdp_register(builder, 0, 0x04u);
+  emit_vdp_register(builder, 1, (unsigned int)(scene->reg1 & 0xBFu));
+  emit_vdp_register(builder, 2, 0x30u);
+  emit_vdp_register(builder, 3, 0x3eu);   /* window -> 0xF800 */
+  emit_vdp_register(builder, 4, 0x07u);
+  emit_vdp_register(builder, 5, 0x6cu);
+  emit_vdp_register(builder, 7, 0x00u);
+  emit_vdp_register(builder, 10, 0x00u);
+  emit_vdp_register(builder, 11, scene->reg11);
+  emit_vdp_register(builder, 12, scene->reg12);
+  emit_vdp_register(builder, 13, 0x3cu);
+  emit_vdp_register(builder, 15, 0x02u);
+  emit_vdp_register(builder, 16, scene->reg16);
+  /* Window a la derecha de la columna 20 solo en la escena que lo pide; en las
+     demas queda en cero, que es "sin window". */
+  /* Reg 17: bit 7 = desde la derecha, bits 0-4 = posicion en unidades de DOS
+     celdas. 0x94 ponia el borde en la celda 40, o sea justo afuera de una
+     pantalla H40 de 40 celdas: la escena decia "window" y renderizaba lo mismo
+     que sin window. 0x8A lo pone en la celda 20, a mitad de pantalla. */
+  emit_vdp_register(builder, 17, scene->window ? 0x8Au : 0x00u);
+  emit_vdp_register(builder, 18, 0x00u);
+
+  emit_scene_data(builder);
+
+  if (scene->dma_fill)
+  {
+    /* DMA fill sobre el pattern 2, que el fondo SI dibuja. Antes llenaba VRAM
+       0x8000 -- fuera de todo lo que la escena muestra-- y el frame salia
+       identico al de la escena base: la escena decia "dma_fill" y no probaba
+       que el fill hubiera ocurrido. */
+    emit_vdp_register(builder, 19, 0x20u);   /* 32 bytes = un pattern */
+    emit_vdp_register(builder, 20, 0x00u);
+    emit_vdp_register(builder, 23, 0x80u);   /* modo fill */
+    emit_move_long_immediate_absolute(builder, vram_write_command(0x0040u),
+                                      VDP_CONTROL);
+    emit_move_word_immediate_absolute(builder, 0x4444u, VDP_DATA);
+  }
+
+  emit_move_word_immediate_absolute(builder, 0x0000u, Z80_BUS_REQUEST);
+  emit_vdp_register(builder, 0, 0x14u);
+  emit_vdp_register(builder, 1, scene->reg1);
+
+  emit_u16(builder, 0x4e72u); /* stop #$2300 */
+  emit_u16(builder, 0x2300u);
+  emit_u16(builder, 0x60fau);
+}
+
 static void write_header(uint8_t *rom)
 {
   static const char console[] = "SEGA MEGA DRIVE ";
@@ -573,4 +754,12 @@ size_t ayther_build_generated_rom_fm(uint8_t *rom, size_t capacity)
 size_t ayther_build_generated_rom_sh(uint8_t *rom, size_t capacity)
 {
   return build_rom(rom, capacity, emit_reset_program_sh);
+}
+
+size_t ayther_build_generated_rom_scene(uint8_t *rom, size_t capacity,
+                                        size_t scene)
+{
+  if (scene >= ayther_scene_count()) return 0;
+  ayther_current_scene = &ayther_scenes[scene];
+  return build_rom(rom, capacity, emit_reset_program_scene);
 }

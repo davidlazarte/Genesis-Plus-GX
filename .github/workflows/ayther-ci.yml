@@ -358,6 +358,16 @@ jobs:
           CC=clang
           CORE=../genesis_plus_gx_libretro.so
 
+      # #35: un hash por modo de video. El fixture determinista cubre Mode 5
+      # H40 progresivo NTSC y nada mas; estas ocho escenas cubren H32, window,
+      # shadow/highlight, los dos interlaces, PAL y DMA fill. Un golden POR
+      # ESCENA es lo que convierte "algo se rompio" en "se rompio el interlace".
+      - name: Video modes match their per-scene golden
+        run: >-
+          make -C tests check-scenes
+          CC=clang
+          CORE=../genesis_plus_gx_libretro.so
+
       # El core de metricas queda en el arbol; los pasos que siguen necesitan el
       # normal de vuelta.
       - name: Rebuild the telemetry core

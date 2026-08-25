@@ -54,6 +54,8 @@ AUDIO_CTRL_BIN := $(BUILD_DIR)/audio_controls$(EXE_EXT)
 FRAME_DELTA_BIN := $(BUILD_DIR)/frame_delta$(EXE_EXT)
 IDLE_METRICS_BIN := $(BUILD_DIR)/idle_metrics$(EXE_EXT)
 ATTRIB_SCENE_BIN := $(BUILD_DIR)/attribution_scene$(EXE_EXT)
+SCENES_BIN := $(BUILD_DIR)/scenes$(EXE_EXT)
+SCENES_GOLDEN := ayther/golden/scenes.txt
 TRACE_BIN := $(BUILD_DIR)/audio_probe_trace$(EXE_EXT)
 TRACE_GOLDEN := ayther/golden/audio_probe_trace.json
 TRACE_ACTUAL := $(ARTIFACT_DIR)/audio_probe_trace.actual.json
@@ -82,7 +84,7 @@ PROFILE_COMPARISON := $(ARTIFACT_DIR)/feature_gate_profiles.json
 
 .PHONY: all check check-unit check-concurrency check-determinism \
 	check-full-core check-profile-comparison raster-rom-probe \
-	full-core-replay check-idle-metrics check-attribution-scene clean
+	full-core-replay check-idle-metrics check-attribution-scene check-scenes regen-scenes clean
 
 all: $(UNIT_BIN) $(CONCURRENCY_BIN) $(API_BIN) $(RASTER_BIN) \
 	$(SPRITE_CAPTURE_BIN) $(DIM_BIN) $(TRACE_BIN)
@@ -195,18 +197,20 @@ check-attribution-scene: $(ATTRIB_SCENE_BIN)
 	$(call require_core)
 	$(ATTRIB_SCENE_BIN) "$(CORE)"
 
-$(FRAME_DELTA_BIN): ayther/frame_delta.c ayther/generated_rom.c \
-		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther \
-		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include \
-		-Iayther -o $@ ayther/frame_delta.c ayther/generated_rom.c \
-		$(LDFLAGS) $(ROM_PROBE_LIBS)
+$(SCENES_BIN): ayther/scenes.c ayther/generated_rom.c 		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther 		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include 		-Iayther -o $@ ayther/scenes.c ayther/generated_rom.c 		$(LDFLAGS) $(ROM_PROBE_LIBS)
 
-# #30: necesita el core real. Lo que se verifica es que dos lecturas del
-# mismo frame devuelvan lo mismo, y eso solo lo contesta el binario.
-check-frame-delta: $(FRAME_DELTA_BIN)
+# #35: un hash por modo de video. El golden es por escena y no agregado: eso es
+# lo que convierte "algo se rompio" en "se rompio el interlace 2".
+check-scenes: $(SCENES_BIN)
 	$(call require_core)
-	$(FRAME_DELTA_BIN) "$(CORE)"
+	$(SCENES_BIN) "$(CORE)" $(SCENES_GOLDEN)
+
+# El golden se regenera con un comando y no a mano. Un golden que solo se puede
+# actualizar editandolo termina editado sin mirar, que es como deja de valer.
+regen-scenes: $(SCENES_BIN)
+	$(call require_core)
+	$(SCENES_BIN) "$(CORE)" $(SCENES_GOLDEN) --regen
 
 full-core-replay: $(FULL_CORE_BIN)
 

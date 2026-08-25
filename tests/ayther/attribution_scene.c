@@ -15,11 +15,11 @@
  * sobre las primeras cuatro filas, y backdrop debajo. Con eso, la capa de cada
  * pixel es predecible sin reimplementar el renderer.
  *
- * La escena tambien contiene los dos sprites que hacen falta para el bit de
- * sprite EXACTO (#31/#37): uno indistinguible del fondo y uno operador de
- * shadow/highlight. Ese bit todavia sale de un diff contra el fondo, asi que el
- * test los REPORTA sin exigir nada: cuando el store en el bucle interno entre,
- * este es el lugar donde se convierten en asserts.
+ * La escena tambien lleva el sprite que hace falta para el bit de sprite EXACTO
+ * (#31/#37/#41): uno con el mismo pattern, la misma paleta y la misma prioridad
+ * que el fondo que tiene debajo. Su byte en el line buffer no cambia al
+ * dibujarlo, asi que un diff contra el fondo no lo ve -- daba cero de 64-- y
+ * dejaba un agujero adentro del sprite.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -255,19 +255,49 @@ int main(int argc, char **argv)
     }
   }
 
-  /* --- el bit de sprite: se reporta, todavia no se exige ----------------- */
-  /* Los dos sprites de la escena son los casos que un diff contra el fondo
-     contesta mal. Mientras el bit siga saliendo de ese diff, los numeros de
-     abajo son el TAMANIO del defecto, no una regresion. Cuando el store en el
-     bucle interno de render_obj entre (#31/#37/#41), estas dos lineas pasan a
-     ser asserts: 64 y 0. */
-  printf("\n[informativo] bit de sprite, todavia derivado del diff contra el fondo:\n");
-  printf("  sprite identico al fondo (8x8 en %d,%d): %d de 64 marcados (exacto seria 64)\n",
-         AYTHER_SH_SPRITE_X, AYTHER_SH_SPRITE_Y,
-         count_sprite_px(AYTHER_SH_SPRITE_X, AYTHER_SH_SPRITE_Y, 8, 8));
-  printf("  operador S/H            (8x8 en %d,%d): %d de 64 marcados (exacto seria 0)\n",
-         AYTHER_SH_OPERATOR_X, AYTHER_SH_OPERATOR_Y,
-         count_sprite_px(AYTHER_SH_OPERATOR_X, AYTHER_SH_OPERATOR_Y, 8, 8));
+  /* --- #31/#37/#41: el bit de sprite, exacto ---------------------------- */
+  /* El sprite de la escena tiene el mismo pattern, la misma paleta y la misma
+     prioridad que el fondo que tiene debajo: su byte en el line buffer NO cambia
+     al dibujarlo. Un diff contra el fondo no lo ve —daba 0 de 64— y dejaba un
+     agujero adentro del sprite: el dim lo emitía a brillo pleno y la atribución
+     no lo marcaba. Ahora el bit lo escribe la regla de prioridad, que no depende
+     de que los bytes se distingan. */
+  {
+    int marked = count_sprite_px(AYTHER_SH_SPRITE_X, AYTHER_SH_SPRITE_Y, 8, 8);
+    printf("\nsprite idéntico al fondo (8x8 en %d,%d): %d de 64 marcados\n",
+           AYTHER_SH_SPRITE_X, AYTHER_SH_SPRITE_Y, marked);
+    if (marked != 64) {
+      printf("  FALLA: %d agujeros — el bit volvió a salir de un diff\n",
+             64 - marked);
+      fail = 1;
+    }
+  }
+
+  /* Y el fondo lejos de los sprites sigue sin marcarse. Sin esto, un core que
+     marcara TODO pasaría el caso de arriba. */
+  {
+    int marked = count_sprite_px(AYTHER_SH_BG_X, AYTHER_SH_BG_Y, 32, 8);
+    printf("fondo puro               (32x8 en %d,%d): %d marcados\n",
+           AYTHER_SH_BG_X, AYTHER_SH_BG_Y, marked);
+    if (marked != 0) {
+      printf("  FALLA: el bit de sprite está puesto sobre fondo puro\n");
+      fail = 1;
+    }
+  }
+
+  /* El segundo sprite es un operador de shadow/highlight: paleta 3, índices 14
+     y 15. No pone color —modifica el brillo del píxel de abajo—, así que no es
+     un sprite para nadie que lea este bit. El diff contra el fondo lo marcaba
+     igual, porque el byte SÍ cambia: ése es el defecto 2 de #31. */
+  {
+    int marked = count_sprite_px(AYTHER_SH_OPERATOR_X, AYTHER_SH_OPERATOR_Y, 8, 8);
+    printf("operador S/H             (8x8 en %d,%d): %d marcados\n",
+           AYTHER_SH_OPERATOR_X, AYTHER_SH_OPERATOR_Y, marked);
+    if (marked != 0) {
+      printf("  FALLA: %d píxeles de brillo contados como sprite\n", marked);
+      fail = 1;
+    }
+  }
 
   printf("\n%s\n", fail ? "FALLO" : "TODO OK");
   return fail;

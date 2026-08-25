@@ -432,6 +432,39 @@ INLINE void WRITE_LONG(void *address, uint32 data)
     } \
   }
 
+/* AYTHER (#31/#37/#41): DRAW_SPRITE_TILE con el bit de sprite EXACTO.
+
+   `ayther_observed` es un parametro del clon, no una variable: en el clon
+   rapido es la constante 0 y el compilador borra la rama entera, asi que el
+   perfil sin subscribers no paga ni una comparacion por pixel.
+
+   La regla es la misma que aplica la LUT: gana el sprite si tiene prioridad, o
+   si lo que ya estaba no la tiene. Se replica en vez de comparar el resultado
+   contra el valor anterior porque dos capas pueden dar el MISMO byte, y ahi
+   comparar contesta cualquier cosa -- que es justo el defecto que esto arregla.
+
+   El store es un OR y no una asignacion: los sprites se dibujan en orden, y un
+   sprite posterior que PIERDE contra uno anterior no puede borrar la marca del
+   que gano. */
+#define AYTHER_DRAW_SPRITE_TILE(WIDTH,ATTR,TABLE)  \
+  for (i=0;i<WIDTH;i++) \
+  { \
+    temp = *src++; \
+    if (temp & 0x0f) \
+    { \
+      uint32 ayther_under = lb[i]; \
+      temp |= (ayther_under << 8); \
+      lb[i] = TABLE[temp | ATTR]; \
+      status |= ((temp & 0x8000) >> 10); \
+      if (ayther_observed) \
+      { \
+        uint32 ayther_sb = (ATTR) | (temp & 0x0F); \
+        spx[i] |= (uint8)(AYTHER_SPRITE_WINS(ayther_sb, ayther_under) && \
+                          !(ayther_sh && AYTHER_SPRITE_IS_OPERATOR(ayther_sb))); \
+      } \
+    } \
+  }
+
 #define DRAW_SPRITE_TILE_ACCURATE(WIDTH,ATTR,TABLE)  \
   for (i=0;i<WIDTH;i++) \
   { \
@@ -566,6 +599,7 @@ static const uint32 tms_palette[16] =
 /* AYTHER (#31): el cuarteo por canal vive en su propio header para que el
    test pueda verificar los valores sin levantar el core. */
 #include "ayther/ayther_dim.h"
+#include "ayther/ayther_sprite_px.h"
 
 /* Cached and flipped patterns */
 static uint8 ALIGNED_(4) bg_pattern_cache[0x80000];
@@ -663,8 +697,36 @@ uint8 ayther_layer_mask = 0xFF;
    visible (produce); la re-sim bare corre con dim=0. Asume salida RGB565 (el build
    del fork: -DUSE_16BPP_RENDERING -DFRONTEND_SUPPORTS_RGB565). */
 uint8 ayther_layer_dim = 0;
-static uint8 ayther_bg_snap[0x200];    /* linebuf[0] tras render_bg (sólo dim mode) */
-static uint8 ayther_sprite_px[0x200];  /* 1 = ese pixel es de sprite (sólo dim mode) */
+static uint8 ayther_bg_snap[0x200];    /* linebuf[0] tras render_bg (fallback Mode 4) */
+static uint8 ayther_sprite_px[0x200];  /* 1 = ese pixel es de sprite */
+
+/* AYTHER (#31/#37/#41): "este pixel es de un sprite" se derivaba comparando
+   linebuf[0] antes y despues de render_obj. Esa via da dos respuestas malas:
+
+     - un pixel de sprite cuyo byte COINCIDE con el del fondo -- mismo indice,
+       misma prioridad-- no aparece en el diff. El dim lo dejaba a brillo pleno
+       y la atribucion no lo marcaba: un agujero adentro del sprite;
+     - un pixel que solo cambio por el OPERADOR de shadow/highlight aparece, y
+       se marcaba como sprite. No lo es: no pone color.
+
+   Ahora se escribe donde se DECIDE, y ese lugar no es uno solo, porque las dos
+   familias de renderers de sprites resuelven la prioridad en sitios distintos:
+
+     render_obj_m5 / _im2      dibujan DIRECTO en linebuf[0], y la LUT resuelve
+                               sprite-contra-fondo pixel a pixel. La decision
+                               esta en el bucle, asi que el store va ahi.
+     render_obj_m5_ste / _im2_ste  dibujan en linebuf[1] y mergean despues. La
+                               decision esta en el merge, asi que el store va
+                               ahi.
+
+   Que sean dos no es duplicacion por gusto: es que la pregunta se contesta en
+   dos lugares distintos, y contestarla en el que no decide es exactamente el
+   error que el diff cometia. Ninguna de las dos cuesta nada en el perfil
+   rapido: el store del bucle vive bajo un parametro de clon que el compilador
+   pliega, y el del merge bajo una bandera que solo se enciende con dim o
+   atribucion activos. */
+static int ayther_obj_pass = 0;      /* 1 = corriendo render_obj              */
+static int ayther_obj_px_exact = 0;  /* 1 = alguien lleno ayther_sprite_px    */
 
 /* AYTHER fork delta: CAPTURA de los sprites realmente PARSEADOS por parse_satb
    durante el frame (ids 0x10B lista / 0x10C contador, reset legacy). Algunos
@@ -769,7 +831,6 @@ uint32 ayther_attrib_flags = 0;
 static int ayther_attrib_capture = 0;
 static int ayther_attrib_row = 0;
 static uint8 ayther_attrib_line[0x200];
-static uint8 ayther_attrib_bg_snap[0x200];
 
 #define AYTHER_ATTRIB_ACTIVE AYTHER_SUBSCRIBED(AYTHER_SUB_ATTRIBUTION)
 
@@ -1316,11 +1377,46 @@ static AYTHER_NOINLINE void ayther_merge_capture(uint8 *srca, uint8 *srcb,
   else { int i; for (i = 0; i < width; ++i) dst[i] = table[(snap_b[i] << 8) | snap_a[i]]; }
   ayther_attrib_bg(snap_a, snap_b, dst, width, shadow_mode);
 }
+
+/* #31/#37/#41: el merge de la capa de sprites (familia S/H) es quien decide si
+   el sprite gana, asi que es el unico lugar donde la pregunta tiene respuesta
+   exacta ahi. `srca` es la capa de sprites y `srcb` el fondo ya fusionado.
+
+   Los operadores de shadow/highlight -- paleta 3, indices 14 y 15-- NO cuentan:
+   no ponen color, modifican el brillo del pixel de abajo. Contarlos como
+   sprite es el defecto 2 de #31, y por el diff entraban siempre. */
+static AYTHER_NOINLINE void ayther_obj_capture(const uint8 *srca,
+                                               const uint8 *srcb, int width)
+{
+  const int shadow_mode = (reg[12] & 0x08) != 0;
+  uint8 *out = &ayther_sprite_px[0x20];
+  int x;
+
+  for (x = 0; x < width; ++x)
+  {
+    const uint8 sx = srca[x], bx = srcb[x];
+    const int s = sx & 0x0F, sp = sx & 0x40;
+    const int b = bx & 0x0F, bp = bx & 0x40;
+    int is_sprite;
+
+    (void)s; (void)sp; (void)b; (void)bp;
+    if (shadow_mode && AYTHER_SPRITE_IS_OPERATOR(sx))
+      is_sprite = 0;              /* operador S/H: brillo, no color */
+    else
+      is_sprite = AYTHER_SPRITE_WINS(sx, bx) ? 1 : 0;
+
+    out[x] = (uint8)(is_sprite ? 1 : 0);
+  }
+  ayther_obj_px_exact = 1;
+}
 #endif
 
 INLINE void merge(uint8 *srca, uint8 *srcb, uint8 *dst, uint8 *table, int width)
 {
 #ifdef AYTHER_EXTENSIONS
+  /* Antes del merge: lo consume in-place (dst == srcb). */
+  if (ayther_obj_pass)
+    ayther_obj_capture(srca, srcb, width);
   if (ayther_attrib_capture)
   {
     ayther_merge_capture(srca, srcb, dst, table, width);
@@ -4475,7 +4571,7 @@ void render_obj_m4(int line)
   }
 }
 
-void render_obj_m5(int line)
+AYTHER_HOT_INLINE void render_obj_m5_impl(int line, int ayther_observed)
 {
   int i, column;
   int xpos, width;
@@ -4487,6 +4583,17 @@ void render_obj_m5(int line)
   uint8 *src, *s, *lb;
   uint32 temp, v_line;
   uint32 attr, name, atex;
+#ifdef AYTHER_EXTENSIONS
+  /* #31/#37/#41: paralelo a `lb`, con el mismo indice. En el clon rapido
+     `ayther_observed` es 0 y todo esto desaparece en compilacion. */
+  uint8 *spx = 0;
+  const int ayther_sh = (reg[12] & 0x08) != 0;
+  if (ayther_observed)
+  {
+    memset(ayther_sprite_px, 0, sizeof(ayther_sprite_px));
+    ayther_obj_px_exact = 1;
+  }
+#endif
 
   /* Sprite list for current line */
   object_info_t *object_info = obj_info[line];
@@ -4545,6 +4652,9 @@ void render_obj_m5(int line)
 
       /* Pointer into line buffer */
       lb = &linebuf[0][0x20 + xpos];
+#ifdef AYTHER_EXTENSIONS
+      spx = &ayther_sprite_px[0x20 + xpos];
+#endif
 
       /* Max. number of sprite pixels rendered per line */
       if (pixelcount > max_pixels)
@@ -4560,12 +4670,21 @@ void render_obj_m5(int line)
       v_line = (v_line & 7) << 3;
 
       /* Draw sprite patterns */
+#ifdef AYTHER_EXTENSIONS
+      for (column = 0; column < width; column++, lb+=8, spx+=8)
+      {
+        temp = attr | ((name + s[column]) & 0x07FF);
+        src = &bg_pattern_cache[(temp << 6) | (v_line)];
+        AYTHER_DRAW_SPRITE_TILE(8,atex,lut[1])
+      }
+#else
       for (column = 0; column < width; column++, lb+=8)
       {
         temp = attr | ((name + s[column]) & 0x07FF);
         src = &bg_pattern_cache[(temp << 6) | (v_line)];
         DRAW_SPRITE_TILE(8,atex,lut[1])
       }
+#endif
     }
 
     /* Sprite limit */
@@ -4584,6 +4703,33 @@ void render_obj_m5(int line)
 
   /* Clear sprite masking for next line  */
   spr_ovr = 0;
+}
+
+#ifdef AYTHER_EXTENSIONS
+static AYTHER_NOINLINE void render_obj_m5_fast_path(int line)
+{
+  render_obj_m5_impl(line, 0);
+}
+
+static AYTHER_NOINLINE void render_obj_m5_observed_path(int line)
+{
+  render_obj_m5_impl(line, 1);
+}
+#endif
+
+void render_obj_m5(int line)
+{
+#ifdef AYTHER_EXTENSIONS
+  /* #31/#37/#41: el clon observado es el que escribe el bit de sprite exacto.
+     Solo hace falta cuando alguien va a leerlo -- dim o atribucion-, y el
+     predicado ya lo calculo render_line: viaja en `ayther_obj_pass`. */
+  if (ayther_obj_pass)
+    render_obj_m5_observed_path(line);
+  else
+    render_obj_m5_fast_path(line);
+#else
+  render_obj_m5_impl(line, 0);
+#endif
 }
 
 void render_obj_m5_ste(int line)
@@ -4705,7 +4851,7 @@ void render_obj_m5_ste(int line)
   merge(&linebuf[1][0x20], &linebuf[0][0x20], &linebuf[0][0x20], lut[4], bitmap.viewport.w);
 }
 
-void render_obj_m5_im2(int line)
+AYTHER_HOT_INLINE void render_obj_m5_im2_impl(int line, int ayther_observed)
 {
   int i, column;
   int xpos, width;
@@ -4717,6 +4863,17 @@ void render_obj_m5_im2(int line)
   uint8 *src, *s, *lb;
   uint32 temp, v_line;
   uint32 attr, name, atex;
+#ifdef AYTHER_EXTENSIONS
+  /* #31/#37/#41: paralelo a `lb`, con el mismo indice. En el clon rapido
+     `ayther_observed` es 0 y todo esto desaparece en compilacion. */
+  uint8 *spx = 0;
+  const int ayther_sh = (reg[12] & 0x08) != 0;
+  if (ayther_observed)
+  {
+    memset(ayther_sprite_px, 0, sizeof(ayther_sprite_px));
+    ayther_obj_px_exact = 1;
+  }
+#endif
 
   /* Sprite list for current line */
   object_info_t *object_info = obj_info[line];
@@ -4775,6 +4932,9 @@ void render_obj_m5_im2(int line)
 
       /* Pointer into line buffer */
       lb = &linebuf[0][0x20 + xpos];
+#ifdef AYTHER_EXTENSIONS
+      spx = &ayther_sprite_px[0x20 + xpos];
+#endif
 
       /* Adjust width for sprite limit */
       if (pixelcount > max_pixels)
@@ -4789,12 +4949,21 @@ void render_obj_m5_im2(int line)
       v_line = (v_line & 15) << 3;
 
       /* Render sprite patterns */
+#ifdef AYTHER_EXTENSIONS
+      for(column = 0; column < width; column ++, lb+=8, spx+=8)
+      {
+        temp = attr | (((name + s[column]) & 0x3ff) << 1);
+        src = &bg_pattern_cache[((temp << 6) | (v_line)) ^ ((attr & 0x1000) >> 6)];
+        AYTHER_DRAW_SPRITE_TILE(8,atex,lut[1])
+      }
+#else
       for(column = 0; column < width; column ++, lb+=8)
       {
         temp = attr | (((name + s[column]) & 0x3ff) << 1);
         src = &bg_pattern_cache[((temp << 6) | (v_line)) ^ ((attr & 0x1000) >> 6)];
         DRAW_SPRITE_TILE(8,atex,lut[1])
       }
+#endif
     }
 
     /* Sprite Limit */
@@ -4813,6 +4982,30 @@ void render_obj_m5_im2(int line)
 
   /* Clear sprite masking for next line */
   spr_ovr = 0;
+}
+
+#ifdef AYTHER_EXTENSIONS
+static AYTHER_NOINLINE void render_obj_m5_im2_fast_path(int line)
+{
+  render_obj_m5_im2_impl(line, 0);
+}
+
+static AYTHER_NOINLINE void render_obj_m5_im2_observed_path(int line)
+{
+  render_obj_m5_im2_impl(line, 1);
+}
+#endif
+
+void render_obj_m5_im2(int line)
+{
+#ifdef AYTHER_EXTENSIONS
+  if (ayther_obj_pass)
+    render_obj_m5_im2_observed_path(line);
+  else
+    render_obj_m5_im2_fast_path(line);
+#else
+  render_obj_m5_im2_impl(line, 0);
+#endif
 }
 
 void render_obj_m5_im2_ste(int line)
@@ -5765,33 +5958,54 @@ AYTHER_HOT_INLINE void render_line_impl(int line, int ayther_observed)
     /* AYTHER: el peel sólo aplica a los merges de BG, no a los de sprites. */
     ayther_peel_active = 0;
 
+    /* Solo para el fallback de Mode 4; en Mode 5 el bit de sprite es exacto y
+       este snapshot no se usa. */
+    if ((ayther_dim_active || ayther_attrib_capture_pending) && !(reg[1] & 0x04))
+      memcpy(ayther_bg_snap, linebuf[0], sizeof(ayther_bg_snap));
+
     /* Render sprite layer (AYTHER: ocultable vía máscara de capas, id 0x102).
        AYTHER dim (id 0x108): snapshot de linebuf[0] tras render_bg + diff tras
        render_obj → los píxeles que cambió render_obj son sprites (los demás son
        fondo, que remap_line atenúa). No toca las internas de render_obj. */
     if (ayther_dim_active || ayther_attrib_capture_pending)
     {
-      int i;
-      memcpy(ayther_bg_snap, linebuf[0], sizeof(ayther_bg_snap));
-      if (ayther_attrib_capture_pending)
-        memcpy(ayther_attrib_bg_snap, linebuf[0], sizeof(ayther_attrib_bg_snap));
+      /* #31/#37/#41: el bit de sprite lo escribe QUIEN DECIDE la prioridad --
+         el bucle de render_obj en la familia sin S/H, el merge en la familia
+         con S/H-. Antes salia de comparar linebuf[0] antes y despues, y esa
+         via perdia los pixeles de sprite iguales al fondo y marcaba como
+         sprite los operadores de brillo. */
+      ayther_obj_px_exact = 0;
       if (ayther_show_obj)
+      {
+        ayther_obj_pass = 1;
         render_obj(line & 1);
-      for (i = 0; i < 0x200; i++)
-        ayther_sprite_px[i] = (linebuf[0][i] != ayther_bg_snap[i]);
+        ayther_obj_pass = 0;
+      }
+      if (!ayther_obj_px_exact)
+      {
+        /* Mode 4 y TMS no pasan por ninguno de los dos: ahi sigue el diff, con
+           su defecto conocido, hasta que #40 fase 2 meta esos modos en alcance.
+           El snapshot se toma SOLO en esos modos, asi que fuera de ellos la
+           respuesta correcta es "ningun pixel es de sprite" y no un diff contra
+           un buffer que nadie lleno. */
+        int i;
+        if (ayther_show_obj && !(reg[1] & 0x04))
+          for (i = 0; i < 0x200; i++)
+            ayther_sprite_px[i] = (linebuf[0][i] != ayther_bg_snap[i]);
+        else
+          memset(ayther_sprite_px, 0, sizeof(ayther_sprite_px));
+      }
     }
     else if (ayther_show_obj)
       render_obj(line & 1);
 
 #ifdef AYTHER_EXTENSIONS
-    /* AYTHER (#41): volcar la fila al buffer del frame. El bit de sprite sale
-       de comparar contra el fondo previo a render_obj.
-       LIMITACIÓN CONOCIDA, deliberada: un píxel de sprite cuyo byte coincide
-       con el del fondo no se distingue por esta vía. Marcarlo exige que
-       render_obj escriba el id del sprite en su bucle interno —el código más
-       caliente del emulador—, y ese cambio va junto con #31 y #37, que lo
-       necesitan por el mismo motivo. Hasta entonces la capa de fondo es exacta
-       y el bit de sprite es conservador: nunca marca de más. */
+    /* AYTHER (#41): volcar la fila al buffer del frame.
+       El bit de sprite ya NO sale de un diff contra el fondo: lo escribe quien
+       decide la prioridad. La limitación conocida —un píxel de sprite cuyo byte
+       coincide con el del fondo quedaba sin marcar— queda cerrada, y de paso
+       dejan de marcarse como sprite los operadores de shadow/highlight, que no
+       lo son (#31 defecto 2). */
     if (ayther_attrib_capture_pending)
     {
       const uint32 w = (uint32)bitmap.viewport.w;
@@ -5803,7 +6017,7 @@ AYTHER_HOT_INLINE void render_line_impl(int line, int ayther_observed)
         for (x = 0; x < w && x < ayther_attrib_width; ++x)
         {
           uint8 attr = ayther_attrib_line[x];
-          if (linebuf[0][0x20 + x] != ayther_attrib_bg_snap[0x20 + x])
+          if (ayther_sprite_px[0x20 + x])
             attr |= AYTHER_ATTRIB_SPRITE;
           out[x] = attr;
         }

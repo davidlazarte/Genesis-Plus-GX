@@ -444,15 +444,24 @@ static void emit_fixture_data_sh(struct rom_builder *builder)
      Sprite 1: pattern 3 (indice 14) con paleta 3. Con S/H activo eso es un
      OPERADOR de brillo, no color: el byte SI cambia, y el diff lo contaba como
      sprite aunque no lo sea. */
-  words[0] = (uint16_t)(128u + SH_SPRITE_SCREEN_Y);
-  words[1] = 1u;                            /* 8x8, link -> sprite 1     */
-  words[2] = 1u;                            /* pattern 1, paleta 0, p0   */
-  words[3] = (uint16_t)(128u + SH_SPRITE_SCREEN_X);
-  words[4] = (uint16_t)(128u + SH_OPERATOR_SCREEN_Y);
-  words[5] = 0u;                            /* 8x8, fin de la cadena     */
-  words[6] = 3u;
-  words[7] = (uint16_t)(128u + SH_OPERATOR_SCREEN_X);
-  emit_vdp_words(builder, 0xd800u, words, 8u);
+  /* La entrada 0 de la SAT es un centinela fuera de pantalla, y no un descuido:
+     el primer slot es el que el handler de H-int del fixture reescribe una vez
+     por scanline —VRAM 0xD804 es su word de atributos— y por eso el sprite que
+     viviera ahí no llegaba a dibujarse nunca. Los dos que este ROM quiere
+     observar viven en las entradas 1 y 2, donde nadie los toca. */
+  words[0] = 0u;                            /* Y=0: nunca visible        */
+  words[1] = 1u;                            /* 8x8, link -> entrada 1    */
+  words[2] = 0u;
+  words[3] = 0u;
+  words[4] = (uint16_t)(128u + SH_SPRITE_SCREEN_Y);
+  words[5] = 2u;                            /* 8x8, link -> entrada 2    */
+  words[6] = 1u;                            /* pattern 1, paleta 0, p0   */
+  words[7] = (uint16_t)(128u + SH_SPRITE_SCREEN_X);
+  words[8] = (uint16_t)(128u + SH_OPERATOR_SCREEN_Y);
+  words[9] = 0u;                            /* 8x8, fin de la cadena     */
+  words[10] = (uint16_t)(3u | (3u << 13));  /* pattern 3, paleta 3       */
+  words[11] = (uint16_t)(128u + SH_OPERATOR_SCREEN_X);
+  emit_vdp_words(builder, 0xd800u, words, 12u);
 }
 
 static void emit_reset_program_sh(struct rom_builder *builder)
@@ -486,7 +495,14 @@ static void emit_reset_program_sh(struct rom_builder *builder)
   emit_fixture_data_sh(builder);
 
   emit_move_word_immediate_absolute(builder, 0x0000u, Z80_BUS_REQUEST);
-  emit_vdp_register(builder, 0, 0x14u);
+  /* SIN interrupcion horizontal (bit 4 de reg 0 apagado).
+     El handler de H-int del fixture reescribe VRAM 0xD804 -- que es el word de
+     atributos del sprite 0-- una vez por scanline, a proposito: asi el ROM de
+     siempre ejercita el SAT reescrito a mitad de frame. En ESTA escena eso
+     destruye justamente el sprite que se quiere observar: su pattern pasa a
+     ser el numero de linea y deja de dibujar nada. Dos features utiles que no
+     pueden convivir en el mismo ROM. */
+  emit_vdp_register(builder, 0, 0x04u);
   emit_vdp_register(builder, 1, 0x74u);
 
   emit_u16(builder, 0x4e72u); /* stop #$2300 */

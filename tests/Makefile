@@ -45,6 +45,7 @@ CONCURRENCY_BIN := $(BUILD_DIR)/test_audio_probe_concurrency$(EXE_EXT)
 API_BIN := $(BUILD_DIR)/test_ayther_api$(EXE_EXT)
 RASTER_BIN := $(BUILD_DIR)/test_raster_guard$(EXE_EXT)
 DIM_BIN := $(BUILD_DIR)/test_dim_quarter$(EXE_EXT)
+SPRITE_RULE_BIN := $(BUILD_DIR)/test_sprite_px$(EXE_EXT)
 SPRITE_CAPTURE_BIN := $(BUILD_DIR)/test_sprite_capture$(EXE_EXT)
 ROM_PROBE_BIN := $(BUILD_DIR)/raster_rom_probe$(EXE_EXT)
 FULL_CORE_BIN := $(BUILD_DIR)/full_core_replay$(EXE_EXT)
@@ -112,6 +113,11 @@ $(RASTER_BIN): test_raster_guard.c $(CORE_DIR)/core/ayther_raster.h | $(BUILD_DI
 # Aritmetica pura: no necesita el core, solo el mismo header.
 $(DIM_BIN): test_dim_quarter.c $(CORE_DIR)/core/ayther/ayther_dim.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ test_dim_quarter.c $(LDFLAGS)
+
+# #31/#37/#41: que la regla de "el sprite gana" sea la misma que aplica la LUT.
+# Aritmetica pura sobre las combinaciones posibles: no necesita el core.
+$(SPRITE_RULE_BIN): test_sprite_px.c $(CORE_DIR)/core/ayther/ayther_sprite_px.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ test_sprite_px.c $(LDFLAGS)
 
 $(SPRITE_CAPTURE_BIN): test_sprite_capture.c $(SPRITE_CAPTURE_SRC) \
 		$(SPRITE_CAPTURE_HEADERS) | $(BUILD_DIR)
@@ -230,13 +236,14 @@ $(TRACE_BIN): ayther/audio_probe_trace.c $(PROBE_SRC) $(PROBE_HEADERS) | $(BUILD
 check: check-unit check-determinism
 
 check-unit: $(UNIT_BIN) $(CONCURRENCY_BIN) $(API_BIN) $(RASTER_BIN) \
-		$(SPRITE_CAPTURE_BIN) $(DIM_BIN) $(ROM_PROBE_BIN)
+		$(SPRITE_CAPTURE_BIN) $(DIM_BIN) $(SPRITE_RULE_BIN) $(ROM_PROBE_BIN)
 	$(UNIT_BIN)
 	$(CONCURRENCY_BIN)
 	$(API_BIN)
 	$(RASTER_BIN)
 	$(SPRITE_CAPTURE_BIN)
 	$(DIM_BIN)
+	$(SPRITE_RULE_BIN)
 
 check-concurrency: $(CONCURRENCY_BIN)
 	$(CONCURRENCY_BIN)

@@ -872,14 +872,22 @@ jobs:
   # harness ahora se engancha ANTES (tests/ci/ucrt_diag.h): si el fallo llega por
   # un parametro invalido, el log dice que funcion y que expresion.
   #
-  # `continue-on-error`: este job es un DIAGNOSTICO, no una puerta. El perfil que
-  # el fork publica es msvcrt, y bloquear merges con un fallo conocido y acotado
-  # de otro perfil seria confundir "sabemos que pasa" con "esta roto lo nuestro".
-  # Cuando se arregle, se saca esta linea y pasa a ser puerta.
-  windows-ucrt-diagnosis:
-    name: Windows UCRT (diagnostico de #45.A)
+  # RESULTADO (2026-08-25): el build UCRT NO falla. Carga, corre el replay
+  # completo y produce el MISMO golden que msvcrt, Linux y macOS
+  # (video_hash 4d39e98fa62d8b4e), con exit 0 y sin que ninguno de los handlers
+  # se dispare. El `__fastfail` que #38 observo ya no esta.
+  #
+  # Por eso el job nacio como diagnostico con `continue-on-error` y hoy es una
+  # PUERTA: lo que empezo como "averiguar por que muere" termino en "no muere", y
+  # lo unico que queda por cuidar es que no vuelva a morir. Un diagnostico que ya
+  # dio su respuesta y se deja en modo informativo es un job que nadie lee.
+  #
+  # Los handlers de tests/ci/ucrt_diag.h siguen puestos: si alguna vez vuelve,
+  # el log va a decir por que -- abort, parametro invalido o fastfail crudo-- en
+  # vez de dejar un codigo de salida sin explicacion.
+  windows-ucrt:
+    name: Windows UCRT (#45.A)
     runs-on: windows-latest
-    continue-on-error: true
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -922,7 +930,6 @@ jobs:
       # 0xC0000409 crudo = fastfail por otro camino.
       - name: Run the full replay under UCRT, with the handlers installed
         shell: pwsh
-        continue-on-error: true
         run: |
           # El mismo target que usa el resto de CI: el harness necesita cinco
           # rutas de salida, no solo el core, y pasarselas a mano fue un error de

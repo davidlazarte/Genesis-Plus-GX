@@ -491,3 +491,37 @@ failed against *any* ROM. And the subscription has to happen **after**
 before compiles, runs, and does nothing, which is the worst of the three. A
 probe that only ever runs by hand can stay broken for a long time without
 anyone noticing.
+## The UCRT build does not fail (#45.A)
+
+#38 left this bounded but unproven: the UCRT build died with
+`STATUS_STACK_BUFFER_OVERRUN` (0xC0000409). That code is **not** stack
+exhaustion -- that is 0xC00000FD -- it is what `__fastfail` produces, and in
+UCRT both `abort()` and the *invalid parameter handler* are built on it. MSVCRT
+has no such handler: it was never that MSVCRT worked, it is that MSVCRT does not
+validate.
+
+Closing it needed a stack, and `__fastfail` terminates the process **without**
+going through the unhandled-exception filter, so nothing was left behind.
+`tests/ci/ucrt_diag.h` hooks in earlier instead:
+`_set_invalid_parameter_handler` names the CRT call that failed, a `SIGABRT`
+handler catches an explicit `abort()`, and the exception filter stays as a net.
+Exit codes tell the three paths apart: 3 abort, 4 invalid parameter, 0xC0000409
+raw.
+
+**Measured result: it does not fail.** The UCRT build loads, runs the full
+120-frame replay and produces the *same* golden as msvcrt, Linux and macOS
+(`video_hash 4d39e98fa62d8b4e`), exit 0, with none of the handlers firing. The
+`__fastfail` #38 saw is gone.
+
+Two things that fell out of building the job, both real:
+
+- A mingw UCRT build does **not** import `ucrtbase.dll`. It imports the *API
+  sets* (`api-ms-win-crt-runtime-l1-1-0.dll` and friends), which is how Windows
+  has exposed the UCRT since Windows 10. `verify-windows-core.ps1` had been
+  forbidding UCRT by matching only the DLL name -- a guard that could not fire.
+  It was harmless in practice because the positive `msvcrt.dll` check covered
+  it, but a guard that cannot fail on its own terms is not a guard.
+- The job started as a diagnosis with `continue-on-error` and is now a **gate**.
+  A diagnosis that already answered its question and is left in informative mode
+  is a job nobody reads. The handlers stay installed: if it ever comes back, the
+  log will say why instead of leaving an unexplained exit code.

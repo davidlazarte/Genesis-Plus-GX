@@ -314,7 +314,7 @@ check: check-unit check-determinism check-fuzz-ring
 # Esto NO fuzzea -- no necesita clang-: replaya entradas conocidas bajo
 # ASan/UBSan, que es lo que evita que un crash arreglado vuelva sin que
 # nadie se entere.
-check-fuzz: 
+check-fuzz:
 	$(call require_core)
 	$(MAKE) -C fuzz replay-all CC=$(CC) CORE="$(abspath $(CORE))"
 

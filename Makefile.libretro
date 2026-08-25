@@ -906,6 +906,33 @@ ${LIBRARY_NAME}_FILES = $(SOURCES_C) $(SOURCES_CXX)
 ${LIBRARY_NAME}_LIBRARIES = m z
 include $(THEOS_MAKE_PATH)/library.mk
 else
+# #43: advertencias del compilador, con dos niveles a proposito.
+#
+# `-Wall -Wextra` para TODO el core, pero SIN -Werror: la mayor parte de estos
+# archivos son de upstream, y arreglar sus 46 warnings es divergencia pura --
+# cada linea tocada es un conflicto en el proximo sync, a cambio de nada--.
+# Verlos igual sirve: si un cambio nuestro agrega uno, aparece en el log.
+#
+# `-Werror` SOLO en core/ayther/, que es 100% nuestro y hoy compila con cero
+# warnings. Ahi si vale cerrar la puerta.
+#
+# libretro/libretro.c es el caso mixto: unas 700 lineas nuestras de ABI dentro
+# de un archivo de upstream. Un -Werror entero rebotaria por los 9 warnings que
+# ya trae de upstream, asi que se eligen las CLASES que delatan un bug de
+# verdad y que hoy nadie dispara -- declaracion implicita, punteros
+# incompatibles, conversiones int/puntero, uso sin inicializar, formatos--. Las
+# clases cosmeticas que upstream si dispara (sign-compare, unused-*,
+# parentheses, return-type) quedan como advertencia.
+ifneq (,$(filter $(platform),unix win64 win32 osx))
+LIBRETRO_CFLAGS += -Wall -Wextra
+
+AYTHER_OWN_OBJECTS := $(foreach o,$(OBJECTS),$(if $(findstring /ayther/,$(o)),$(o)))
+$(AYTHER_OWN_OBJECTS): LIBRETRO_CFLAGS += -Werror
+
+AYTHER_MIXED_OBJECTS := $(filter %libretro/libretro.o,$(OBJECTS))
+$(AYTHER_MIXED_OBJECTS): LIBRETRO_CFLAGS += 	-Werror=implicit-function-declaration 	-Werror=incompatible-pointer-types 	-Werror=int-conversion 	-Werror=uninitialized 	-Werror=format
+endif
+
 all: $(TARGET)
 
 %.o: %.cpp

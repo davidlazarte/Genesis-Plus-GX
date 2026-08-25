@@ -1177,13 +1177,8 @@ static int check_attribution(const struct core_api *api)
   static uint16_t isolated[2][MAX_RECOMPOSE_PIXELS];
   static uint16_t composite[MAX_RECOMPOSE_PIXELS];
   static uint16_t backdrop[MAX_RECOMPOSE_PIXELS];
-  static const struct { uint8_t mask; uint8_t layer; const char *name; } cases[] = {
-    { RC_LAYER_B, AYTHER_ATTRIB_LAYER_PLANE_B, "Plane B" },
-    { RC_LAYER_A, AYTHER_ATTRIB_LAYER_PLANE_A, "Plane A" }
-  };
   ayther_region_info_v1 info;
   uint32_t width = 0, height = 0, w0 = 0, h0 = 0;
-  size_t c;
   int ok = 1;
   int checked = 0;
 

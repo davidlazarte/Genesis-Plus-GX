@@ -145,6 +145,10 @@ void ayther_recompose_release(void);
 extern uint8 ayther_tile_suppress[512];    /* celdas de tile suprimidas (id 0x104, 64x64) */
 extern uint8 ayther_plane_tile_suppress[3 * 1024]; /* tiles de plano suprimidos (id 0x105) */
 extern uint8 ayther_plane_suppress_active;  /* id 0x106: 1 = hay algún tile de plano oculto */
+/* #37.4: resumen por plano de la máscara 0x105 — un plano vacío conserva el
+   fast path de DRAW_COLUMN aunque otro tenga tiles ocultos. */
+extern uint8 ayther_psup_any[3];
+void ayther_psup_refresh(void);
 
 /* AYTHER (#270): recomposición del frame desde el estado FINAL del VDP, con el
    mismo renderer del core (spike de fidelidad del render propio). `flags` apaga

@@ -459,6 +459,11 @@ void vdp_ayther_begin_frame(void)
   ayther_raster_journal_dropped = 0;
   /* #42: lo que sigue pertenece a ESTE frame. */
   ayther_line_state_begin_frame();
+  /* #37.4: `ayther_write_control_v1` ya mantiene el resumen al escribir la
+     región, pero la interfaz legacy entrega el puntero crudo y el frontend
+     puede escribirlo sin avisar. Recalcularlo acá cierra ese caso: 3 KB una
+     vez por frame, y sólo mientras la supresión esté activa. */
+  ayther_psup_refresh();
   if (AYTHER_SUBSCRIBED(AYTHER_SUB_RASTER_TRACKING))
     ayther_raster_dirty = ayther_recompose_mode_supported()
       ? 0u : AYTHER_RASTER_REASON_UNSUPPORTED_MODE;

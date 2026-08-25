@@ -97,6 +97,85 @@ void ayther_recompose_release(void)
   ayther_ml_cache_have = 0;
 }
 
+/* AYTHER (#37 punto 7): el estado global que una recomposicion pisa y tiene que
+ * devolver como estaba.
+ *
+ * Esto vivia escrito DOS VECES -- una en recompose_frame y otra en
+ * recompose_multilayer-, unas 120 lineas casi identicas. No es codigo caliente,
+ * asi que no es una cuestion de velocidad: es que una optimizacion o un arreglo
+ * aplicado a una sola copia deja la otra silenciosamente distinta, y el sintoma
+ * seria un frame corrupto DESPUES de recomponer, lejos de la causa.
+ *
+ * Recomponer es una LECTURA desde el punto de vista del frontend. Que el core
+ * tenga que mover medio mundo para contestarla es un detalle de implementacion
+ * que no puede filtrarse al estado del emulador.
+ */
+typedef struct ayther_render_ctx
+{
+  uint16 status, spr_col;
+  uint8  spr_ovr, layer_mask;
+  uint8  object_count[2];
+  object_info_t obj_info[2][80];
+  struct clip_t clip[2];
+  uint8  reg11, reg12, reg18, hscroll_mask;
+  uint8 *bitmap_data;
+  int    bitmap_pitch, viewport_x, viewport_y;
+} ayther_render_ctx;
+
+static void ayther_render_ctx_save(ayther_render_ctx *c)
+{
+  c->status  = status;
+  c->spr_ovr = spr_ovr;
+  c->spr_col = spr_col;
+  c->layer_mask = ayther_layer_mask;
+  memcpy(c->object_count, object_count, sizeof(c->object_count));
+  memcpy(c->obj_info, obj_info, sizeof(c->obj_info));
+  memcpy(c->clip, clip, sizeof(c->clip));
+  c->reg11 = reg[11]; c->reg12 = reg[12]; c->reg18 = reg[18];
+  c->hscroll_mask = hscroll_mask;
+  c->bitmap_data  = bitmap.data;
+  c->bitmap_pitch = bitmap.pitch;
+  c->viewport_x = bitmap.viewport.x;
+  c->viewport_y = bitmap.viewport.y;
+
+  /* Tiles sucios pendientes al cache, identico al arranque de render_line: el
+     proximo frame real haria exactamente este flush. */
+  if (bg_list_index)
+  {
+    update_bg_pattern_cache(bg_list_index);
+    bg_list_index = 0;
+  }
+}
+
+static void ayther_render_ctx_restore(const ayther_render_ctx *c, int sh_rebuilt)
+{
+  if (sh_rebuilt)
+  {
+    int i;
+    reg[12] = c->reg12;
+    color_update_m5(0x00, *(uint16 *)&cram[(reg[7] & 0x3F) << 1]);
+    for (i = 1; i < 0x40; i++)
+      color_update_m5(i, *(uint16 *)&cram[i << 1]);
+  }
+  reg[11] = c->reg11;
+  reg[12] = c->reg12;
+  reg[18] = c->reg18;
+  hscroll_mask = c->hscroll_mask;
+  memcpy(clip, c->clip, sizeof(c->clip));
+  ayther_rc_nolimit = 0;
+  ayther_rc_nomask  = 0;
+  ayther_layer_mask = c->layer_mask;
+  bitmap.data  = c->bitmap_data;
+  bitmap.pitch = c->bitmap_pitch;
+  bitmap.viewport.x = c->viewport_x;
+  bitmap.viewport.y = c->viewport_y;
+  memcpy(obj_info, c->obj_info, sizeof(c->obj_info));
+  memcpy(object_count, c->object_count, sizeof(c->object_count));
+  status  = c->status;
+  spr_ovr = c->spr_ovr;
+  spr_col = c->spr_col;
+}
+
 /* #27: aplicar un cambio de registro durante el raster replay.
  *
  * Escribir `reg[r] = d` no alcanza: el renderer no lee los registros, lee el
@@ -165,14 +244,7 @@ int ayther_recompose_frame(uint16 *out, int cap, unsigned int flags,
   (void)out; (void)cap; (void)flags; (void)out_w; (void)out_h;
   return AYTHER_RC_ERR_INVALID_PARAMS;
 #else
-  uint16 s_status, s_sprcol;
-  uint8  s_sprovr, s_lmask;
-  uint8  s_objcount[2];
-  object_info_t s_objinfo[2][80];
-  struct clip_t s_clip[2];
-  uint8  s_reg11, s_reg12, s_reg18, s_hsmask;
-  uint8 *s_bdata;
-  int    s_bpitch, s_bvx, s_bvy;
+  ayther_render_ctx ctx;
   int    l, w, h, vs, ste, sh_rebuilt;
   uint64_t rc_controls;
   uint8  rc_mask;
@@ -212,26 +284,7 @@ int ayther_recompose_frame(uint16 *out, int cap, unsigned int flags,
   }
 
   /* ---- salvar todo lo que el render muta ---- */
-  s_status = status;
-  s_sprovr = spr_ovr;
-  s_sprcol = spr_col;
-  memcpy(s_objcount, object_count, sizeof(object_count));
-  memcpy(s_objinfo, obj_info, sizeof(obj_info));
-  memcpy(s_clip, clip, sizeof(clip));
-  s_reg11 = reg[11]; s_reg12 = reg[12]; s_reg18 = reg[18];
-  s_hsmask = hscroll_mask;
-  s_bdata  = bitmap.data;
-  s_bpitch = bitmap.pitch;
-  s_bvx = bitmap.viewport.x;
-  s_bvy = bitmap.viewport.y;
-
-  /* tiles sucios pendientes → cache (idéntico al arranque de render_line;
-     el próximo frame real haría exactamente este flush) */
-  if (bg_list_index)
-  {
-    update_bg_pattern_cache(bg_list_index);
-    bg_list_index = 0;
-  }
+  ayther_render_ctx_save(&ctx);
 
   /* ---- aplicar flags ---- */
   if (flags & AYTHER_RC_FLAT_HS)
@@ -256,7 +309,6 @@ int ayther_recompose_frame(uint16 *out, int cap, unsigned int flags,
      alto de flags; 0 = mantener la vigente). Recomponer "solo el plano B sobre
      backdrop" es el oráculo CPU contra el que se valida el pipeline indexado
      de la GPU — mismo renderer que midió el spike R-1. */
-  s_lmask = ayther_layer_mask;
   if (flags & AYTHER_RC_LAYER_MASK(0xFF))
     ayther_layer_mask = (uint8)(flags >> 24);
 
@@ -319,31 +371,7 @@ int ayther_recompose_frame(uint16 *out, int cap, unsigned int flags,
   }
 
   /* ---- restaurar ---- */
-  if (sh_rebuilt)
-  {
-    int i;
-    reg[12] = s_reg12;
-    color_update_m5(0x00, *(uint16 *)&cram[(reg[7] & 0x3F) << 1]);
-    for (i = 1; i < 0x40; i++)
-      color_update_m5(i, *(uint16 *)&cram[i << 1]);
-  }
-  reg[11] = s_reg11;
-  reg[12] = s_reg12;
-  reg[18] = s_reg18;
-  hscroll_mask = s_hsmask;
-  memcpy(clip, s_clip, sizeof(clip));
-  ayther_rc_nolimit = 0;
-  ayther_rc_nomask  = 0;
-  ayther_layer_mask = s_lmask;
-  bitmap.data  = s_bdata;
-  bitmap.pitch = s_bpitch;
-  bitmap.viewport.x = s_bvx;
-  bitmap.viewport.y = s_bvy;
-  memcpy(obj_info, s_objinfo, sizeof(obj_info));
-  memcpy(object_count, s_objcount, sizeof(object_count));
-  status  = s_status;
-  spr_ovr = s_sprovr;
-  spr_col = s_sprcol;
+  ayther_render_ctx_restore(&ctx, sh_rebuilt);
 
   if (out_w) *out_w = w;
   if (out_h) *out_h = h;
@@ -383,14 +411,7 @@ int ayther_core_recompose_multilayer(
 #ifndef USE_16BPP_RENDERING
   return AYTHER_RC_ERR_INVALID_PARAMS;
 #else
-  uint16 s_status, s_sprcol;
-  uint8  s_sprovr, s_lmask;
-  uint8  s_objcount[2];
-  object_info_t s_objinfo[2][80];
-  struct clip_t s_clip[2];
-  uint8  s_reg11, s_reg12, s_reg18, s_hsmask;
-  uint8 *s_bdata;
-  int    s_bpitch, s_bvx, s_bvy;
+  ayther_render_ctx ctx;
   int    l, w, h, vs, ste, sh_rebuilt;
   uint8  ml_want = 0;
   uint64_t ml_controls;
@@ -461,24 +482,7 @@ int ayther_core_recompose_multilayer(
     }
   }
 
-  s_status = status;
-  s_sprovr = spr_ovr;
-  s_sprcol = spr_col;
-  memcpy(s_objcount, object_count, sizeof(object_count));
-  memcpy(s_objinfo, obj_info, sizeof(obj_info));
-  memcpy(s_clip, clip, sizeof(clip));
-  s_reg11 = reg[11]; s_reg12 = reg[12]; s_reg18 = reg[18];
-  s_hsmask = hscroll_mask;
-  s_bdata  = bitmap.data;
-  s_bpitch = bitmap.pitch;
-  s_bvx = bitmap.viewport.x;
-  s_bvy = bitmap.viewport.y;
-
-  if (bg_list_index)
-  {
-    update_bg_pattern_cache(bg_list_index);
-    bg_list_index = 0;
-  }
+  ayther_render_ctx_save(&ctx);
 
   if (flags & AYTHER_RC_FLAT_HS) hscroll_mask = 0x00;
   if (flags & AYTHER_RC_NO_WINDOW)
@@ -489,7 +493,6 @@ int ayther_core_recompose_multilayer(
   ayther_rc_nolimit = (flags & AYTHER_RC_NO_SPR_LIMIT) ? 1 : 0;
   ayther_rc_nomask  = (flags & AYTHER_RC_NO_SPR_MASK)  ? 1 : 0;
 
-  s_lmask = ayther_layer_mask;
 
   vs  = (reg[11] & 0x04) && !(flags & AYTHER_RC_FLAT_VS);
   ste = (reg[12] & 0x08) && !(flags & AYTHER_RC_NO_SH);
@@ -654,28 +657,12 @@ int ayther_core_recompose_multilayer(
       playfield_shift = s_pf_shift; playfield_col_mask = s_pf_col;
       playfield_row_mask = s_pf_row; border = s_border;
     }
-    reg[12] = s_reg12;
+    reg[12] = ctx.reg12;
     color_update_m5(0x00, *(uint16 *)&cram[(reg[7] & 0x3F) << 1]);
     for (i = 1; i < 0x40; i++)
       color_update_m5(i, *(uint16 *)&cram[i << 1]);
   }
-  reg[11] = s_reg11;
-  reg[12] = s_reg12;
-  reg[18] = s_reg18;
-  hscroll_mask = s_hsmask;
-  memcpy(clip, s_clip, sizeof(clip));
-  ayther_rc_nolimit = 0;
-  ayther_rc_nomask  = 0;
-  ayther_layer_mask = s_lmask;
-  bitmap.data  = s_bdata;
-  bitmap.pitch = s_bpitch;
-  bitmap.viewport.x = s_bvx;
-  bitmap.viewport.y = s_bvy;
-  memcpy(obj_info, s_objinfo, sizeof(obj_info));
-  memcpy(object_count, s_objcount, sizeof(object_count));
-  status  = s_status;
-  spr_ovr = s_sprovr;
-  spr_col = s_sprcol;
+  ayther_render_ctx_restore(&ctx, 0);
 
   /* ---- guardar en el cache (#406) ----
      Si la clave cambio, lo guardado antes ya no vale y `have` arranca de cero:

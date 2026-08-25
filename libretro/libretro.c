@@ -4540,6 +4540,8 @@ static int32_t AYTHER_CALL ayther_write_control_v1(uint32_t region_id,
          ayther_plane_suppress_active = 1;
       else
          ayther_plane_suppress_active = ayther_plane_suppress_nonzero() ? 1 : 0;
+      /* #37.4: y qué planos, no sólo si hay alguno. */
+      ayther_psup_refresh();
    }
    /* #36: mismo criterio para la mascara de sprites, que hasta ahora no tenia
       ningun resumen: parse_satb_m5 tomaba el parser completo por estar

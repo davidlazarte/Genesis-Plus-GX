@@ -798,12 +798,56 @@ uint8 ayther_tile_suppress[(AYTHER_TILE_COLS * AYTHER_TILE_ROWS) / 8] = {0};
    re-sim bare corre con la máscara vacía (active=0) → determinismo de video intacto. */
 uint8 ayther_plane_tile_suppress[3 * 1024] = {0};
 uint8 ayther_plane_suppress_active = 0;   /* id 0x106: lo setea el frontend (1 = hay algo oculto) */
+/* #37.4: 1 por plano con al menos un tile oculto. Es un RESUMEN del bitmap
+   de arriba, no una segunda fuente de verdad: se recalcula siempre desde
+   él, nunca se escribe por separado. */
+uint8 ayther_psup_any[3] = {0, 0, 0};
+
+void ayther_psup_refresh(void)
+{
+  int plane;
+  if (!ayther_plane_suppress_active)
+  {
+    ayther_psup_any[0] = ayther_psup_any[1] = ayther_psup_any[2] = 0;
+    return;
+  }
+  for (plane = 0; plane < 3; plane++)
+  {
+    const uint8 *p = &ayther_plane_tile_suppress[plane * 1024];
+    int i, any = 0;
+    for (i = 0; i < 1024; i++)
+      if (p[i]) { any = 1; break; }
+    ayther_psup_any[plane] = (uint8)any;
+  }
+}
+/* AYTHER (#37 punto 4): `ayther_plane_suppress_active` es UN flag para los
+   TRES planos. Ocultar un tile del plano A hacía que B y Window también
+   perdieran el fast path de DRAW_COLUMN: cada columna de cada línea de esos
+   dos planos entraba a `ayther_draw_col` a consultar una máscara enteramente
+   vacía. En H40 son ~40 columnas x 224 líneas x 2 celdas = ~18.000 consultas
+   por frame y por plano, todas con la misma respuesta "no".
+
+   El issue proponía cambiar el bitmap por una tabla de bytes para ahorrarse
+   el armado de la clave: unas 3 operaciones por celda. Esto elimina la
+   consulta ENTERA para los planos que nadie tocó, que es donde estaba el
+   costo. La tabla de bytes, además, habría costado 6 KB residentes y una
+   copia derivada de la región ABI que puede quedar desincronizada de ella:
+   memoria y un riesgo de corrección a cambio de un ahorro que este gate
+   vuelve irrelevante.
+
+   El resumen se recalcula en `ayther_psup_refresh()`. */
+extern uint8 ayther_psup_any[3];
 #define AYTHER_PSUP(plane) \
-  ((AYTHER_CONTROLS_ACTIVE && ayther_plane_suppress_active) \
+  ((AYTHER_CONTROLS_ACTIVE && ayther_plane_suppress_active && \
+    ayther_psup_any[(plane)]) \
     ? &ayther_plane_tile_suppress[(plane) * 1024] : (const uint8 *)0)
-/* Clave e índice de bit de una celda de 16 bits (patrón 0x7FF | paleta bits 13-14). */
-#define AYTHER_PTKEY(cell)     ((((uint32)(cell) & 0x7FFu) << 2) | (((uint32)(cell) >> 13) & 3u))
-#define AYTHER_PTSUP(ps, cell) ((ps)[AYTHER_PTKEY(cell) >> 3] & (1u << (AYTHER_PTKEY(cell) & 7u)))
+/* Bit de una celda de 16 bits (patrón 0x7FF | paleta bits 13-14) dentro del
+   bitmap del plano. La clave es (patrón << 2 | paleta), así que el byte es
+   patrón >> 1 y el bit ((patrón & 1) << 2 | paleta): se lee sin componer la
+   clave para volver a partirla enseguida. */
+#define AYTHER_PTSUP(ps, cell)                                             \
+  ((ps)[((uint32)(cell) & 0x7FFu) >> 1] &                                  \
+   (1u << ((((uint32)(cell) & 1u) << 2) | (((uint32)(cell) >> 13) & 3u))))
 
 /* Estado del "peel" para la línea en curso (lo arma render_line antes de
    render_bg y lo apaga antes de los sprites → no pela los merges de sprites).
@@ -1450,11 +1494,18 @@ static void ayther_peel_merge(uint8 *srca, uint8 *srcb, uint8 *dst, uint8 *table
          cero". Un píxel de plano A transparente pero con el bit de prioridad
          puesto vale 0x40, y contaba como primer plano para las ocho columnas de
          la celda. Lo que decide es el índice de color. */
+      /* #37 punto 5: el ternario estaba ADENTRO del bucle, y `has_fg` es
+         constante para la celda entera. Dos bucles rectos: el branch se decide
+         una vez y cada uno queda vectorizable. */
       int has_fg = 0;                   /* ¿algún pixel OPACO de A/W en la celda? */
       for (i = 0; i < seg; i++) if (srca[i] & 0x0F) { has_fg = 1; break; }
-      for (i = 0; i < seg; i++)
-        dst[i] = has_fg ? table[(srcb[i] << 8)]   /* pela A/W → revela Plano B */
-                        : table[0];               /* fondo (B puro) → backdrop */
+      if (has_fg)
+        for (i = 0; i < seg; i++) dst[i] = table[(srcb[i] << 8)]; /* revela B */
+      else
+      {
+        const uint8 backdrop = table[0];
+        for (i = 0; i < seg; i++) dst[i] = backdrop;
+      }
     }
     else
     {

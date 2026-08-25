@@ -55,6 +55,7 @@ AUDIO_CTRL_BIN := $(BUILD_DIR)/audio_controls$(EXE_EXT)
 FRAME_DELTA_BIN := $(BUILD_DIR)/frame_delta$(EXE_EXT)
 IDLE_METRICS_BIN := $(BUILD_DIR)/idle_metrics$(EXE_EXT)
 ATTRIB_SCENE_BIN := $(BUILD_DIR)/attribution_scene$(EXE_EXT)
+PLANE_SUP_BIN := $(BUILD_DIR)/plane_suppress$(EXE_EXT)
 SCENES_BIN := $(BUILD_DIR)/scenes$(EXE_EXT)
 LINE_STATE_BIN := $(BUILD_DIR)/line_state$(EXE_EXT)
 SCENES_GOLDEN := ayther/golden/scenes.txt
@@ -86,7 +87,7 @@ PROFILE_COMPARISON := $(ARTIFACT_DIR)/feature_gate_profiles.json
 
 .PHONY: all check check-unit check-concurrency check-determinism \
 	check-full-core check-profile-comparison raster-rom-probe \
-	full-core-replay check-idle-metrics check-attribution-scene check-scenes regen-scenes check-line-state clean
+	full-core-replay check-idle-metrics check-attribution-scene check-plane-suppress check-scenes regen-scenes check-line-state clean
 
 all: $(UNIT_BIN) $(CONCURRENCY_BIN) $(API_BIN) $(RASTER_BIN) \
 	$(SPRITE_CAPTURE_BIN) $(DIM_BIN) $(TRACE_BIN)
@@ -198,6 +199,18 @@ check-idle-metrics: $(IDLE_METRICS_BIN)
 
 $(ATTRIB_SCENE_BIN): ayther/attribution_scene.c ayther/generated_rom.c 		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther 		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include 		-Iayther -o $@ ayther/attribution_scene.c ayther/generated_rom.c 		$(LDFLAGS) $(ROM_PROBE_LIBS)
+
+$(PLANE_SUP_BIN): ayther/plane_suppress.c ayther/generated_rom.c \
+		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther \
+		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include \
+		-Iayther -o $@ ayther/plane_suppress.c ayther/generated_rom.c \
+		$(LDFLAGS) $(ROM_PROBE_LIBS)
+
+# #37.4: la supresion de tiles por plano, plano por plano.
+check-plane-suppress: $(PLANE_SUP_BIN)
+	$(call require_core)
+	$(PLANE_SUP_BIN) "$(CORE)"
 
 # #41: la region de atribucion con una suscripcion que pide SOLO atribucion.
 check-attribution-scene: $(ATTRIB_SCENE_BIN)

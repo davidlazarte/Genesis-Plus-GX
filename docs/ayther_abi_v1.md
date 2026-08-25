@@ -149,6 +149,12 @@ size, access flags and the transition-era legacy ID.
 | `PLANE_SUPPRESS_ACTIVE` | `uint8_t` | 1 / 1 | read (derived) | `0x106` |
 | `LAYER_DIM` | `uint8_t` | 1 / 1 | read/control | `0x108` |
 | `AUDIO_WRITES` | `ayther_audio_write_v1` | 8,192 / 65,536 | frame read | `0x109` |
+
+The `AUDIO_WRITES` log is produced by the core (`sound.c`, `psg.c`) under
+`AYTHER_SUB_AUDIO_WRITES`, **not** by the audio probe: the capability belongs to
+the ABI, so it must produce with `SOUND_PROBE=0` too (#29). `addr` carries the
+decoded FM register `(part << 8) | reg`, not the raw bus port; PSG writes are
+single-byte commands and report `addr = 0`.
 | `AUDIO_WRITE_COUNT` | `uint32_t` | 1 / 4 | frame read | `0x10A` |
 | `PARSED_SPRITES` | `ayther_sprite_v1` | 128 / 1,280 | frame read | `0x10B` |
 | `PARSED_SPRITE_COUNT` | `uint8_t` | 1 / 1 | frame read | `0x10C` |

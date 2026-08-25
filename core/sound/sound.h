@@ -87,6 +87,35 @@ extern AytherAudioWrite ayther_audio_writes[AYTHER_AUDIO_WRITE_CAP];
 extern uint32 ayther_audio_write_n;
 extern uint32 ayther_audio_write_overflow;
 
+/* #29: el productor del log vivia en audio_probe.c, o sea bajo SOUND_PROBE, pero
+ * la capability AYTHER_CAP_AUDIO_WRITES_V1 se anunciaba SIEMPRE. Con
+ * `extensions=1 probe=0` la region existia, se anunciaba y venia vacia para
+ * siempre: el peor contrato posible, porque el consumidor no puede distinguir
+ * "no hubo escrituras este frame" de "esta build no las produce".
+ *
+ * El log pertenece a la ABI, no al probe, asi que se produce aca y audio_probe
+ * pasa a ser un consumidor mas. `addr` es el registro DECODIFICADO
+ * (part << 8) | reg -- no el puerto crudo--, que es lo que el shadow de
+ * audio_probe (s_fm_regs) ya asumia. */
+INLINE void ayther_audio_write_log(uint32 cycle, uint16 addr,
+                                          uint8 data, uint8 chip)
+{
+  if (!AYTHER_SUBSCRIBED(AYTHER_SUB_AUDIO_WRITES))
+    return;
+
+  if (ayther_audio_write_n < AYTHER_AUDIO_WRITE_CAP)
+  {
+    AytherAudioWrite *w = &ayther_audio_writes[ayther_audio_write_n++];
+    w->cycle = cycle;
+    w->addr  = addr;
+    w->data  = data;
+    w->chip  = chip;
+  }
+  else
+  {
+    ayther_audio_write_overflow = 1;
+  }
+}
 
 /* ----------------------------------------------------------------------------
  * AYTHER fork delta: máscara de SILENCIADO POR CANAL (4 bytes, ESCRIBIBLE desde

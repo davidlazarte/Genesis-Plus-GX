@@ -76,6 +76,50 @@ jobs:
           done
           exit "$status"
 
+      # Un flip de fin de linea reescribe el archivo entero y NO lo atrapa el
+      # gate de whitespace, que solo mira espacios. Paso de verdad: el commit
+      # del hook de ym3438.c figuraba con 2886 lineas cambiadas para un cambio
+      # de 12, y volvio a divergir de upstream justo despues de que bajaramos
+      # la divergencia de 170 archivos a 27. Peor: un flip JUNTO CON un cambio
+      # de contenido tambien rompe el gate de whitespace, porque el archivo
+      # entero pasa a contar como lineas agregadas y aflora el trailing
+      # whitespace preexistente de upstream.
+      #
+      # El invariante se mide contra UPSTREAM, no contra el commit anterior.
+      # Comparar con el commit anterior no distingue alejarse de upstream
+      # -- que es el defecto-- de volver -- que es la reparacion--, y termina
+      # bloqueando justo al que viene a arreglarlo.
+      - name: EOL style must match upstream
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          UPSTREAM_URL: https://github.com/libretro/Genesis-Plus-GX.git
+        run: |
+          set -euo pipefail
+          git remote get-url upstream >/dev/null 2>&1 || git remote add upstream "$UPSTREAM_URL"
+          git fetch --no-tags --quiet upstream master || {
+            echo "AVISO: fetch de upstream fallo; no se puede comparar." >&2; exit 0; }
+          if [ "$EVENT_NAME" = "pull_request" ]; then base="$BASE_SHA"; else base="HEAD~1"; fi
+          status=0
+          # numstat marca los binarios con '-': asi se saltean sin buscar NUL.
+          while IFS=$'\t' read -r add del path; do
+            [ "$add" != "-" ] || continue
+            git cat-file -e "upstream/master:$path" 2>/dev/null || continue
+            u=$(git cat-file blob "upstream/master:$path" | tr -cd '\r' | wc -c)
+            m=$(git cat-file blob "HEAD:$path" | tr -cd '\r' | wc -c)
+            if { [ "$u" -eq 0 ] && [ "$m" -gt 0 ]; } ||\
+               { [ "$u" -gt 0 ] && [ "$m" -eq 0 ]; }; then
+              echo "EOL distinto al de upstream: $path (upstream $u CR, nosotros $m CR)" >&2
+              status=1
+            fi
+          done < <(git -c core.quotePath=false diff --numstat --no-renames "$base...HEAD")
+          if [ "$status" -ne 0 ]; then
+            echo "Un archivo con otro fin de linea que upstream diverge entero," >&2
+            echo "a cambio de nada, y en cada sync conflictua. Ver .gitattributes." >&2
+          fi
+          exit "$status"
+
       - name: Enforce LF in AYTHER automation and fixtures
         shell: bash
         run: |

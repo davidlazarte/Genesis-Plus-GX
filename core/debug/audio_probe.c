@@ -268,23 +268,11 @@ static void ap_emit(ap_event_t *ev)
   ev->t_cycles = s_cycles;
   ev->group    = ap_is_group_anchor(ev->type) ? ap_group(ev->t_global) : 0;
 
-#ifdef AYTHER_EXTENSIONS
-  if (ev->type == AP_EV_RAW_WRITE && AYTHER_SUBSCRIBED(AYTHER_SUB_AUDIO_WRITES))
-  {
-    if (ayther_audio_write_n < AYTHER_AUDIO_WRITE_CAP)
-    {
-      AytherAudioWrite *w = &ayther_audio_writes[ayther_audio_write_n++];
-      w->cycle = ev->t_cycles;
-      w->addr  = ev->reg;
-      w->data  = ev->data;
-      w->chip  = (ev->source == AP_SRC_PSG) ? AYTHER_AUDIO_CHIP_PSG : AYTHER_AUDIO_CHIP_FM;
-    }
-    else
-    {
-      ayther_audio_write_overflow = 1;
-    }
-  }
-#endif
+  /* #29: el log de AUDIO_WRITES ya NO se produce aca. Vivia en esta ruta, que
+     solo existe con SOUND_PROBE, mientras la capability se anunciaba siempre:
+     con probe=0 la region venia vacia para siempre. Ahora lo produce el core
+     (sound.c / psg.c) bajo AYTHER_SUBSCRIBED(AUDIO_WRITES), y el probe es un
+     consumidor mas. Producirlo en los dos lados duplicaria cada evento. */
 
   if (ap_atomic_load_acquire(&s_callback_enabled))
   {

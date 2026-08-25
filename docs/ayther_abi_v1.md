@@ -378,16 +378,34 @@ won) only exists at the merge. Nothing is captured without
 `RENDER_CONTROLS`: a byte per pixel per frame is a different order of cost, and
 a consumer that only hides layers should not pay it.
 
-### Known limitation: the sprite bit
+### The sprite bit (#31/#37/#41)
 
-Bit 0 comes from comparing the line buffer before and after `render_obj`. A
-sprite pixel whose byte happens to equal the background byte is therefore **not**
-marked. The bit is conservative: it never marks a pixel that is not a sprite.
+Bit 0 used to come from comparing the line buffer before and after
+`render_obj`. That gave two wrong answers, and both mattered: a sprite pixel
+whose byte happened to equal the background byte was **not** marked — a hole
+inside the sprite — and a pixel that only changed because of a shadow/highlight
+operator **was** marked, though an operator places no colour at all.
 
-Marking those exactly requires `render_obj` to write the sprite id in its inner
-loop. That change also delivers `sat_idx` per pixel, fixes the same flaw in
-`layer_dim` (#31), and lets multilayer recomposition run in one pass (#37) — so
-it belongs with them rather than here.
+It is now written where the priority is decided, and that is not one place:
+`render_obj_m5` / `_im2` draw straight into `linebuf[0]` and the LUT resolves
+sprite-against-background pixel by pixel, so the store lives in the loop;
+`render_obj_m5_ste` / `_im2_ste` draw into `linebuf[1]` and merge afterwards, so
+the store lives in the merge. Answering the question where it is *not* decided
+is exactly the mistake the diff made.
+
+The rule is the one `make_lut_bgobj` applies, written as a predicate in
+`core/ayther/ayther_sprite_px.h`: the sprite has colour, and either it has
+priority, or the background does not, or the background is transparent.
+`test_sprite_px` checks that predicate against a copy of `make_lut_bgobj` over
+every unambiguous combination — replicating a rule without proving the replica
+agrees is how a copy drifts from the original.
+
+Neither store costs anything with no subscribers: the in-loop one lives under a
+clone parameter the compiler folds away, the merge one under a flag that is only
+raised when `layer_dim` or attribution is active.
+
+Mode 4 and TMS reach neither path and keep the old diff, with its known flaw,
+until #40 phase 2 brings those modes into scope.
 
 ## System descriptor (#39.B)
 

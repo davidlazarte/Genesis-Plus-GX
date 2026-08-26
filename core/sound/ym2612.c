@@ -2298,6 +2298,24 @@ int YM2612LoadContext(unsigned char *state)
   /* restore YM2612 context */
   load_param(&ym2612, sizeof(ym2612));
 
+  /* El blob entra crudo y estos campos indexan tablas del proceso. En el
+     camino normal los acota quien los escribe -- OPNWriteReg para 0xb4-0xb6,
+     el paso del LFO para LFO_AM/LFO_PM- y un savestate corrupto no pasa por
+     ahi. Se acotan aca con las mismas reglas: pms es profundidad*32 (0..224),
+     ams es un desplazamiento de lfo_ams_depth_shift (0..8), lfo_cnt va de 0 a
+     127 y LFO_AM/LFO_PM se derivan de el. Lo encontro el fuzzing de
+     unserialize (#62): un pms podrido indexaba lfo_pm_table[32768] en
+     3388997632. */
+  for (c=0; c<6; c++)
+  {
+    ym2612.CH[c].pms &= 0xE0;
+    if (ym2612.CH[c].ams > 8) ym2612.CH[c].ams = 8;
+  }
+  ym2612.OPN.lfo_cnt &= 127;
+  ym2612.OPN.LFO_AM = (ym2612.OPN.lfo_cnt < 64) ? ((ym2612.OPN.lfo_cnt ^ 63) << 1)
+                                                : ((ym2612.OPN.lfo_cnt & 63) << 1);
+  ym2612.OPN.LFO_PM = ym2612.OPN.lfo_cnt >> 2;
+
   /* restore DT table address pointer for each channel slots */
   for (c=0; c<6; c++)
   {

@@ -26,6 +26,7 @@
 #define Z80_BUS_REQUEST 0x00a11100u
 #define Z80_RESET 0x00a11200u
 #define TMSS 0x00a14000u
+#define Z80_RAM 0x00a00000u
 
 struct rom_builder
 {
@@ -363,6 +364,74 @@ static uint32_t emit_vertical_handler(struct rom_builder *builder)
   emit_move_byte_immediate_absolute(builder, 0x80u, YM_DATA_0);
   emit_u16(builder, 0x4e73u); /* rte */
   return address;
+}
+
+/* #63: el Z80 martillando el puerto de datos del VDP por la ventana de banco.
+ *
+ * Es el unico fixture con codigo Z80 en un cartucho de Mega Drive. El 68000
+ * pide el bus, copia el programa a la RAM del Z80 byte a byte, enciende la
+ * pantalla y suelta el bus; el Z80 arranca en 0x0000.
+ *
+ * El programa apunta el banco a 0xC00000 -- nueve bits al registro de 0x6000,
+ * del menos al mas significativo: siete ceros y dos unos-- y despues escribe
+ * sin parar en 0x8000, que ahora es el puerto de datos del VDP. Cada escritura
+ * entra por zbank_write_vdp -> vdp_68k_data_w con m68k.cycles clavado al final
+ * de la linea y sin nada que frene al Z80: el bucle que busca el proximo slot
+ * del FIFO se salia de la tabla a la decima escritura de la misma linea. */
+static const uint8_t z80_vdp_hammer[] =
+{
+  0x21, 0x00, 0x60,             /* ld hl,6000h      ; registro de banco     */
+  0xAF,                         /* xor a                                    */
+  0x77, 0x77, 0x77, 0x77,       /* ld (hl),a  x7    ; bits 0..6 = 0         */
+  0x77, 0x77, 0x77,
+  0x3E, 0x01,                   /* ld a,1                                   */
+  0x77, 0x77,                   /* ld (hl),a  x2    ; bits 7,8 = 1: C00000  */
+  0x21, 0x00, 0x80,             /* ld hl,8000h      ; = 68000 0xC00000      */
+  0x77,                         /* loop: ld (hl),a  ; puerto de datos       */
+  0x18, 0xFD                    /* jr loop                                  */
+};
+
+static void emit_reset_program_z80_vdp(struct rom_builder *builder)
+{
+  size_t index;
+
+  emit_u16(builder, 0x46fcu); /* move.w #$2700,sr */
+  emit_u16(builder, 0x2700u);
+  emit_move_long_immediate_absolute(builder, 0x53454741u, TMSS);
+  emit_move_word_immediate_absolute(builder, 0x0100u, Z80_BUS_REQUEST);
+  emit_move_word_immediate_absolute(builder, 0x0100u, Z80_RESET);
+  emit_move_word_immediate_absolute(builder, 0u, RAM_FRAME);
+  emit_move_word_immediate_absolute(builder, 0u, RAM_LINE);
+
+  emit_vdp_register(builder, 0, 0x04u);
+  emit_vdp_register(builder, 1, 0x14u);
+  emit_vdp_register(builder, 2, 0x30u);
+  emit_vdp_register(builder, 3, 0x3eu);
+  emit_vdp_register(builder, 4, 0x07u);
+  emit_vdp_register(builder, 5, 0x6cu);
+  emit_vdp_register(builder, 7, 0x00u);
+  emit_vdp_register(builder, 10, 0x00u);
+  emit_vdp_register(builder, 11, 0x00u);
+  emit_vdp_register(builder, 12, 0x81u);   /* H40: la tabla de 28 slots */
+  emit_vdp_register(builder, 13, 0x3cu);
+  emit_vdp_register(builder, 15, 0x02u);
+  emit_vdp_register(builder, 16, 0x01u);
+  emit_vdp_register(builder, 17, 0x00u);
+  emit_vdp_register(builder, 18, 0x00u);
+
+  /* El programa va a la RAM del Z80 mientras el 68000 tiene el bus. */
+  for (index = 0; index < sizeof(z80_vdp_hammer); ++index)
+    emit_move_byte_immediate_absolute(builder, z80_vdp_hammer[index],
+                                      Z80_RAM + (uint32_t)index);
+
+  /* Pantalla e interrupcion vertical, y recien despues el bus: el bucle de
+     slots solo corre con la pantalla encendida y fuera del blanking. */
+  emit_vdp_register(builder, 1, 0x74u);
+  emit_move_word_immediate_absolute(builder, 0x0000u, Z80_BUS_REQUEST);
+
+  emit_u16(builder, 0x4e72u); /* stop #$2300 */
+  emit_u16(builder, 0x2300u);
+  emit_u16(builder, 0x60fau);
 }
 
 /* #31/#41: la escena que hace falta para PROBAR que el bit de sprite es exacto.
@@ -966,13 +1035,61 @@ static void sms_solid_tile(struct rom_builder *builder, uint8_t color)
       sms_vdp_write(builder, (uint8_t)((color & (1u << plane)) ? 0xFFu : 0x00u));
 }
 
-static void emit_reset_program_sms(struct rom_builder *builder)
+/* Donde arranca el programa principal cuando hay handler de interrupcion:
+   IM 1 salta a 0x0038, asi que el codigo de reset tiene que saltar por encima
+   del handler. Sin handler, el programa sigue en 0x0000 como siempre. */
+#define SMS_MAIN 0x0080u
+
+static void sms_pad_to(struct rom_builder *builder, size_t address)
+{
+  while (builder->pc < address && !builder->failed)
+    emit_u8(builder, 0x00u);        /* NOP */
+}
+
+/* #40: el handler de IM 1. Un solo vector para las dos interrupciones del VDP;
+   leer el registro de estado las reconoce (y limpia) y deja en el bit 7 cual
+   fue. Interrupcion de frame: la entrada 1 de CRAM vuelve al rojo del fondo.
+   Interrupcion de linea: pasa a SPLIT_COLOR. Las dos escriben la MISMA entrada,
+   asi que el frame sale rojo arriba de SPLIT_LINE y del otro color abajo.
+
+   LD A,n y OUT no tocan las banderas: el acarreo que deja RLCA llega intacto
+   al JR C, aunque en el medio se haya puesto la direccion de CRAM. */
+static void sms_emit_irq_handler(struct rom_builder *builder)
+{
+  sms_pad_to(builder, 0x0038u);
+  emit_u8(builder, 0xF5u);          /* PUSH AF                          */
+  emit_u8(builder, 0xDBu);          /* IN A,(0xBF): estado del VDP      */
+  emit_u8(builder, SMS_VDP_CONTROL);
+  emit_u8(builder, 0x07u);          /* RLCA: acarreo = bit 7 (frame)    */
+  z80_out_imm(builder, SMS_VDP_CONTROL, 0x01u);            /* entrada 1  */
+  z80_out_imm(builder, SMS_VDP_CONTROL, SMS_CRAM_WRITE);
+  emit_u8(builder, 0x38u);          /* JR C,frame  (+6)                 */
+  emit_u8(builder, 0x06u);
+  z80_out_imm(builder, SMS_VDP_DATA, AYTHER_SMS_SPLIT_COLOR); /* linea    */
+  emit_u8(builder, 0x18u);          /* JR done     (+4)                 */
+  emit_u8(builder, 0x04u);
+  z80_out_imm(builder, SMS_VDP_DATA, 0x03u);                /* frame: rojo */
+  emit_u8(builder, 0xF1u);          /* POP AF                           */
+  emit_u8(builder, 0xFBu);          /* EI                               */
+  emit_u8(builder, 0xC9u);          /* RET                              */
+  sms_pad_to(builder, SMS_MAIN);
+}
+
+static void emit_reset_program_sms_scene(struct rom_builder *builder,
+                                         unsigned int flags)
 {
   unsigned int i;
 
   emit_u8(builder, 0xF3u);          /* DI            */
   emit_u8(builder, 0xEDu);          /* IM 1          */
   emit_u8(builder, 0x56u);
+  if (flags & AYTHER_SMS_SCENE_PALETTE_SPLIT)
+  {
+    emit_u8(builder, 0xC3u);        /* JP SMS_MAIN   */
+    emit_u8(builder, (uint8_t)(SMS_MAIN & 0xFFu));
+    emit_u8(builder, (uint8_t)(SMS_MAIN >> 8));
+    sms_emit_irq_handler(builder);
+  }
   emit_u8(builder, 0x31u);          /* LD SP,0xDFF0  */
   emit_u8(builder, 0xF0u);
   emit_u8(builder, 0xDFu);
@@ -980,7 +1097,9 @@ static void emit_reset_program_sms(struct rom_builder *builder)
   /* Registros del VDP. reg1 arranca con la pantalla APAGADA: escribir VRAM con
      el display encendido compite con el fetch del renderer, y el fixture tiene
      que salir igual en cada corrida. */
-  sms_vdp_register(builder, 0u,  0x06u);   /* Mode 4                        */
+  sms_vdp_register(builder, 0u, (uint8_t)(0x06u                /* Mode 4   */
+    | ((flags & AYTHER_SMS_SCENE_SCROLL_LOCK)   ? 0x40u : 0u)  /* lock H   */
+    | ((flags & AYTHER_SMS_SCENE_PALETTE_SPLIT) ? 0x10u : 0u))); /* IE1    */
   sms_vdp_register(builder, 1u,  0x00u);   /* pantalla apagada por ahora    */
   sms_vdp_register(builder, 2u,  0xFFu);   /* name table -> 0x3800          */
   sms_vdp_register(builder, 3u,  0xFFu);   /* sin uso en Mode 4             */
@@ -988,9 +1107,12 @@ static void emit_reset_program_sms(struct rom_builder *builder)
   sms_vdp_register(builder, 5u,  0xFFu);   /* SAT -> 0x3F00                 */
   sms_vdp_register(builder, 6u,  0xFBu);   /* patrones de sprite -> 0x0000  */
   sms_vdp_register(builder, 7u,  0x00u);   /* backdrop = entrada 16         */
-  sms_vdp_register(builder, 8u,  0x00u);   /* scroll horizontal             */
+  sms_vdp_register(builder, 8u, (flags & AYTHER_SMS_SCENE_SCROLL_LOCK)
+                                  ? (uint8_t)AYTHER_SMS_HSCROLL : 0x00u);
   sms_vdp_register(builder, 9u,  0x00u);   /* scroll vertical               */
-  sms_vdp_register(builder, 10u, 0xFFu);   /* contador de linea apagado     */
+  sms_vdp_register(builder, 10u, (flags & AYTHER_SMS_SCENE_PALETTE_SPLIT)
+                                   ? (uint8_t)AYTHER_SMS_SPLIT_LINE
+                                   : 0xFFu); /* contador de linea apagado */
 
   /* CRAM: 32 entradas de un byte, --BBGGRR. Las 16 primeras son la paleta de
      fondo y las 16 siguientes la de sprites; el backdrop sale de la segunda. */
@@ -1001,6 +1123,8 @@ static void emit_reset_program_sms(struct rom_builder *builder)
     if (i == 1u)  color = 0x03u;   /* fondo:    rojo  */
     if (i == 16u) color = 0x30u;   /* backdrop: azul  */
     if (i == 18u) color = 0x0Cu;   /* sprites:  verde */
+    if (i == 2u && (flags & AYTHER_SMS_SCENE_SCROLL_LOCK))
+      color = 0x3Fu;               /* marcador: blanco */
     sms_vdp_write(builder, color);
   }
 
@@ -1025,8 +1149,29 @@ static void emit_reset_program_sms(struct rom_builder *builder)
     sms_vdp_write(builder, 1u);
   }
 
-  /* Recien ahora se enciende la pantalla. */
-  sms_vdp_register(builder, 1u, 0x40u);
+  if (flags & AYTHER_SMS_SCENE_SCROLL_LOCK)
+  {
+    /* Dos celdas con el patron 1 -- que en la paleta de fondo es blanco--: la
+       de la fila 0 queda donde esta porque el lock no la deja scrollear; la de
+       la fila MARKER_ROW se corre HSCROLL pixeles. Misma columna a proposito:
+       la diferencia entre las dos ES el efecto. */
+    sms_vdp_address(builder, (uint16_t)(0x3800u + AYTHER_SMS_MARKER_COL * 2u),
+                    SMS_VRAM_WRITE);
+    sms_vdp_write(builder, 0x01u);
+    sms_vdp_write(builder, 0x00u);
+    sms_vdp_address(builder, (uint16_t)(0x3800u +
+                    (AYTHER_SMS_MARKER_ROW * 32u + AYTHER_SMS_MARKER_COL) * 2u),
+                    SMS_VRAM_WRITE);
+    sms_vdp_write(builder, 0x01u);
+    sms_vdp_write(builder, 0x00u);
+  }
+
+  /* Recien ahora se enciende la pantalla (y, si hay split, la interrupcion de
+     frame: IE0, bit 5). */
+  sms_vdp_register(builder, 1u, (uint8_t)(0x40u |
+    ((flags & AYTHER_SMS_SCENE_PALETTE_SPLIT) ? 0x20u : 0u)));
+  if (flags & AYTHER_SMS_SCENE_PALETTE_SPLIT)
+    emit_u8(builder, 0xFBu);        /* EI */
 
   /* Y a esperar para siempre: la escena es estatica a proposito. Un fixture
      que cambia con el tiempo obliga a elegir en que frame mirarlo. */
@@ -1034,7 +1179,7 @@ static void emit_reset_program_sms(struct rom_builder *builder)
   emit_u8(builder, 0xFEu);
 }
 
-size_t ayther_build_generated_rom_sms(uint8_t *rom, size_t capacity)
+static size_t build_sms_rom(uint8_t *rom, size_t capacity, unsigned int flags)
 {
   struct rom_builder builder;
 
@@ -1046,7 +1191,7 @@ size_t ayther_build_generated_rom_sms(uint8_t *rom, size_t capacity)
   builder.pc = 0;                   /* el Z80 arranca en 0x0000 */
   builder.failed = 0;
 
-  emit_reset_program_sms(&builder);
+  emit_reset_program_sms_scene(&builder, flags);
   if (builder.failed)
     return 0;
 
@@ -1062,6 +1207,22 @@ size_t ayther_build_generated_rom_sms(uint8_t *rom, size_t capacity)
   rom[0x7FFFu] = 0x4Cu;             /* region export, tamanio 32 KB   */
 
   return AYTHER_GENERATED_ROM_SIZE;
+}
+
+size_t ayther_build_generated_rom_sms(uint8_t *rom, size_t capacity)
+{
+  return build_sms_rom(rom, capacity, 0u);
+}
+
+size_t ayther_build_generated_rom_sms_scene(uint8_t *rom, size_t capacity,
+                                            unsigned int flags)
+{
+  return build_sms_rom(rom, capacity, flags);
+}
+
+size_t ayther_build_generated_rom_z80_vdp(uint8_t *rom, size_t capacity)
+{
+  return build_rom(rom, capacity, emit_reset_program_z80_vdp);
 }
 
 size_t ayther_build_generated_rom_sprites(uint8_t *rom, size_t capacity)

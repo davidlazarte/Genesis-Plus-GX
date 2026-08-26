@@ -318,6 +318,16 @@ jobs:
           CC=clang
           CORE=../genesis_plus_gx_libretro.so
 
+      # #63: el Z80 martillando el puerto de datos del VDP por la ventana de
+      # banco. Sin instrumentar solo verifica que el camino existe y el core
+      # sigue vivo; con ASan (job nocturno) es el que ve la lectura fuera de
+      # fifo_timing_h40.
+      - name: Z80 hammering the VDP data port keeps the core alive
+        run: >-
+          make -C tests check-z80-vdp-fifo
+          CC=clang
+          CORE=../genesis_plus_gx_libretro.so
+
       # #36: la promesa de "cero trabajo sin subscribers", CONTADA. El gate de
       # tiempo de mas abajo no puede sostenerla -- su ruido medido es de +-3%,
       # del mismo orden que lo que mediria--; un contador en cero si. Este build
@@ -368,6 +378,13 @@ jobs:
       - name: Mode 4 controls against the SMS fixture
         run: >-
           make -C tests check-mode4
+          CORE=../genesis_plus_gx_libretro.so
+
+      # #40: scroll lock y split de paleta en Mode 4. El core tiene que dibujar
+      # los dos y DECIR que el segundo es raster (0x10E, journal).
+      - name: Mode 4 raster effects are drawn and reported
+        run: >-
+          make -C tests check-mode4-raster
           CORE=../genesis_plus_gx_libretro.so
 
       - name: Per-scanline state matches the ROM's own scroll table
@@ -627,11 +644,27 @@ jobs:
           CC=clang
           CORE=../genesis_plus_gx_libretro.dll
 
+      - name: Z80 hammering the VDP data port keeps the core alive
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        shell: pwsh
+        run: >-
+          make -C tests check-z80-vdp-fifo
+          CC=clang
+          CORE=../genesis_plus_gx_libretro.dll
+
       - name: Mode 4 controls against the SMS fixture
         if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
         shell: pwsh
         run: >-
           make -C tests check-mode4
+          CC=clang
+          CORE=../genesis_plus_gx_libretro.dll
+
+      - name: Mode 4 raster effects are drawn and reported
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        shell: pwsh
+        run: >-
+          make -C tests check-mode4-raster
           CC=clang
           CORE=../genesis_plus_gx_libretro.dll
 
@@ -754,6 +787,12 @@ jobs:
           make -C tests check-frame-delta
           CORE=../genesis_plus_gx_libretro.dylib
 
+      - name: Z80 hammering the VDP data port keeps the core alive
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -C tests check-z80-vdp-fifo
+          CORE=../genesis_plus_gx_libretro.dylib
+
       - name: Attribution answers a subscription that asks only for it
         if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
         run: >-
@@ -776,6 +815,12 @@ jobs:
         if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
         run: >-
           make -C tests check-mode4
+          CORE=../genesis_plus_gx_libretro.dylib
+
+      - name: Mode 4 raster effects are drawn and reported
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -C tests check-mode4-raster
           CORE=../genesis_plus_gx_libretro.dylib
 
       - name: Journal, frame hashes and resolved palette

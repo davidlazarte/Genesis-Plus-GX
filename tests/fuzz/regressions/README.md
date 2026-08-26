@@ -47,3 +47,31 @@ tests/fuzz/.build/replay_recompose \
   reconstruir la paleta al recomponer —o al cargar un savestate— lee `cram[]` y
   la pasa sin empaquetar. Con el core instrumentado y sin la máscara, este
   archivo produce `index 43839 out of bounds for type 'unsigned short[512]'`.
+
+- **`unserialize/pms-corrupto-indexa-lfo-pm-table`** — muta bytes de un
+  savestate válido y lo carga. `YM2612LoadContext` copia el blob crudo sobre el
+  struct, y `pms`, `ams`, `lfo_cnt` y `LFO_PM` indexan tablas del proceso sin
+  que nadie los acote: en el camino normal los acota quien los escribe
+  (`OPNWriteReg` para `0xb4-0xb6`, el paso del LFO), y un savestate corrupto no
+  pasa por ahí. Con el core instrumentado y sin el saneado en la carga, este
+  archivo produce `index 3388997632 out of bounds for type 'INT32[32768]'` y un
+  SEGV a continuación.
+
+- **`write_control` (#63) — sin archivo, a propósito.** El caso que dejó el
+  fuzzer (`crash-269aa8d4…`) no reproduce solo: el Z80 arrastra estado entre
+  entradas —corre un frame por entrada y nunca se resetea—, y el desborde
+  dependía de esa historia y no de la entrada. Un archivo que pasa con y sin el
+  arreglo no es una regresión, es ruido con nombre. La versión determinista es
+  [`../../ayther/z80_vdp_fifo.c`](../../ayther/z80_vdp_fifo.c) sobre el fixture
+  `ayther_build_generated_rom_z80_vdp`: un Z80 que martilla el puerto de datos
+  del VDP por la ventana de banco, que es exactamente el camino del hallazgo.
+  Corre en cada PR sin instrumentar (`make -C tests check-z80-vdp-fifo`) y de
+  noche con ASan (`ayther-fuzz.yml`, job `regressions`), que es donde ve la
+  lectura fuera de `fifo_timing_h40`.
+
+## Con la lupa, de noche
+
+Desde #63 el job nocturno tiene un segundo job, `regressions`, que reproduce
+este directorio y el fixture del Z80 contra el core con ASan+UBSan. Es lo que
+convierte la salvedad de arriba —"el replay no ve UB dentro del core"— en algo
+que sí se mira, aunque sea una vez por día y no en cada PR.

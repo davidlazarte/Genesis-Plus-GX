@@ -20,6 +20,7 @@
 #include <stdint.h>
 #include <libretro.h>
 #include "ayther_api.h"
+#include "ayther_raster.h"   /* los bits de 0x10E */
 #include "generated_rom.h"
 
 #if defined(_WIN32)
@@ -45,6 +46,9 @@ static void close_library(library_t l) { dlclose(l); }
 static struct retro_game_info_ext gi_ext;
 static uint64_t video_hash, audio_hash;
 static unsigned video_w, video_h, video_frames;
+/* #35: el ultimo frame entero, para comparar la recomposicion pixel a pixel. */
+#define MAX_PX (320u * 240u)
+static uint16_t last_px[MAX_PX];
 
 static bool env_cb(unsigned cmd, void *data)
 {
@@ -78,6 +82,12 @@ static void vid_cb(const void *data, unsigned w, unsigned h, size_t pitch)
   unsigned y, x;
   if (!data) return;                    /* frame duplicado: no aporta bytes */
   video_w = w; video_h = h; ++video_frames;
+  if ((size_t)w * h <= MAX_PX)
+  {
+    const uint8_t *r = row;
+    for (y = 0; y < h; ++y, r += pitch)
+      memcpy(&last_px[(size_t)y * w], r, (size_t)w * 2u);
+  }
   /* Se hashea fila por fila y no el buffer entero porque el pitch trae relleno
      al final de cada una, y ese relleno no es parte de la imagen: meterlo haria
      que el hash dependiera del ancho del framebuffer y no del frame emitido. */
@@ -106,7 +116,127 @@ struct scene_result
 {
   uint64_t video, audio;
   unsigned w, h, frames;
+  int raster_ok;          /* solo escenas raster; 1 = lo que se afirma se cumple */
+  char raster_msg[200];
 };
+
+/* #35 (traido de #27): lo que se afirma de una escena raster, DESPUES del hash.
+ *
+ * Con RASTER_TRACKING y RECOMPOSITION suscriptos, se recompone el ultimo
+ * frame por el camino que rejuega el journal (recompose_multilayer) y se
+ * compara con lo que emitio el core:
+ *
+ *   REG11 / CRAM / HSCROLL / DISPLAY / HSCB   pixel-perfect (0 distintos),
+ *       con 0x10E diciendo el motivo y solo motivos reproducibles;
+ *   H32        0x10E lleva UNSUPPORTED_MODE (cambiar el ancho a mitad de
+ *              pantalla no se reproduce, y se dice);
+ *   OVERFLOW   recompose_multilayer devuelve RC_JOURNAL_OVERFLOW en vez de
+ *              reproducir un prefijo, y 0x10E lleva JOURNAL_OVERFLOW.
+ *
+ * Que el evento se DESHAGA antes del fin del frame es lo que hace que estas
+ * afirmaciones tengan filo: el estado final no es el de la franja del medio,
+ * asi que un replay que no rejugara, o que no restaurara, se nota. */
+static void check_raster_scene(library_t lib, size_t scene, void (*p_run)(void),
+                               struct scene_result *out)
+{
+  static uint16_t composite[MAX_PX];
+  unsigned kind = ayther_scene_raster(scene);
+  ayther_get_interface_fn p_iface =
+    (ayther_get_interface_fn)load_symbol(lib, "ayther_get_interface");
+  const ayther_interface_v1 *api = p_iface ? p_iface(0) : NULL;
+  uint32_t reasons = 0, w = 0, h = 0;
+  int32_t st;
+  unsigned f, k, n, diff = 0, rmin = 0, rmax = 0;
+
+  out->raster_ok = 0;
+  if (!api || !AYTHER_IFACE_HAS(api, recompose_multilayer)) {
+    snprintf(out->raster_msg, sizeof(out->raster_msg), "sin recompose_multilayer en la ABI");
+    return;
+  }
+  api->set_subscriptions(AYTHER_SUB_RASTER_TRACKING | AYTHER_SUB_RECOMPOSITION |
+                         AYTHER_SUB_VDP_MEMORY);
+  for (f = 0; f < 4; ++f) p_run();
+
+  if (api->read_region(AYTHER_REGION_RASTER_FALLBACK_REASONS, 0, &reasons,
+                       sizeof(reasons), AYTHER_GENERATION_ANY, NULL)
+      != AYTHER_STATUS_OK) {
+    snprintf(out->raster_msg, sizeof(out->raster_msg), "no se puede leer 0x10E");
+    return;
+  }
+  st = api->recompose_multilayer(NULL, NULL, NULL, NULL, composite, MAX_PX, 0,
+                                 &w, &h);
+  if (st == AYTHER_STATUS_OK && w == video_w && h == video_h)
+  {
+    n = w * h;
+    for (k = 0; k < n; ++k)
+      if (composite[k] != last_px[k])
+      {
+        unsigned y = k / w;
+        if (!diff) rmin = y;
+        rmax = y;
+        ++diff;
+      }
+  }
+
+  switch (kind)
+  {
+    case AYTHER_SCENE_RASTER_H32:
+      out->raster_ok = (reasons & AYTHER_RASTER_REASON_UNSUPPORTED_MODE) != 0;
+      snprintf(out->raster_msg, sizeof(out->raster_msg),
+               "0x10E = 0x%x -> %s", (unsigned)reasons,
+               out->raster_ok ? "UNSUPPORTED_MODE, como corresponde"
+                              : "SIN UNSUPPORTED_MODE");
+      break;
+    case AYTHER_SCENE_RASTER_OVERFLOW:
+      out->raster_ok = st == AYTHER_STATUS_RC_JOURNAL_OVERFLOW &&
+                       (reasons & AYTHER_RASTER_REASON_JOURNAL_OVERFLOW) != 0;
+      snprintf(out->raster_msg, sizeof(out->raster_msg),
+               "multilayer devolvio %d, 0x10E = 0x%x -> %s", (int)st,
+               (unsigned)reasons,
+               out->raster_ok ? "JOURNAL_OVERFLOW en vez de un prefijo"
+                              : "TENDRIA QUE SER JOURNAL_OVERFLOW");
+      break;
+    case AYTHER_SCENE_RASTER_DISPLAY:
+    {
+      /* Apagar o encender la pantalla a mitad de linea cambia el RESTO de esa
+         linea en el frame emitido; el replay trabaja por lineas enteras, asi
+         que las dos lineas del toggle pueden diferir. Lo que se afirma es que
+         la diferencia no pase de ahi: la franja apagada tiene que ser identica. */
+      unsigned toggle_a = AYTHER_RASTER_LINE_A - 1u, toggle_b = AYTHER_RASTER_LINE_B - 1u;
+      unsigned y, outside = 0;
+      if (st == AYTHER_STATUS_OK && w == video_w && h == video_h)
+        for (y = 0; y < h; ++y)
+        {
+          if (y == toggle_a || y == toggle_b) continue;
+          for (k = y * w; k < (y + 1) * w; ++k)
+            if (composite[k] != last_px[k]) ++outside;
+        }
+      out->raster_ok = st == AYTHER_STATUS_OK && w == video_w && h == video_h &&
+                       outside == 0 && reasons == AYTHER_RASTER_REASON_REG;
+      snprintf(out->raster_msg, sizeof(out->raster_msg),
+               "multilayer %d, %u pixeles distintos, %u fuera de las lineas del toggle (%u y %u), 0x10E = 0x%x -> %s",
+               (int)st, diff, outside, toggle_a, toggle_b, (unsigned)reasons,
+               out->raster_ok ? "replay por lineas enteras, la franja apagada es identica"
+                              : "MAL");
+      break;
+    }
+    default:
+    {
+      const uint32_t replayable = AYTHER_RASTER_REASON_REG |
+                                  AYTHER_RASTER_REASON_CRAM |
+                                  AYTHER_RASTER_REASON_VSRAM |
+                                  AYTHER_RASTER_REASON_HSCROLL;
+      out->raster_ok = st == AYTHER_STATUS_OK && w == video_w && h == video_h &&
+                       diff == 0 && reasons != 0 && (reasons & ~replayable) == 0;
+      snprintf(out->raster_msg, sizeof(out->raster_msg),
+               "multilayer %d, %ux%u, %u pixeles distintos de %u (filas %u..%u), 0x10E = 0x%x -> %s",
+               (int)st, w, h, diff, w * h, rmin, rmax, (unsigned)reasons,
+               out->raster_ok ? "replay pixel-perfect con motivo reproducible"
+                              : "MAL");
+      break;
+    }
+  }
+}
 
 static int run_scene(const char *dll, size_t scene, struct scene_result *out)
 {
@@ -146,10 +276,15 @@ static int run_scene(const char *dll, size_t scene, struct scene_result *out)
   if (!p_load(&gi)) { fprintf(stderr, "load_game fallo\n"); close_library(lib); return 0; }
 
   for (f = 0; f < FRAMES; ++f) p_run();
-  close_library(lib);
-
+  /* El golden se toma ACA, antes del chequeo raster, que corre frames de mas
+     y no forma parte del hash. */
   out->video = video_hash; out->audio = audio_hash;
   out->w = video_w; out->h = video_h; out->frames = video_frames;
+
+  out->raster_ok = 1; out->raster_msg[0] = 0;
+  if (ayther_scene_raster(scene) != AYTHER_SCENE_RASTER_NONE)
+    check_raster_scene(lib, scene, p_run, out);
+  close_library(lib);
   return 1;
 }
 
@@ -200,7 +335,12 @@ int main(int argc, char **argv)
     fclose(golden);
     printf("golden de escenas regenerado: %s (%u escenas)\n",
            golden_path, (unsigned)n);
-    return 0;
+    for (i = 0; i < n; ++i)
+      if (ayther_scene_raster(i)) {
+        printf("%-12s raster: %s\n", ayther_scene_name(i), results[i].raster_msg);
+        if (!results[i].raster_ok) fail = 1;
+      }
+    return fail;
   }
 
   golden = fopen(golden_path, "r");
@@ -249,6 +389,10 @@ int main(int argc, char **argv)
       if (results[i].frames != frames)
         printf("               frames %u  golden %u\n", results[i].frames, frames);
       fail = 1;
+    }
+    if (ayther_scene_raster(i)) {
+      printf("             raster: %s\n", results[i].raster_msg);
+      if (!results[i].raster_ok) fail = 1;
     }
   }
   fclose(golden);

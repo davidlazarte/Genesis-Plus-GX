@@ -328,7 +328,7 @@ check-attribution-scene: $(ATTRIB_SCENE_BIN)
 	$(ATTRIB_SCENE_BIN) "$(CORE)"
 
 $(SCENES_BIN): ayther/scenes.c ayther/generated_rom.c 		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther 		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include 		-Iayther -o $@ ayther/scenes.c ayther/generated_rom.c 		$(LDFLAGS) $(ROM_PROBE_LIBS)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther 		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include 		-I$(CORE_DIR)/core -Iayther -o $@ ayther/scenes.c ayther/generated_rom.c 		$(LDFLAGS) $(ROM_PROBE_LIBS)
 
 $(LINE_STATE_BIN): ayther/line_state.c ayther/generated_rom.c 		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther 		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include 		-Iayther -o $@ ayther/line_state.c ayther/generated_rom.c 		$(LDFLAGS) $(ROM_PROBE_LIBS)

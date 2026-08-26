@@ -26,6 +26,7 @@
 #define Z80_BUS_REQUEST 0x00a11100u
 #define Z80_RESET 0x00a11200u
 #define TMSS 0x00a14000u
+#define Z80_RAM 0x00a00000u
 
 struct rom_builder
 {
@@ -363,6 +364,74 @@ static uint32_t emit_vertical_handler(struct rom_builder *builder)
   emit_move_byte_immediate_absolute(builder, 0x80u, YM_DATA_0);
   emit_u16(builder, 0x4e73u); /* rte */
   return address;
+}
+
+/* #63: el Z80 martillando el puerto de datos del VDP por la ventana de banco.
+ *
+ * Es el unico fixture con codigo Z80 en un cartucho de Mega Drive. El 68000
+ * pide el bus, copia el programa a la RAM del Z80 byte a byte, enciende la
+ * pantalla y suelta el bus; el Z80 arranca en 0x0000.
+ *
+ * El programa apunta el banco a 0xC00000 -- nueve bits al registro de 0x6000,
+ * del menos al mas significativo: siete ceros y dos unos-- y despues escribe
+ * sin parar en 0x8000, que ahora es el puerto de datos del VDP. Cada escritura
+ * entra por zbank_write_vdp -> vdp_68k_data_w con m68k.cycles clavado al final
+ * de la linea y sin nada que frene al Z80: el bucle que busca el proximo slot
+ * del FIFO se salia de la tabla a la decima escritura de la misma linea. */
+static const uint8_t z80_vdp_hammer[] =
+{
+  0x21, 0x00, 0x60,             /* ld hl,6000h      ; registro de banco     */
+  0xAF,                         /* xor a                                    */
+  0x77, 0x77, 0x77, 0x77,       /* ld (hl),a  x7    ; bits 0..6 = 0         */
+  0x77, 0x77, 0x77,
+  0x3E, 0x01,                   /* ld a,1                                   */
+  0x77, 0x77,                   /* ld (hl),a  x2    ; bits 7,8 = 1: C00000  */
+  0x21, 0x00, 0x80,             /* ld hl,8000h      ; = 68000 0xC00000      */
+  0x77,                         /* loop: ld (hl),a  ; puerto de datos       */
+  0x18, 0xFD                    /* jr loop                                  */
+};
+
+static void emit_reset_program_z80_vdp(struct rom_builder *builder)
+{
+  size_t index;
+
+  emit_u16(builder, 0x46fcu); /* move.w #$2700,sr */
+  emit_u16(builder, 0x2700u);
+  emit_move_long_immediate_absolute(builder, 0x53454741u, TMSS);
+  emit_move_word_immediate_absolute(builder, 0x0100u, Z80_BUS_REQUEST);
+  emit_move_word_immediate_absolute(builder, 0x0100u, Z80_RESET);
+  emit_move_word_immediate_absolute(builder, 0u, RAM_FRAME);
+  emit_move_word_immediate_absolute(builder, 0u, RAM_LINE);
+
+  emit_vdp_register(builder, 0, 0x04u);
+  emit_vdp_register(builder, 1, 0x14u);
+  emit_vdp_register(builder, 2, 0x30u);
+  emit_vdp_register(builder, 3, 0x3eu);
+  emit_vdp_register(builder, 4, 0x07u);
+  emit_vdp_register(builder, 5, 0x6cu);
+  emit_vdp_register(builder, 7, 0x00u);
+  emit_vdp_register(builder, 10, 0x00u);
+  emit_vdp_register(builder, 11, 0x00u);
+  emit_vdp_register(builder, 12, 0x81u);   /* H40: la tabla de 28 slots */
+  emit_vdp_register(builder, 13, 0x3cu);
+  emit_vdp_register(builder, 15, 0x02u);
+  emit_vdp_register(builder, 16, 0x01u);
+  emit_vdp_register(builder, 17, 0x00u);
+  emit_vdp_register(builder, 18, 0x00u);
+
+  /* El programa va a la RAM del Z80 mientras el 68000 tiene el bus. */
+  for (index = 0; index < sizeof(z80_vdp_hammer); ++index)
+    emit_move_byte_immediate_absolute(builder, z80_vdp_hammer[index],
+                                      Z80_RAM + (uint32_t)index);
+
+  /* Pantalla e interrupcion vertical, y recien despues el bus: el bucle de
+     slots solo corre con la pantalla encendida y fuera del blanking. */
+  emit_vdp_register(builder, 1, 0x74u);
+  emit_move_word_immediate_absolute(builder, 0x0000u, Z80_BUS_REQUEST);
+
+  emit_u16(builder, 0x4e72u); /* stop #$2300 */
+  emit_u16(builder, 0x2300u);
+  emit_u16(builder, 0x60fau);
 }
 
 /* #31/#41: la escena que hace falta para PROBAR que el bit de sprite es exacto.
@@ -1062,6 +1131,11 @@ size_t ayther_build_generated_rom_sms(uint8_t *rom, size_t capacity)
   rom[0x7FFFu] = 0x4Cu;             /* region export, tamanio 32 KB   */
 
   return AYTHER_GENERATED_ROM_SIZE;
+}
+
+size_t ayther_build_generated_rom_z80_vdp(uint8_t *rom, size_t capacity)
+{
+  return build_rom(rom, capacity, emit_reset_program_z80_vdp);
 }
 
 size_t ayther_build_generated_rom_sprites(uint8_t *rom, size_t capacity)

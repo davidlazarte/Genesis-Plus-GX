@@ -71,4 +71,11 @@ size_t ayther_build_generated_rom_scene(uint8_t *rom, size_t capacity,
 size_t ayther_scene_count(void);
 const char *ayther_scene_name(size_t index);
 
+/* #63: el Z80 escribiendo sin parar al puerto de datos del VDP por la ventana
+   de banco. Es el camino por el que el bucle de slots del FIFO se salia de la
+   tabla, y ningun otro fixture tiene codigo Z80 en un cartucho de Mega Drive.
+   El fondo no importa: lo que se observa es que el core siga vivo y que la
+   VRAM se llene con lo que escribe el Z80. */
+size_t ayther_build_generated_rom_z80_vdp(uint8_t *rom, size_t capacity);
+
 #endif

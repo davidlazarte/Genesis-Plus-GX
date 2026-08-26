@@ -35,6 +35,7 @@ STATE_GUARD_BIN := $(BUILD_DIR)/state_guard$(EXE_EXT)
 STATE_LAYOUT_BIN := $(BUILD_DIR)/state_layout$(EXE_EXT)
 AUDIO_CTRL_BIN := $(BUILD_DIR)/audio_controls$(EXE_EXT)
 FRAME_DELTA_BIN := $(BUILD_DIR)/frame_delta$(EXE_EXT)
+Z80_VDP_BIN := $(BUILD_DIR)/z80_vdp_fifo$(EXE_EXT)
 IDLE_METRICS_BIN := $(BUILD_DIR)/idle_metrics$(EXE_EXT)
 ATTRIB_SCENE_BIN := $(BUILD_DIR)/attribution_scene$(EXE_EXT)
 PLANE_SUP_BIN := $(BUILD_DIR)/plane_suppress$(EXE_EXT)
@@ -196,6 +197,20 @@ $(FRAME_DELTA_BIN): ayther/frame_delta.c ayther/generated_rom.c \
 check-frame-delta: $(FRAME_DELTA_BIN)
 	$(call require_core)
 	$(FRAME_DELTA_BIN) "$(CORE)"
+
+$(Z80_VDP_BIN): ayther/z80_vdp_fifo.c ayther/generated_rom.c \
+		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther \
+		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include \
+		-Iayther -o $@ ayther/z80_vdp_fifo.c ayther/generated_rom.c \
+		$(LDFLAGS) $(ROM_PROBE_LIBS)
+
+# #63: necesita el core real. Muerde de verdad solo con el core instrumentado
+# con ASan -- sin instrumentar, leer fuera de fifo_timing_h40 no se nota--, que
+# es como lo construye el job nocturno de fuzzing.
+check-z80-vdp-fifo: $(Z80_VDP_BIN)
+	$(call require_core)
+	$(Z80_VDP_BIN) "$(CORE)"
 
 $(IDLE_METRICS_BIN): ayther/idle_metrics.c ayther/generated_rom.c 		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h 		$(CORE_DIR)/core/ayther/ayther_metrics.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -DAYTHER_METRICS -I$(CORE_DIR)/core/ayther 		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include 		-Iayther -o $@ ayther/idle_metrics.c ayther/generated_rom.c 		$(LDFLAGS) $(ROM_PROBE_LIBS)

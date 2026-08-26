@@ -148,3 +148,48 @@ jobs:
             echo "Corrida: $RUN_URL"
           } > body.md
           gh issue create --title "[fuzz][$TARGET] hallazgo $hash" --label ci --body-file body.md
+
+  # #63: los casos deterministas que solo muerden con el core instrumentado.
+  #
+  # `check-fuzz` y `check-z80-vdp-fifo` corren en cada PR contra un core SIN
+  # instrumentar, donde leer fuera de una tabla no se nota -- el hallazgo de
+  # #63 caia en `dma_timing`, que esta al lado, y el core seguia como si nada.
+  # Aca corren contra el mismo core con ASan que usan los targets de arriba.
+  # Es la diferencia entre "el caso pasa" y "el caso pasa y ASan estuvo
+  # mirando".
+  regressions:
+    name: regresiones bajo ASan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Build the core with sanitizers
+        env:
+          CC: clang
+        run: >-
+          make -B -f Makefile.libretro platform=unix
+          AYTHER_EXTENSIONS=1 SOUND_PROBE=1
+          CC="clang -fsanitize=address,undefined -shared-libsan -fno-omit-frame-pointer -g"
+          -j2
+
+      # Los harnesses van con el MISMO runtime dinamico que el core (#61): con
+      # el estatico conviven dos runtimes de ASan en el proceso y muere antes
+      # del primer caso. `verify_asan_link_order=0` es la alternativa al
+      # LD_PRELOAD del Makefile de fuzz: el runtime ya esta linkeado en el
+      # ejecutable, solo hay que decirle a ASan que no exija ser el primero.
+      - name: Replay the fuzz regressions and the Z80/VDP fixture under ASan
+        env:
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=0:report_error_type=1
+          ASAN_OPTIONS: verify_asan_link_order=0
+          REPLAY_SAN: -fsanitize=address,undefined -shared-libsan -fno-omit-frame-pointer
+        run: |
+          set -euo pipefail
+          export LD_LIBRARY_PATH="$(clang -print-runtime-dir):${LD_LIBRARY_PATH:-}"
+          make -C tests check-fuzz CC=clang CORE=../genesis_plus_gx_libretro.so
+          make -C tests check-z80-vdp-fifo CC=clang \
+            CFLAGS="-O1 -g -Wall -Wextra -fsanitize=address,undefined -shared-libsan -fno-omit-frame-pointer" \
+            LDFLAGS="-fsanitize=address,undefined -shared-libsan" \
+            CORE=../genesis_plus_gx_libretro.so

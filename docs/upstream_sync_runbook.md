@@ -138,19 +138,21 @@ lugares** de un archivo de upstream estamos parados, porque cada uno es un
 conflicto en potencia si upstream toca cerca. Medido el 2026-08-26:
 
 ```bash
-git diff upstream/master -U0 -- core/vdp_render.c | grep -c '^@@'   # 147 hunks
+git diff upstream/master -U0 -- core/vdp_render.c | grep -c '^@@'   # 127 hunks (147 antes de #68)
 git diff upstream/master -U0 -- core/vdp_render.c \
   | awk '/^@@/{if(h!="")print a+d" "h; h=$0; a=0; d=0; next} /^\+[^+]/{a++} /^-[^-]/{d++} END{print a+d" "h}' \
   | sort -rn | head                                                  # el mayor: 29 líneas
 ```
 
-Son **147 hunks y ninguno pasa de 30 líneas**: los gates ya no son bloques de
+Eran **147 hunks y ninguno pasa de 30 líneas**: los gates ya no son bloques de
 cincuenta líneas dentro de un bucle (#43 partía de eso; `ayther_core.c` es una
 unidad propia, los clones fast/observed salen de `AYTHER_DUAL_PATH`, y los
 hooks viven en `core/ayther/*.h`). Lo que queda es la *cantidad* de puntos de
-contacto, y bajarla exige otra forma de enganchar el renderer — no se hace
-moviendo líneas. Cuando se intente, este par de comandos es la vara: menos
-hunks, no menos líneas.
+contacto, y bajarla no se hace moviendo líneas sino plegando los hooks en los
+macros que upstream ya llama: #68 redefinió `DRAW_COLUMN`/`DRAW_COLUMN_IM2`
+después de las definiciones de upstream y los veinte sitios de llamada volvieron
+a ser byte a byte los de upstream (147 → 127). Este par de comandos es la vara
+para cada paso siguiente: menos hunks, no menos líneas.
 
 El resto (`core/vdp_render.h`, `core/sound/sound.h`, `core/vdp_ctrl.h`,
 `core/shared.h`, `core/system.c`, `core/loadrom.c`, `core/debug/cpuhook.h`,

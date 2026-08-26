@@ -1654,6 +1654,7 @@ AYTHER_HOT_INLINE void render_bg_m5_impl(int line, int ayther_observed)
   const uint8 *psupA = ayther_observed ? AYTHER_PSUP(0) : (const uint8 *)0;
   const uint8 *psupB = ayther_observed ? AYTHER_PSUP(1) : (const uint8 *)0;
   const uint8 *psupW = ayther_observed ? AYTHER_PSUP(2) : (const uint8 *)0;
+  AYTHER_COLUMN_LOCALS(ayther_observed && AYTHER_LINE_CELLS_ACTIVE);
 #ifdef AYTHER_EXTENSIONS
   const int hide_a = ayther_observed &&
     !(ayther_layer_mask & AYTHER_LAYER_A);
@@ -1716,6 +1717,7 @@ AYTHER_HOT_INLINE void render_bg_m5_impl(int line, int ayther_observed)
      LINE_CELLS: esa region reporta que celda de la nametable toco cada
      columna, y eso se anota DENTRO del bucle. Si alguien esta suscrito, se
      dibuja igual: contestarle con una fila vacia seria mentirle. */
+  AYTHER_COLUMN_PLANE(psupB);
   if (hide_b && !AYTHER_LINE_CELLS_ACTIVE)
   {
     memset(&linebuf[0][0x20], 0, bitmap.viewport.w);
@@ -1730,8 +1732,7 @@ AYTHER_HOT_INLINE void render_bg_m5_impl(int line, int ayther_observed)
     dst = (uint32 *)&linebuf[0][0x10 + shift];
 
     atbuf = nt[(index - 1) & pf_col_mask];
-    DRAW_COLUMN_AE(atbuf, v_line, psupB);
-      AYTHER_CELL_RECORD(atbuf);
+    DRAW_COLUMN(atbuf, v_line)
   }
   else
   {
@@ -1742,8 +1743,7 @@ AYTHER_HOT_INLINE void render_bg_m5_impl(int line, int ayther_observed)
   for(column = 0; column < end; column++, index++)
   {
     atbuf = nt[index & pf_col_mask];
-    DRAW_COLUMN_AE(atbuf, v_line, psupB);
-      AYTHER_CELL_RECORD(atbuf);
+    DRAW_COLUMN(atbuf, v_line)
   }
 #ifdef AYTHER_EXTENSIONS
   if (ayther_observed) ayther_cells_close();
@@ -1751,6 +1751,7 @@ AYTHER_HOT_INLINE void render_bg_m5_impl(int line, int ayther_observed)
 
   /* AYTHER: ocultar Plano A o Window → limpiar su buffer compartido (linebuf[1])
      antes de dibujar; lo no dibujado queda transparente y se ve Plano B. */
+  AYTHER_COLUMN_PLANE(psupA);
   if (hide_a || hide_w)
     memset(&linebuf[1][0x20], 0, bitmap.viewport.w);
 
@@ -1812,8 +1813,7 @@ AYTHER_HOT_INLINE void render_bg_m5_impl(int line, int ayther_observed)
         atbuf = nt[(index - 1) & pf_col_mask];
       }
 
-      DRAW_COLUMN_AE(atbuf, v_line, psupA);
-      AYTHER_CELL_RECORD(atbuf);
+      DRAW_COLUMN(atbuf, v_line)
     }
     else
     {
@@ -1824,8 +1824,7 @@ AYTHER_HOT_INLINE void render_bg_m5_impl(int line, int ayther_observed)
     for(column = start; column < end; column++, index++)
     {
       atbuf = nt[index & pf_col_mask];
-      DRAW_COLUMN_AE(atbuf, v_line, psupA);
-      AYTHER_CELL_RECORD(atbuf);
+      DRAW_COLUMN(atbuf, v_line)
     }
 #ifdef AYTHER_EXTENSIONS
     if (ayther_observed) ayther_cells_close();
@@ -1838,6 +1837,7 @@ AYTHER_HOT_INLINE void render_bg_m5_impl(int line, int ayther_observed)
   }
 
   /* Window */
+  AYTHER_COLUMN_PLANE(psupW);
   if (w && !hide_w)   /* AYTHER: gate Window */
   {
     /* Window name table */
@@ -1856,8 +1856,7 @@ AYTHER_HOT_INLINE void render_bg_m5_impl(int line, int ayther_observed)
     for(column = start; column < end; column++)
     {
       atbuf = nt[column];
-      DRAW_COLUMN_AE(atbuf, v_line, psupW);
-      AYTHER_CELL_RECORD(atbuf);
+      DRAW_COLUMN(atbuf, v_line)
     }
   }
 
@@ -1887,6 +1886,7 @@ AYTHER_HOT_INLINE void render_bg_m5_vs_impl(int line, int ayther_observed)
   const uint8 *psupA = ayther_observed ? AYTHER_PSUP(0) : (const uint8 *)0;
   const uint8 *psupB = ayther_observed ? AYTHER_PSUP(1) : (const uint8 *)0;
   const uint8 *psupW = ayther_observed ? AYTHER_PSUP(2) : (const uint8 *)0;
+  AYTHER_COLUMN_LOCALS(ayther_observed && AYTHER_LINE_CELLS_ACTIVE);
 #ifdef AYTHER_EXTENSIONS
   const int hide_a = ayther_observed &&
     !(ayther_layer_mask & AYTHER_LAYER_A);
@@ -1935,6 +1935,7 @@ AYTHER_HOT_INLINE void render_bg_m5_vs_impl(int line, int ayther_observed)
   }
 
   /* #37.6: mismo caso que en render_bg_m5 -- ver el comentario de alla. */
+  AYTHER_COLUMN_PLANE(psupB);
   if (hide_b && !AYTHER_LINE_CELLS_ACTIVE)
   {
     memset(&linebuf[0][0x20], 0, bitmap.viewport.w);
@@ -1958,8 +1959,7 @@ AYTHER_HOT_INLINE void render_bg_m5_vs_impl(int line, int ayther_observed)
     dst = (uint32 *)&linebuf[0][0x10 + shift];
 
     atbuf = nt[(index - 1) & pf_col_mask];
-    DRAW_COLUMN_AE(atbuf, v_line, psupB);
-      AYTHER_CELL_RECORD(atbuf);
+    DRAW_COLUMN(atbuf, v_line)
   }
   else
   {
@@ -1983,11 +1983,11 @@ AYTHER_HOT_INLINE void render_bg_m5_vs_impl(int line, int ayther_observed)
     v_line = (v_line & 7) << 3;
 
     atbuf = nt[index & pf_col_mask];
-    DRAW_COLUMN_AE(atbuf, v_line, psupB);
-      AYTHER_CELL_RECORD(atbuf);
+    DRAW_COLUMN(atbuf, v_line)
   }
 
   /* AYTHER: ocultar Plano A o Window → limpiar su buffer compartido (linebuf[1]). */
+  AYTHER_COLUMN_PLANE(psupA);
   if (hide_a || hide_w)
     memset(&linebuf[1][0x20], 0, bitmap.viewport.w);
 
@@ -2046,8 +2046,7 @@ AYTHER_HOT_INLINE void render_bg_m5_vs_impl(int line, int ayther_observed)
         atbuf = nt[(index - 1) & pf_col_mask];
       }
 
-      DRAW_COLUMN_AE(atbuf, v_line, psupA);
-      AYTHER_CELL_RECORD(atbuf);
+      DRAW_COLUMN(atbuf, v_line)
     }
     else
     {
@@ -2071,8 +2070,7 @@ AYTHER_HOT_INLINE void render_bg_m5_vs_impl(int line, int ayther_observed)
       v_line = (v_line & 7) << 3;
 
       atbuf = nt[index & pf_col_mask];
-      DRAW_COLUMN_AE(atbuf, v_line, psupA);
-      AYTHER_CELL_RECORD(atbuf);
+      DRAW_COLUMN(atbuf, v_line)
     }
     }   /* AYTHER: fin gate Plano A */
 
@@ -2082,6 +2080,7 @@ AYTHER_HOT_INLINE void render_bg_m5_vs_impl(int line, int ayther_observed)
   }
 
   /* Window */
+  AYTHER_COLUMN_PLANE(psupW);
   if (w && !hide_w)   /* AYTHER: gate Window */
   {
     /* Window name table */
@@ -2100,8 +2099,7 @@ AYTHER_HOT_INLINE void render_bg_m5_vs_impl(int line, int ayther_observed)
     for(column = start; column < end; column++)
     {
       atbuf = nt[column];
-      DRAW_COLUMN_AE(atbuf, v_line, psupW);
-      AYTHER_CELL_RECORD(atbuf);
+      DRAW_COLUMN(atbuf, v_line)
     }
   }
 
@@ -2137,6 +2135,7 @@ void render_bg_m5_vs_enhanced(int line)
   const uint8 *psupA = AYTHER_PSUP(0);
   const uint8 *psupB = AYTHER_PSUP(1);
   const uint8 *psupW = AYTHER_PSUP(2);
+  AYTHER_COLUMN_LOCALS(0);   /* este renderer no registra celdas */
   const int hide_a = AYTHER_HIDE_A;
   const int hide_b = AYTHER_HIDE_B;
   const int hide_w = AYTHER_HIDE_W;
@@ -2476,6 +2475,7 @@ void render_bg_m5_im2(int line)
   const uint8 *psupA = AYTHER_PSUP(0);
   const uint8 *psupB = AYTHER_PSUP(1);
   const uint8 *psupW = AYTHER_PSUP(2);
+  AYTHER_COLUMN_LOCALS(0);   /* este renderer no registra celdas */
   const int hide_a = AYTHER_HIDE_A;
   const int hide_b = AYTHER_HIDE_B;
   const int hide_w = AYTHER_HIDE_W;
@@ -2505,6 +2505,7 @@ void render_bg_m5_im2(int line)
   v_line = (v_line & 15) << 3;
 
   /* #37.6: mismo caso que en render_bg_m5 -- ver el comentario de alla. */
+  AYTHER_COLUMN_PLANE(psupB);
   if (hide_b && !AYTHER_LINE_CELLS_ACTIVE)
   {
     memset(&linebuf[0][0x20], 0, bitmap.viewport.w);
@@ -2519,7 +2520,7 @@ void render_bg_m5_im2(int line)
     dst = (uint32 *)&linebuf[0][0x10 + shift];
 
     atbuf = nt[(index - 1) & pf_col_mask];
-    DRAW_COLUMN_IM2_AE(atbuf, v_line, psupB);
+    DRAW_COLUMN_IM2(atbuf, v_line)
   }
   else
   {
@@ -2530,7 +2531,7 @@ void render_bg_m5_im2(int line)
   for(column = 0; column < end; column++, index++)
   {
     atbuf = nt[index & pf_col_mask];
-    DRAW_COLUMN_IM2_AE(atbuf, v_line, psupB);
+    DRAW_COLUMN_IM2(atbuf, v_line)
   }
 
   /* Window & Plane A */
@@ -2553,6 +2554,7 @@ void render_bg_m5_im2(int line)
   /* AYTHER: ocultar Plano A o Window -> limpiar su buffer compartido
      (linebuf[1]) antes de dibujar; lo no dibujado queda transparente y
      se ve el Plano B, que es lo que "ocultar una capa" significa. */
+  AYTHER_COLUMN_PLANE(psupA);
   if (hide_a || hide_w)
     memset(&linebuf[1][0x20], 0, bitmap.viewport.w);
 
@@ -2597,7 +2599,7 @@ void render_bg_m5_im2(int line)
         atbuf = nt[(index - 1) & pf_col_mask];
       }
 
-      DRAW_COLUMN_IM2_AE(atbuf, v_line, psupA);
+      DRAW_COLUMN_IM2(atbuf, v_line)
     }
     else
     {
@@ -2608,7 +2610,7 @@ void render_bg_m5_im2(int line)
     for(column = start; column < end; column++, index++)
     {
       atbuf = nt[index & pf_col_mask];
-      DRAW_COLUMN_IM2_AE(atbuf, v_line, psupA);
+      DRAW_COLUMN_IM2(atbuf, v_line)
     }
 
     }   /* AYTHER: fin gate Plano A */
@@ -2619,6 +2621,7 @@ void render_bg_m5_im2(int line)
   }
 
   /* Window */
+  AYTHER_COLUMN_PLANE(psupW);
   if (w && !hide_w)   /* AYTHER: gate Window */
   {
     /* Window name table */
@@ -2633,7 +2636,7 @@ void render_bg_m5_im2(int line)
     for(column = start; column < end; column++)
     {
       atbuf = nt[column];
-      DRAW_COLUMN_IM2_AE(atbuf, v_line, psupW);
+      DRAW_COLUMN_IM2(atbuf, v_line)
     }
   }
 
@@ -2667,6 +2670,7 @@ void render_bg_m5_im2_vs(int line)
   const uint8 *psupA = AYTHER_PSUP(0);
   const uint8 *psupB = AYTHER_PSUP(1);
   const uint8 *psupW = AYTHER_PSUP(2);
+  AYTHER_COLUMN_LOCALS(0);   /* este renderer no registra celdas */
   const int hide_a = AYTHER_HIDE_A;
   const int hide_b = AYTHER_HIDE_B;
   const int hide_w = AYTHER_HIDE_W;
@@ -2698,6 +2702,7 @@ void render_bg_m5_im2_vs(int line)
   }
 
   /* #37.6: mismo caso que en render_bg_m5 -- ver el comentario de alla. */
+  AYTHER_COLUMN_PLANE(psupB);
   if (hide_b && !AYTHER_LINE_CELLS_ACTIVE)
   {
     memset(&linebuf[0][0x20], 0, bitmap.viewport.w);
@@ -2721,7 +2726,7 @@ void render_bg_m5_im2_vs(int line)
     dst = (uint32 *)&linebuf[0][0x10 + shift];
 
     atbuf = nt[(index - 1) & pf_col_mask];
-    DRAW_COLUMN_IM2_AE(atbuf, v_line, psupB);
+    DRAW_COLUMN_IM2(atbuf, v_line)
   }
   else
   {
@@ -2745,7 +2750,7 @@ void render_bg_m5_im2_vs(int line)
     v_line = (v_line & 15) << 3;
 
     atbuf = nt[index & pf_col_mask];
-    DRAW_COLUMN_IM2_AE(atbuf, v_line, psupB);
+    DRAW_COLUMN_IM2(atbuf, v_line)
   }
 
   /* Window & Plane A */
@@ -2768,6 +2773,7 @@ void render_bg_m5_im2_vs(int line)
   /* AYTHER: ocultar Plano A o Window -> limpiar su buffer compartido
      (linebuf[1]) antes de dibujar; lo no dibujado queda transparente y
      se ve el Plano B, que es lo que "ocultar una capa" significa. */
+  AYTHER_COLUMN_PLANE(psupA);
   if (hide_a || hide_w)
     memset(&linebuf[1][0x20], 0, bitmap.viewport.w);
 
@@ -2813,7 +2819,7 @@ void render_bg_m5_im2_vs(int line)
         atbuf = nt[(index - 1) & pf_col_mask];
       }
 
-      DRAW_COLUMN_IM2_AE(atbuf, v_line, psupA);
+      DRAW_COLUMN_IM2(atbuf, v_line)
     }
     else
     {
@@ -2837,7 +2843,7 @@ void render_bg_m5_im2_vs(int line)
       v_line = (v_line & 15) << 3;
 
       atbuf = nt[index & pf_col_mask];
-      DRAW_COLUMN_IM2_AE(atbuf, v_line, psupA);
+      DRAW_COLUMN_IM2(atbuf, v_line)
     }
 
     }   /* AYTHER: fin gate Plano A */
@@ -2848,6 +2854,7 @@ void render_bg_m5_im2_vs(int line)
   }
 
   /* Window */
+  AYTHER_COLUMN_PLANE(psupW);
   if (w && !hide_w)   /* AYTHER: gate Window */
   {
     /* Window name table */
@@ -2862,7 +2869,7 @@ void render_bg_m5_im2_vs(int line)
     for(column = start; column < end; column++)
     {
       atbuf = nt[column];
-      DRAW_COLUMN_IM2_AE(atbuf, v_line, psupW);
+      DRAW_COLUMN_IM2(atbuf, v_line)
     }
   }
 

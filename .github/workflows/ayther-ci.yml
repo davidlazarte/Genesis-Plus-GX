@@ -361,6 +361,15 @@ jobs:
           make -C tests check-observability
           CORE=../genesis_plus_gx_libretro.so
 
+      # #40: ya no necesita un cartucho comercial. El fixture SMS del repo
+      # -- codigo Z80-- pone la escena, y en su primera corrida encontro un
+      # defecto que el ROM real no podia mostrar: suprimir un slot borraba
+      # tambien el siguiente.
+      - name: Mode 4 controls against the SMS fixture
+        run: >-
+          make -C tests check-mode4
+          CORE=../genesis_plus_gx_libretro.so
+
       - name: Per-scanline state matches the ROM's own scroll table
         run: >-
           make -C tests check-line-state
@@ -618,6 +627,14 @@ jobs:
           CC=clang
           CORE=../genesis_plus_gx_libretro.dll
 
+      - name: Mode 4 controls against the SMS fixture
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        shell: pwsh
+        run: >-
+          make -C tests check-mode4
+          CC=clang
+          CORE=../genesis_plus_gx_libretro.dll
+
       - name: Compare extensions-off and compiled-idle profiles
         continue-on-error: true
         if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
@@ -753,6 +770,12 @@ jobs:
         if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
         run: >-
           make -C tests check-multilayer
+          CORE=../genesis_plus_gx_libretro.dylib
+
+      - name: Mode 4 controls against the SMS fixture
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -C tests check-mode4
           CORE=../genesis_plus_gx_libretro.dylib
 
       - name: Journal, frame hashes and resolved palette

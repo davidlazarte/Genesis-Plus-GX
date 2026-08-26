@@ -253,10 +253,12 @@ $(SPR_OUTCOME_BIN): ayther/sprite_outcome.c ayther/generated_rom.c \
 		-Iayther -o $@ ayther/sprite_outcome.c ayther/generated_rom.c \
 		$(LDFLAGS) $(ROM_PROBE_LIBS)
 
-$(MODE4_BIN): ayther/mode4_controls.c $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
+$(MODE4_BIN): ayther/mode4_controls.c ayther/generated_rom.c \
+		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther \
 		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include \
-		-o $@ ayther/mode4_controls.c $(LDFLAGS) $(ROM_PROBE_LIBS)
+		-Iayther -o $@ ayther/mode4_controls.c ayther/generated_rom.c \
+		$(LDFLAGS) $(ROM_PROBE_LIBS)
 
 # #40 fase 2: los controles del fork en Mode 4, contra un cartucho real.
 # OPT-IN: sin AYTHER_SMS_ROM apuntando a un .sms, el test se saltea y lo dice.

@@ -33,6 +33,17 @@ size_t ayther_build_generated_rom_sh(uint8_t *rom, size_t capacity);
 #define AYTHER_SPR_FIXTURE_LIMIT     20u
 size_t ayther_build_generated_rom_sprites(uint8_t *rom, size_t capacity);
 
+/* #40: un cartucho de Master System -- codigo Z80-, para poder probar Mode 4
+   sin depender de un ROM comercial que no puede vivir en el repo.
+
+   Fondo rojo solido, backdrop azul y ocho sprites verdes de 8x8 en una fila:
+   apagar el fondo deja la pantalla azul y suprimir un sprite le saca su
+   cuadrado, y las dos cosas se ven en un hash del frame. */
+#define AYTHER_SMS_SPRITES     8u
+#define AYTHER_SMS_SPRITE_Y   96u
+#define AYTHER_SMS_SPRITE_X0  40u
+size_t ayther_build_generated_rom_sms(uint8_t *rom, size_t capacity);
+
 /* Coordenadas de pantalla de los dos sprites de esa escena. */
 #define AYTHER_SH_SPRITE_X 64
 #define AYTHER_SH_SPRITE_Y 8

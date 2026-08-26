@@ -5059,7 +5059,9 @@ void parse_satb_m4(int line)
       if (AYTHER_SPR_SUPPRESSED_ACTIVE(ayther_suppression_active, i))
       {
         AYTHER_SPR_OUT_MARK(i, AYTHER_SPR_OUT_SUPPRESSED);
-        ++i;
+        /* Sin `++i`: el bucle es `do { } while (++i < 64)`, asi que el
+           `continue` ya incrementa. Incrementar aca tambien saltea DOS
+           slots, y suprimir el 3 borraba tambien el 4. */
         continue;
       }
 

@@ -17,9 +17,36 @@ src=${1:-"$here/../../core/vdp_render.c"}
 
 fail=0
 
-# Los renderers de fondo Mode 5 fuera del bloque ALT_RENDERER, que es
-# incompatible con AYTHER_EXTENSIONS por #error y no se compila en este fork.
-renderers="render_bg_m5_impl render_bg_m5_vs_impl render_bg_m5_vs_enhanced render_bg_m5_im2 render_bg_m5_im2_vs"
+# Los renderers de fondo Mode 5 se DESCUBREN en el archivo (#71): una lista
+# fija cubria cinco y dejaba pasar en silencio al sexto, que es justo el caso
+# que un lint de forma tiene que atrapar. Cuenta toda definicion
+# `void render_bg_m5*(int line` fuera de los bloques ALT_RENDERER, que son
+# incompatibles con AYTHER_EXTENSIONS por #error y no se compilan en este fork.
+# El seguimiento de #if es solo de esas directivas: ALT_RENDERER abre y cierra
+# sus bloques en columna 0, y los demas #if se apilan para no confundir su
+# #else/#endif con el nuestro.
+renderers=$(awk '
+  /^#ifdef ALT_RENDERER/  { depth++; kind[depth] = "alt"; next }
+  /^#ifndef ALT_RENDERER/ { depth++; kind[depth] = "ours"; next }
+  /^#if/                  { depth++; kind[depth] = "other"; next }
+  /^#else/ {
+    if (kind[depth] == "alt") kind[depth] = "ours"
+    else if (kind[depth] == "ours") kind[depth] = "alt"
+    next
+  }
+  /^#endif/ { if (depth > 0) depth--; next }
+  /^(AYTHER_HOT_INLINE )?(static )?void render_bg_m5[A-Za-z0-9_]*\(int line/ {
+    for (i = 1; i <= depth; i++) if (kind[i] == "alt") next
+    name = $0; sub(/^(AYTHER_HOT_INLINE )?(static )?void /, "", name); sub(/\(.*/, "", name)
+    print name
+  }
+' "$src" | sort -u | tr '\n' ' ')
+
+expected=5
+if [ "$(printf '%s' "$renderers" | wc -w)" -lt "$expected" ]; then
+  echo "se esperaban al menos $expected renderers render_bg_m5*; se encontraron: $renderers" >&2
+  exit 1
+fi
 
 for name in $renderers; do
   # Cuerpo de la funcion: desde su definicion hasta la llave de cierre en

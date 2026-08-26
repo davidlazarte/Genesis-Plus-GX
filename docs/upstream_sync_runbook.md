@@ -131,11 +131,66 @@ git fetch upstream master
 git diff upstream/master --stat | grep -v 'core/ayther\|core/debug\|tests/\|docs/\|bench/'
 ```
 
-La versión que **bloquea** es `tests/ci/upstream_contact.txt`: hunks nuestros
-por archivo de upstream, medidos contra el merge-base con `upstream/master`, y
-`tests/ci/check_upstream_contact.sh` falla en cada PR si alguno sube sin que la
-línea base se haya regenerado en el mismo commit (`--regen`). Un sync mueve el
-merge-base, así que el PR del sync la regenera (ver §4).
+La versión que **bloquea** es `tests/ci/upstream_contact.txt`: **un hunk
+nuestro por línea**, identificado por archivo, función que lo contiene y primera
+línea de código que agrega, medido contra el merge-base con `upstream/master`.
+`tests/ci/check_upstream_contact.sh` falla en cada PR si aparece un hunk cuya
+identidad no está en la base; uno que desaparece se informa. Un conteo no
+distingue "un hook nuevo y uno viejo que se fue" de "nada cambió", y esa es
+justo la diferencia que importa. Un sync mueve el merge-base, así que el PR
+del sync la regenera (ver §4).
+
+### Decisión sobre el residual estructural de `vdp_render.c` (#71)
+
+Después de #69, `vdp_render.c` queda en **127 hunks** contra upstream y ese
+número ya no baja plegando hooks: es un hunk por sitio de hook y por variante
+de renderer, y upstream tiene 4-5 variantes de cada uno. Lo decidido:
+
+1. **Se acepta como costo fijo**, vigilado. El conjunto actual de puntos de
+   contacto es la línea base; **no puede crecer sin decirlo**. Agregar un hook
+   es legítimo cuando una feature lo necesita: el PR regenera la base en el
+   mismo commit y el diff de `upstream_contact.txt` es la lista exacta de qué
+   se agregó, con el motivo en el mensaje. Lo que no existe es el crecimiento
+   silencioso.
+
+2. **Generar las variantes desde una plantilla: descartado**, por tres motivos
+   concretos y no por el trabajo que cuesta:
+   * Las variantes no son regulares. Difieren en las locales (`v_line` por
+     columna o por línea), en los getters de tile (`GET_*_TILE` vs `_IM2`), en
+     el orden y el ancho de los planos, y `vs_enhanced` dibuja medias columnas
+     por un camino propio. Una plantilla que las cubra tiene más ramas que
+     hooks tiene hoy el archivo.
+   * Invierte el objetivo. Las cinco funciones pasarían a ser generadas por el
+     fork: cada cambio de upstream en ellas dejaría de aplicarse con un merge y
+     habría que re-portarlo a mano a la plantilla. La superficie de conflicto
+     no baja, se vuelve total.
+   * El dolor que aliviaría no existe todavía: en el último sync los renderers
+     de Mode 5 no cambiaron y hubo 0 conflictos.
+
+3. **Costura en upstream: solo con el conflicto en la mano.** Se abre el
+   trabajo (un PR aguas arriba con un punto de extensión mínimo y de costo cero
+   en el camino por defecto) cuando se cumpla **cualquiera** de estos tres, y
+   no antes:
+   * dos syncs consecutivos obligan a reubicar hooks en los renderers de Mode 5
+     porque upstream movió el código a su alrededor;
+   * un solo sync deja conflictos manuales en **tres o más** de las cinco
+     variantes de `render_bg_m5*`;
+   * upstream agrega una variante nueva de renderer (el lint
+     `check_render_gates.sh` la descubre sola y exige el contrato; si además
+     hay que replicar los hooks, es la señal).
+   Hasta entonces no se contacta a upstream ni se abre trabajo: pedir un hook
+   "porque nos gustaría tener menos hunks" es el anti-patrón.
+
+4. **El contrato de las locales de columna** (`ayther_psup`, `ayther_cells`) y
+   sus exclusiones viven en `core/ayther/ayther_draw_column.h` y los hace
+   cumplir `tests/ci/check_render_gates.sh`, que desde #71 **descubre** los
+   renderers por patrón en vez de listarlos: un renderer nuevo entra al lint
+   solo. `ALT_RENDERER` no es deuda: es incompatible con `AYTHER_EXTENSIONS`
+   por `#error` y no se compila en este fork. `render_bg_m5_vs_enhanced` es la
+   única excepción y el lint la exige como excepción.
+
+Esto se revisa en cada sync (§4, paso 6): si se dispara una de las señales del
+punto 3, el PR del sync lo dice y abre el issue.
 
 ### La métrica que importa en `vdp_render.c`
 

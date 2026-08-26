@@ -54,16 +54,33 @@ The audited production paths are:
 
 - 68K data-port writes through `vdp_bus_w`;
 - Z80 Mode 5 byte writes to VRAM, CRAM and VSRAM;
+- Z80 Mode 4 byte writes to VRAM and CRAM — Master System, Game Gear and the
+  Mega Drive in Power Base Converter mode (#40). Register writes on those
+  systems already went through `vdp_reg_w`, so `REG` was reported; `CRAM` and
+  `VRAM` were not, and a mid-frame palette split on a Master System left the
+  mask at zero;
 - DMA from all 68K source areas through `vdp_bus_w`;
 - DMA copy to VRAM;
 - DMA fill to VRAM, CRAM and VSRAM.
 
 ## Unsupported output modes
 
-The current recompositor reports `UNSUPPORTED_MODE` for non-Mega-Drive video,
-Mode 4, interlace mode 2, doubled interlaced output, NTSC-filter output and
-builds without 16-bit rendering. This mirrors the guards in
-`ayther_recompose_frame()`.
+The current recompositor reports `UNSUPPORTED_MODE` for TMS video modes
+(SG-1000 / ColecoVision), interlace mode 2, doubled interlaced output,
+NTSC-filter output and builds without 16-bit rendering. This mirrors the guards
+in `ayther_recompose_frame()`; the predicate is `ayther_recompose_mode_supported()`.
+
+Mode 4 (Master System, Game Gear, Power Base Converter) is supported since #40:
+a frame starts at zero and `ayther_recompose_frame()` reproduces it from the
+final state. There is **no replay path in Mode 4** — `recompose_multilayer` is
+Mode 5 only — so every replayable reason is, in Mode 4, a plain fallback: the
+final-state picture is right up to the line of the first event and wrong after
+it (or before it, when the event restores an earlier value during the frame),
+and the mask is the only thing that tells a frontend which frames those are.
+`tests/ayther/mode4_raster.c` pins both halves: a scroll-lock-only scene
+recomposes pixel-perfect with the mask at zero, and a mid-frame palette split
+reports `CRAM`, journals the event on its line, and confines the recomposition
+mismatch to one side of that line.
 
 The versioned public ABI and capability discovery remain tracked by issue #6.
 

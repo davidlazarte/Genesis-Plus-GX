@@ -2739,6 +2739,13 @@ static void vdp_68k_data_w_m4(unsigned int data)
     /* Check if CRAM data is being modified */
     if (data != *p)
     {
+      /* AYTHER (#40): mismo motivo que en Mode 5. Sin esto un cambio de paleta
+         a mitad de frame en Master System dejaba 0x10E en cero y el frontend
+         confiaba en una recomposicion que no podia ser correcta. */
+      ayther_raster_mark_visible(AYTHER_RASTER_REASON_CRAM, (uint16_t)index,
+                                 (uint16_t)data, 1, 0, m68k.cycles,
+                                 index == (0x10 | (border & 0x0F)));
+
       /* Write CRAM data */
       *p = data;
 
@@ -2770,6 +2777,10 @@ static void vdp_68k_data_w_m4(unsigned int data)
     if (data != *p)
     {
       int name;
+
+      /* AYTHER (#40): ver vdp_z80_data_w_m4. */
+      ayther_raster_mark(AYTHER_RASTER_REASON_VRAM, (uint16_t)index,
+                         (uint16_t)data, 1, 0, m68k.cycles);
 
       /* Write data to VRAM */
       *p = data;
@@ -2991,6 +3002,13 @@ static void vdp_z80_data_w_m4(unsigned int data)
     /* Check if CRAM data is being modified */
     if (data != *p)
     {
+      /* AYTHER (#40): mismo motivo que en Mode 5. Sin esto un cambio de paleta
+         a mitad de frame en Master System dejaba 0x10E en cero y el frontend
+         confiaba en una recomposicion que no podia ser correcta. */
+      ayther_raster_mark_visible(AYTHER_RASTER_REASON_CRAM, (uint16_t)index,
+                                 (uint16_t)data, 1, 0, Z80.cycles,
+                                 index == (0x10 | (border & 0x0F)));
+
       /* Write CRAM data */
       *p = data;
 
@@ -3013,6 +3031,12 @@ static void vdp_z80_data_w_m4(unsigned int data)
     if (data != vram[index])
     {
       int name;
+
+      /* AYTHER (#40): Mode 4 no tiene tabla de hscroll en VRAM, asi que el
+         motivo es VRAM a secas y no pasa por AYTHER_RASTER_VRAM_REASON, que
+         compara contra un hscb que aca no significa nada. */
+      ayther_raster_mark(AYTHER_RASTER_REASON_VRAM, (uint16_t)index,
+                         (uint16_t)data, 1, 0, Z80.cycles);
 
       /* Write data */
       vram[index] = data;
@@ -3253,6 +3277,9 @@ static void vdp_z80_data_w_ms(unsigned int data)
     if (data != vram[index])
     {
       int name;
+      /* AYTHER (#40): ver vdp_z80_data_w_m4. */
+      ayther_raster_mark(AYTHER_RASTER_REASON_VRAM, (uint16_t)index,
+                         (uint16_t)data, 1, 0, Z80.cycles);
       vram[index] = data;
       MARK_BG_DIRTY(index);
     }
@@ -3272,6 +3299,13 @@ static void vdp_z80_data_w_ms(unsigned int data)
     /* Check if CRAM data is being modified */
     if (data != *p)
     {
+      /* AYTHER (#40): mismo motivo que en Mode 5. Sin esto un cambio de paleta
+         a mitad de frame en Master System dejaba 0x10E en cero y el frontend
+         confiaba en una recomposicion que no podia ser correcta. */
+      ayther_raster_mark_visible(AYTHER_RASTER_REASON_CRAM, (uint16_t)index,
+                                 (uint16_t)data, 1, 0, Z80.cycles,
+                                 index == (0x10 | (border & 0x0F)));
+
       /* Write CRAM data */
       *p = data;
 
@@ -3329,6 +3363,9 @@ static void vdp_z80_data_w_gg(unsigned int data)
     if (data != vram[index])
     {
       int name;
+      /* AYTHER (#40): ver vdp_z80_data_w_m4. */
+      ayther_raster_mark(AYTHER_RASTER_REASON_VRAM, (uint16_t)index,
+                         (uint16_t)data, 1, 0, Z80.cycles);
       vram[index] = data;
       MARK_BG_DIRTY(index);
     }
@@ -3351,6 +3388,11 @@ static void vdp_z80_data_w_gg(unsigned int data)
       {
         /* Color index (0-31) */
         int index = (addr >> 1) & 0x1F;
+
+        /* AYTHER (#40): ver vdp_z80_data_w_m4. */
+        ayther_raster_mark_visible(AYTHER_RASTER_REASON_CRAM, (uint16_t)index,
+                                   (uint16_t)data, 1, 0, Z80.cycles,
+                                   index == (0x10 | (border & 0x0F)));
         
         /* Write CRAM data */
         *p = data;

@@ -625,6 +625,28 @@ motivo de fallback. El frontend creía haber ocultado un plano.
 | `render_bg_m5_vs_enhanced` | opción *enhanced vscroll* | sí | **no** → `UNSUPPORTED_CONTROLS` | sí |
 | `render_bg_m5_im2` | interlace mode 2 | sí | sí | sí |
 | `render_bg_m5_im2_vs` | interlace mode 2 + vscroll | sí | sí | sí |
+| `render_bg_m4` | Mode 4 (SMS / GG / PBC) | sí, con el bit de "Plano A" reinterpretado como *el* fondo | sí | sí, desde el hook de línea (#40) |
+| `render_bg_m0/m1/m1x/m2/m3/m3x/inv` | modos TMS (SG-1000, ColecoVision) | **no** para el fondo; el bit de sprites sí, que se aplica en `render_line` | **no** | sí por construcción, sin medir |
+
+En Mode 4 el peel no puede vivir donde vive en Mode 5: hay **un** plano de
+fondo, `render_bg_m4` no llama a `merge()` y el hook del merge nunca corre. Con
+un solo plano, "pelar la capa de adelante para ver qué hay detrás" sólo puede
+significar revelar el backdrop, que es la misma rama que ya toma
+`ayther_peel_merge` cuando la celda no tiene primer plano opaco. Va en el hook
+de línea, entre `render_bg` y los sprites — la ventana exacta que dura el peel,
+por eso un sprite sobre una celda oculta se sigue viendo, igual que en Mode 5.
+
+Los renderers TMS caen del mismo lado del gate (`reg[1] & 0x04` en cero y
+`system_hw` que no es Mega Drive), y el peel opera sobre `linebuf`, donde `0x40`
+también es el backdrop. Por construcción les aplica. **No está medido**: la
+suite no tiene escena TMS, y este fork distingue entre lo que se comprobó y lo
+que se dedujo leyendo el código — la fila dice cuál es cuál.
+
+Lo que los modos TMS **no** heredan son los otros dos gates: ocultar el fondo o
+filtrar por patrón+paleta ahí se acepta y no hace nada. Es la misma clase de
+defecto que #28 cerró para Mode 5 y #40 para Mode 4, todavía abierta para unos
+modos que no tienen con qué probarse; queda dicho acá en vez de descubrirse en
+uso.
 
 `render_bg_m5_vs_enhanced` dibuja cada media columna con su propio `v_line` —
 para eso existe— y no pasa por el camino de columna donde vive el filtro de

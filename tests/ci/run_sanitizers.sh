@@ -54,51 +54,10 @@ echo "== full-core replay bajo sanitizers =="
   "$tests_dir/artifacts/sanitize_benchmark.json" 2>&1 | tee "$log"
 replay_status=${PIPESTATUS[0]}
 
-# Los reportes se agrupan por SITIO (archivo:linea:columna + tipo), no por texto
-# crudo: cada reporte lleva la direccion concreta, asi que sin normalizar el
-# mismo store desalineado aparece miles de veces y ahoga a cualquier hallazgo
-# nuevo en el ruido.
-reports=$(grep -E 'runtime error:|ERROR: AddressSanitizer|ERROR: LeakSanitizer' "$log" |
-          sed -e 's/^.*[\\/]//' \
-              -e 's/(0x[0-9a-fA-F]*)//g' -e 's/0x[0-9a-fA-F]*/0xADDR/g' |
-          sort -u || true)
-
-unknown=""
-while IFS= read -r line; do
-  [ -n "$line" ] || continue
-  matched=0
-  while IFS= read -r pattern; do
-    case $pattern in ''|'#'*) continue ;; esac
-    # Un patron puede pedir VARIAS subcadenas separadas por '|', y tienen que
-    # estar TODAS. Hace falta para poder decir "este archivo Y esta clase de UB"
-    # sin fijar archivo:linea:columna, que se desactualiza en cuanto alguien
-    # edita el archivo y deja el gate rojo sin que haya UB nuevo.
-    matched=1
-    rest=$pattern
-    while [ -n "$rest" ]; do
-      part=${rest%%|*}
-      case $rest in *"|"*) rest=${rest#*|} ;; *) rest="" ;; esac
-      [ -n "$part" ] || continue
-      case $line in *"$part"*) ;; *) matched=0; break ;; esac
-    done
-    [ "$matched" = 1 ] && break
-  done < <(tr -d '\r' < "$known")
-  [ "$matched" = 0 ] && unknown="$unknown$line"$'\n'
-done <<< "$reports"
-
-echo
-if [ -n "$reports" ]; then
-  echo "== reportes de sanitizer (unicos por sitio) =="
-  printf '%s\n' "$reports"
-fi
-
-if [ -n "${unknown//[$'\n' ]/}" ]; then
-  echo
-  echo "== UB NUEVO, no listado en known_ub.txt =="
-  printf '%s' "$unknown"
-  echo "Arreglar la causa. Ampliar known_ub.txt solo con justificacion explicita."
-  exit 1
-fi
+# La decision de "que UB se acepta" vive en filter_known_ub.sh, compartida con
+# el job nocturno de fuzzing (#34). Dos copias divergen, y el modo de fallar es
+# el peor: el gate que se quedo viejo sigue verde.
+"$here/filter_known_ub.sh" "$log" "$known" || exit 1
 
 if [ "$replay_status" -ne 0 ]; then
   echo "el replay fallo por si mismo (golden o assert), no por el sanitizer" >&2

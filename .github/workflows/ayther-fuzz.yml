@@ -62,6 +62,12 @@ jobs:
         run: |
           set -uo pipefail
           export LD_LIBRARY_PATH="$(clang -print-runtime-dir):${LD_LIBRARY_PATH:-}"
+          # halt_on_error=0 a proposito, igual que en run_sanitizers.sh: el
+          # UB aceptado de known_ub.txt -- los stores desalineados del
+          # renderer upstream- mataba al fuzzer en el primer caso y se comia
+          # los 60 s. Que UB corta el job lo decide el filtro de abajo, no
+          # un flag.
+          export UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=0:report_error_type=1"
           mkdir -p tests/fuzz/artifacts
           cd tests/fuzz
           make fuzz-${{ matrix.target }} \
@@ -69,6 +75,14 @@ jobs:
             FUZZ_SECONDS="$FUZZ_SECONDS" \
             2>&1 | tee artifacts/${{ matrix.target }}.log
           echo "FUZZ_STATUS=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+
+      # El mismo filtro que usa el job de sanitizers, y a proposito el mismo
+      # archivo: dos listas de "UB aceptado" divergen, y la que se queda
+      # vieja sigue verde. Un ASan o un crash de verdad ya hizo fallar el
+      # paso de arriba.
+      - name: Reject UB not listed in known_ub.txt
+        if: always()
+        run: bash tests/ci/filter_known_ub.sh "tests/fuzz/artifacts/${{ matrix.target }}.log"
 
       # libFuzzer deja el caso que rompio como `crash-<sha1>` en el cwd. Ese
       # archivo ES la reproduccion: se sube tal cual para poder meterlo en

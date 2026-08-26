@@ -63,6 +63,7 @@ second one read zero. |
 | 1.7 | **Additive.** Adds the `RASTER_JOURNAL`, `FRAME_HASH` and `PALETTE` regions, the `AYTHER_SUB_FRAME_HASH` subscription and `AYTHER_CAP_OBSERVABILITY_V1` (#39 A/D/E). `AYTHER_SUB_ALL` widens to `0xFFF`. No existing structure changes size or order. |
 | 1.8 | **Additive.** Adds the `SPRITE_OUTCOME` region and `AYTHER_CAP_SPRITE_OUTCOME_V1` (#39.C). Deliberately a parallel region rather than new fields on `ayther_sprite_v1`: that struct travels with its size announced in the descriptor, and a 1.0 consumer that transcribed it with its own types would read the array shifted from the second element on. |
 | 1.9 | **Additive.** Adds the `Z80_RAM` region (#563): the Z80's 8 KB, readable and **writable**. Writing it while the Z80 runs is a race by nature: hold the bus, or accept that the write may last one frame. No existing structure changes size or order. |
+| 1.10 | **Additive.** `ayther_system_v1.reserved0` becomes `flags`, same offset and size, with `AYTHER_SYSTEM_GEOMETRY_PENDING` (#77). `h40` now describes the **emitted** frame, like `viewport_w`; before, it came from register 12 and contradicted the viewport on the transition frame. |
 
 How to move a consumer from 1.3 to 1.9, capability by capability and in the order that pays first: [`ayther_integration_1.9.md`](ayther_integration_1.9.md).
 
@@ -444,7 +445,8 @@ before that the VDP has not chosen, and answering "Mode 4" would be inventing.
 ### The viewport is the *emitted* frame (#40)
 
 `viewport_w/h` are the dimensions of the frame the frontend receives through
-`video_refresh`: 256x224 on Mega Drive, 256x192 on Master System, **160x144 on
+`video_refresh`: 320x224 (H40) or 256x224 (H32) on Mega Drive — 240 lines in
+V30 —, 256x192 on Master System, **160x144 on
 Game Gear**. `ATTRIBUTION` describes that same rectangle, one byte per pixel,
 and `recompose_frame` returns that same size.
 
@@ -464,6 +466,24 @@ active area — `(48,24)` on Game Gear, `(0,0)` everywhere else. When a build
 delivers overscan the frame is *larger* than the active area rather than
 smaller; there is no offset to give, so they stay zero and `viewport_w/h`
 already include the borders.
+
+### Which frame the descriptor describes (#77, 1.10)
+
+The core applies register-driven geometry (width, height, interlace) at the
+**start of the next frame** (`system_frame_gen`, the `changed & 2` block). Read
+between frames, `viewport_w/h`, `interlace` and — since 1.10 — `h40` describe
+the frame that was just emitted; `vdp_mode` and `shadow_highlight` are register
+state. On a transition frame those are two different frames: Sonic 2 writes H40
+during its first frame, which is emitted with the reset geometry, so 1.9
+answered `h40 = 1` next to `viewport = 256x192` in the same struct.
+
+`flags & AYTHER_SYSTEM_GEOMETRY_PENDING` is set exactly while that gap exists.
+A frontend that wants the settled geometry waits for it to clear (one frame); a
+frontend drawing the frame it just received uses the viewport as is.
+`tests/ayther/system_transition.c` pins it on the generated ROM: after frame 1
+the viewport is the reset 256x192 with the flag set, after frame 2 it is 320x224
+with the flag clear, and on every frame `viewport_w/h` equal the dimensions
+`video_refresh` delivered and `h40 == (viewport_w == 320)`.
 
 ## Control × video mode (#40)
 

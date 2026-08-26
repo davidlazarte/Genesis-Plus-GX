@@ -106,7 +106,20 @@ extern "C" {
  * aceptar que lo que escribio puede durar un frame -- que para disparar un
  * sonido por id alcanza, y para cualquier otra cosa no. */
 #define AYTHER_ABI_VERSION_1_9 UINT32_C(0x00010009)
-#define AYTHER_ABI_VERSION_LATEST AYTHER_ABI_VERSION_1_9
+/* 1.10 (#77): SYSTEM dice de que frame habla. Aditiva: el byte reservado del
+ * descriptor pasa a ser `flags`, mismo offset y tamanio.
+ *
+ * `viewport_w/h` e `interlace` describen el frame EMITIDO, porque el core
+ * aplica la geometria de los registros al inicio del frame siguiente
+ * (system_frame_gen, bloque `changed & 2`). `vdp_mode` y `shadow_highlight`
+ * salen de los registros AHORA. `h40` salia de reg 12 y se contradecia con
+ * `viewport_w` en el frame de transicion -- Sonic 2 escribe H40 durante el
+ * primer frame, que sale con la geometria de reset: `h40 = 1` junto a
+ * `viewport = 256x192`, en el mismo struct--. Ahora `h40` describe el frame
+ * emitido, como `viewport_w`, y AYTHER_SYSTEM_GEOMETRY_PENDING dice que los
+ * registros ya cambiaron la geometria y el frame que viene la aplica. */
+#define AYTHER_ABI_VERSION_1_10 UINT32_C(0x0001000A)
+#define AYTHER_ABI_VERSION_LATEST AYTHER_ABI_VERSION_1_10
 
 /* La version mas nueva, COMO TEXTO, derivada y no copiada.
  *
@@ -119,7 +132,7 @@ extern "C" {
  * Derivarlo lo hace imposible: el numero y el texto salen de las mismas dos
  * constantes, asi que no hay dos lugares que puedan discrepar. */
 #define AYTHER_ABI_VERSION_MAJOR_LATEST 1
-#define AYTHER_ABI_VERSION_MINOR_LATEST 9
+#define AYTHER_ABI_VERSION_MINOR_LATEST 10
 #define AYTHER__STR2(x) #x
 #define AYTHER__STR(x)  AYTHER__STR2(x)
 #define AYTHER_ABI_VERSION_LATEST_STR    AYTHER__STR(AYTHER_ABI_VERSION_MAJOR_LATEST) "."    AYTHER__STR(AYTHER_ABI_VERSION_MINOR_LATEST)
@@ -607,6 +620,15 @@ typedef struct ayther_frame_hash_v1
  * Se refresca al empezar cada frame y queda fijo durante el. `system_hw` usa
  * los mismos valores que SYSTEM_* del core.
  */
+/* 1.10: los registros cambiaron la geometria (ancho, alto, interlace) durante
+   el ultimo frame y el core la aplica al inicio del siguiente. Mientras esta
+   puesto, `viewport_w/h` y `h40` describen el frame que ya salio y VDP_REGS
+   describe el que viene: son dos frames distintos, y el flag es lo que le
+   dice al frontend que no los mezcle. Un frontend que quiere la geometria
+   "definitiva" espera a que se apague; uno que dibuja el frame que recibio
+   usa el viewport tal cual. */
+#define AYTHER_SYSTEM_GEOMETRY_PENDING UINT8_C(0x01)
+
 #define AYTHER_SYSTEM_HW_SG      0x01
 #define AYTHER_SYSTEM_HW_MARKIII 0x10
 #define AYTHER_SYSTEM_HW_SMS     0x20
@@ -628,7 +650,7 @@ typedef struct ayther_system_v1
   uint8_t  vdp_mode;         /* 4 o 5; 0 si el VDP todavia no eligio      */
   uint8_t  interlace;        /* 0 = progresivo, 1 = interlace 1, 2 = im2  */
 
-  uint8_t  h40;              /* 1 = 320 px de ancho activo                */
+  uint8_t  h40;              /* 1 = el frame EMITIDO mide 320 px (== viewport_w); reg 12 puede ir un frame adelante: ver flags */
   uint8_t  shadow_highlight; /* 1 = S/H activo (reg 12 bit 3)             */
   uint16_t lines_per_frame;  /* 262 NTSC / 313 PAL                        */
 
@@ -636,7 +658,8 @@ typedef struct ayther_system_v1
      build entrega. Es el mismo rectangulo que describe ATTRIBUTION.
 
      `viewport_w/h` son las dimensiones del frame que sale por video_refresh:
-     256x224 en Mega Drive, 256x192 en Master System, 160x144 en Game Gear.
+     320x224 (H40) o 256x224 (H32) en Mega Drive -- 240 lineas en V30--,
+     256x192 en Master System, 160x144 en Game Gear.
      Es la misma cuenta que hace el propio frontend del core.
 
      `viewport_x/y` son el offset donde ese frame empieza dentro del area
@@ -652,7 +675,7 @@ typedef struct ayther_system_v1
   uint8_t  fm_core;          /* 0 = MAME (ym2612), 1 = Nuked (ym3438)     */
   uint8_t  psg_present;
   uint8_t  pcm_present;      /* RF5C164 del Mega CD                       */
-  uint8_t  reserved0;
+  uint8_t  flags;            /* AYTHER_SYSTEM_* (1.10); antes reservado, siempre 0 */
 
   uint32_t rom_crc32;        /* crc32 del archivo cargado                 */
   uint32_t rom_bytes;

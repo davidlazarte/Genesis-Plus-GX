@@ -40,3 +40,13 @@ vdp_render.c|store to misaligned address
 # que describe la entrada de arriba y con la misma condicion de salida: se
 # arregla cuando macOS arm64 entre al matrix (#35).
 ayther_draw_column.h|store to misaligned address
+
+# Mismo patron upstream, tercer archivo, y esta vez del lado de la CARGA: el
+# interprete del 68000 lee palabras del stream de instrucciones con punteros
+# que no siempre caen alineados a 2. Lo encontro el fuzzing de #34 al empezar
+# a correr de verdad; no es codigo nuevo ni del fork.
+#
+# Misma condicion de salida que las dos entradas de arriba: se arregla cuando
+# macOS arm64 entre al matrix (#35), no antes, porque el fix toca el nucleo
+# del interprete y hoy no rompe ninguna plataforma soportada.
+m68kcpu.h|load of misaligned address

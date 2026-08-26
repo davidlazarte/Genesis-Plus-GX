@@ -33,6 +33,27 @@ else
 DL_LIBS := -ldl
 endif
 
+# libFuzzer usa `log()` en su heuristica de energia. Con ASan estatico el
+# runtime arrastraba libm de arriba; con `-shared-libsan` ya no, y el link
+# muere con "undefined reference to symbol 'log@@GLIBC_2.29'". Es la mitad que
+# faltaba del cambio a runtime dinamico, no una dependencia nueva.
+ifeq ($(OS),Windows_NT)
+FUZZ_LIBS :=
+ASAN_PRELOAD :=
+else
+FUZZ_LIBS := -lm
+# Tercera y ultima pieza del runtime dinamico: ASan exige ser la PRIMERA
+# biblioteca de la lista inicial, y con `-shared-libsan` no lo es. Sin esto el
+# proceso muere con "ASan runtime does not come first in initial library list".
+# Se resuelve preinyectandolo; el propio clang sabe donde esta.
+ASAN_SO := $(shell $(FUZZ_CC) -print-file-name=libclang_rt.asan-x86_64.so 2>/dev/null)
+ifneq ($(wildcard $(ASAN_SO)),)
+ASAN_PRELOAD := LD_PRELOAD="$(ASAN_SO)"
+else
+ASAN_PRELOAD :=
+endif
+endif
+
 # El ROM sintetico es la base de casi todos los targets: la entrada del fuzzer
 # es una MUTACION sobre algo valido, no bytes al azar desde cero. Empezar del
 # vacio gasta el presupuesto en llegar a "es un cartucho".
@@ -90,14 +111,26 @@ $(BUILD_DIR):
 	$(call make_dir,$(BUILD_DIR))
 
 # --- build con libFuzzer (clang) ------------------------------------------
+# `-shared-libsan` no es un detalle de gusto: sin el, clang linkea el runtime de
+# ASan ESTATICO dentro del ejecutable, y cuatro de los cinco targets hacen
+# `dlopen` de un core que el job nocturno compila con `-shared-libsan`. Las dos
+# copias del runtime no conviven y el proceso muere antes del primer caso, con
+# "Your application is linked against incompatible ASan runtimes" -- que no es
+# un hallazgo del fuzzer sino el target roto, y se veia igual de rojo.
+#
+# El workflow ya exportaba `LD_LIBRARY_PATH=$(clang -print-runtime-dir)` para
+# encontrar ese runtime al ejecutar; faltaba la mitad que lo pide. `audio_ring`
+# no carga el core y pasaba: por eso el job fallaba 4 de 5 y no 5 de 5, que es
+# la pista de que el problema estaba en el `dlopen` y no en el codigo.
 define FUZZ_RULE
 $(BUILD_DIR)/fuzz_$(1)$(EXE_EXT): fuzz_$(1).c $$(SRC_$(1)) $$(DEP_$(1)) | $(BUILD_DIR)
 	$$(FUZZ_CC) -O1 -g -Wall -Wextra $$(CPPFLAGS) $$(INC_$(1)) \
-		-fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer \
-		-o $$@ fuzz_$(1).c $$(SRC_$(1)) $$(DL_LIBS)
+		-fsanitize=fuzzer,address,undefined -shared-libsan \
+		-fno-omit-frame-pointer \
+		-o $$@ fuzz_$(1).c $$(SRC_$(1)) $$(DL_LIBS) $$(FUZZ_LIBS)
 
 fuzz-$(1): $$(BUILD_DIR)/fuzz_$(1)$$(EXE_EXT)
-	AYTHER_FUZZ_CORE="$$(CORE)" $$(BUILD_DIR)/fuzz_$(1)$$(EXE_EXT) \
+	$$(ASAN_PRELOAD) AYTHER_FUZZ_CORE="$$(CORE)" $$(BUILD_DIR)/fuzz_$(1)$$(EXE_EXT) \
 		corpus/$(1) -max_total_time=$$(FUZZ_SECONDS) -print_final_stats=1
 endef
 $(foreach t,$(TARGETS),$(eval $(call FUZZ_RULE,$(t))))

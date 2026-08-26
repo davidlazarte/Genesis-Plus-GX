@@ -5024,10 +5024,15 @@ static int32_t AYTHER_CALL ayther_set_subscriptions_v1(
 
    El campo numerico -- el que se usa para negociar-- sale ahora de
    AYTHER_ABI_VERSION_LATEST y no de una constante copiada a mano, y
-   `verify_ayther_api` compara el descriptor contra el header. Este string es
-   informativo; si cambia la version, se cambia aca tambien. */
+   `verify_ayther_api` compara el descriptor contra el header.
+
+   #563: el string TAMBIEN sale del header ahora. Decia «se cambia aca
+   tambien», y al agregar 1.9 no se cambio -- que es lo que pasa siempre con
+   una regla que depende de acordarse. Derivado, no hay dos lugares que puedan
+   discrepar. */
 static const char ayther_build_id[] =
-   "Genesis Plus GX AYTHER ABI 1.8; core v1.7.4" GIT_VERSION;
+   "Genesis Plus GX AYTHER ABI " AYTHER_ABI_VERSION_LATEST_STR
+   "; core v1.7.4" GIT_VERSION;
 
 #if defined(LSB_FIRST) || defined(_WIN32) || defined(__LITTLE_ENDIAN__)
 #define AYTHER_HOST_ENDIANNESS AYTHER_ENDIAN_LITTLE

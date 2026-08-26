@@ -108,6 +108,22 @@ extern "C" {
 #define AYTHER_ABI_VERSION_1_9 UINT32_C(0x00010009)
 #define AYTHER_ABI_VERSION_LATEST AYTHER_ABI_VERSION_1_9
 
+/* La version mas nueva, COMO TEXTO, derivada y no copiada.
+ *
+ * El `ayther_build_id` la traia escrita a mano y ya se desincronizo una vez
+ * (#55: decia 1.3 con el header en 1.7). El comentario que quedo de ese
+ * arreglo dice «si cambia la version, se cambia aca tambien» -- y eso es
+ * precisamente lo que no se puede garantizar. Al agregar 1.9 volvio a pasar:
+ * el string seguia diciendo 1.8.
+ *
+ * Derivarlo lo hace imposible: el numero y el texto salen de las mismas dos
+ * constantes, asi que no hay dos lugares que puedan discrepar. */
+#define AYTHER_ABI_VERSION_MAJOR_LATEST 1
+#define AYTHER_ABI_VERSION_MINOR_LATEST 9
+#define AYTHER__STR2(x) #x
+#define AYTHER__STR(x)  AYTHER__STR2(x)
+#define AYTHER_ABI_VERSION_LATEST_STR    AYTHER__STR(AYTHER_ABI_VERSION_MAJOR_LATEST) "."    AYTHER__STR(AYTHER_ABI_VERSION_MINOR_LATEST)
+
 #define AYTHER_ABI_VERSION_MAJOR(v) ((uint32_t)(v) >> 16)
 #define AYTHER_ABI_VERSION_MINOR(v) ((uint32_t)(v) & UINT32_C(0xFFFF))
 

@@ -1,0 +1,33 @@
+# Puntos de contacto con upstream (#68): hunks nuestros por archivo de
+# upstream, medidos contra el merge-base con upstream/master.
+# Regenerar con: bash tests/ci/check_upstream_contact.sh --regen
+# Subir un numero es legitimo si se dice por que en el mismo PR.
+3 .gitignore
+5 Makefile.libretro
+1 README.md
+1 builds/README.md
+9 core/cd_hw/pcm.c
+2 core/debug/cpuhook.h
+3 core/genesis.c
+1 core/input_hw/gamepad.c
+1 core/input_hw/gamepad.h
+1 core/loadrom.c
+1 core/loadrom.h
+1 core/shared.h
+25 core/sound/psg.c
+1 core/sound/psg.h
+9 core/sound/sound.c
+2 core/sound/sound.h
+13 core/sound/ym2612.c
+3 core/sound/ym3438.c
+1 core/sound/ym3438.h
+4 core/state.c
+1 core/state.h
+3 core/system.c
+45 core/vdp_ctrl.c
+5 core/vdp_ctrl.h
+127 core/vdp_render.c
+2 core/vdp_render.h
+3 libretro/Makefile.common
+25 libretro/libretro.c
+2 libretro/link.T

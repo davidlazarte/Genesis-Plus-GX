@@ -480,10 +480,15 @@ everything that was not Mode 5, so the core was recomposing an SMS frame
 pixel-perfect *while* flagging it as an unsupported mode. A frontend trusting
 the mask would have skipped a recomposition that works.
 
-The test is opt-in (`AYTHER_SMS_ROM`) because a commercial ROM cannot live in
-the repository, and it skips in CI. Closing that gap needs a synthetic SMS
-fixture, and the generator emits **68000** while a Master System cartridge runs
-**Z80** — a new emitter, not a parameter.
+The test runs in CI against a **synthetic SMS fixture** built by
+`ayther_build_generated_rom_sms`. The generator emits 68000 and a Master System
+cartridge runs Z80, so that fixture is a second emitter, not a parameter — see
+`tests/README.md`. With known sprite coordinates the criterion is checked
+exactly: suppressing slot 3 changes 64 pixels, none of them outside that
+sprite's 8×8.
+
+`AYTHER_SMS_ROM` is now the optional path: point it at a real cartridge and the
+same test runs against it.
 
 `AYTHER_CAP_MODE4_CONTROLS` announces that the rows above have become "yes".
 While the bit is absent, the table is the contract.

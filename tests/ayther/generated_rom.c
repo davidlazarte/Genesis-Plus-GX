@@ -872,6 +872,198 @@ size_t ayther_build_generated_rom_sh(uint8_t *rom, size_t capacity)
   return build_rom(rom, capacity, emit_reset_program_sh);
 }
 
+/* #40: un cartucho de Master System, generado igual que los de Mega Drive.
+ *
+ * Por que hizo falta un emisor nuevo. Todo lo de arriba emite 68000, y un
+ * cartucho de Master System corre Z80: no es un parametro del generador, es
+ * otro procesador y otro VDP. Mientras no existiera, la unica forma de probar
+ * Mode 4 era un ROM comercial, que no puede vivir en el repo -- asi que la
+ * cobertura de #40 se salteaba en CI y dependia de que alguien tuviera un
+ * cartucho a mano.
+ *
+ * El truco que lo hace chico: la name table se deja en CEROS. Toda celda
+ * apunta al tile 0, asi que alcanza con escribir UN patron para que la pantalla
+ * entera tenga fondo, en vez de emitir 1.536 bytes de tabla. El VDP de la SMS
+ * autoincrementa la direccion, asi que cada bloque es "poner direccion" y
+ * despues N escrituras al puerto de datos.
+ *
+ * La escena esta armada para que cada afirmacion del test tenga un oraculo por
+ * COLOR, sin reimplementar el renderer:
+ *
+ *   fondo     tile 0 solido, indice 1 de la paleta de fondo   (rojo)
+ *   backdrop  reg7 = 0, o sea la entrada 16                   (azul)
+ *   sprites   ocho de 8x8, patron 1 solido, indice 2          (verde)
+ *
+ * Apagar el fondo deja la pantalla azul; suprimir un sprite le saca su cuadrado
+ * verde. Las dos cosas se ven en un hash del frame.
+ */
+
+/* Puertos del VDP de la Master System. */
+#define SMS_VDP_DATA    0xBEu
+#define SMS_VDP_CONTROL 0xBFu
+
+/* Codigos de direccion: bits altos del segundo byte del par. */
+#define SMS_VRAM_WRITE  0x40u
+#define SMS_CRAM_WRITE  0xC0u
+
+#define SMS_SPRITES     8u
+#define SMS_SPRITE_Y    96u
+#define SMS_SPRITE_X0   40u
+#define SMS_SPRITE_STEP 24u
+
+static void emit_u8(struct rom_builder *builder, uint8_t value)
+{
+  if (builder->pc + 1u > AYTHER_GENERATED_ROM_SIZE)
+  {
+    builder->failed = 1;
+    return;
+  }
+  builder->rom[builder->pc] = value;
+  builder->pc += 1u;
+}
+
+/* LD A,value ; OUT (port),A  -- cuatro bytes. Se usa en vez de OTIR a
+   proposito: OTIR necesita que los datos vivan en el ROM y que HL los apunte,
+   y para los ~100 bytes que esta escena escribe el ahorro no paga la
+   complicacion de tener bloques de datos que ubicar. */
+static void z80_out_imm(struct rom_builder *builder, uint8_t port, uint8_t value)
+{
+  emit_u8(builder, 0x3Eu);          /* LD A,n   */
+  emit_u8(builder, value);
+  emit_u8(builder, 0xD3u);          /* OUT (n),A */
+  emit_u8(builder, port);
+}
+
+/* Escribir un registro del VDP: primero el valor, despues 0x80|registro. */
+static void sms_vdp_register(struct rom_builder *builder, uint8_t reg,
+                             uint8_t value)
+{
+  z80_out_imm(builder, SMS_VDP_CONTROL, value);
+  z80_out_imm(builder, SMS_VDP_CONTROL, (uint8_t)(0x80u | reg));
+}
+
+/* Apuntar el VDP a una direccion, con el codigo de destino en los bits altos. */
+static void sms_vdp_address(struct rom_builder *builder, uint16_t address,
+                            uint8_t code)
+{
+  z80_out_imm(builder, SMS_VDP_CONTROL, (uint8_t)(address & 0xFFu));
+  z80_out_imm(builder, SMS_VDP_CONTROL, (uint8_t)(code | (address >> 8)));
+}
+
+static void sms_vdp_write(struct rom_builder *builder, uint8_t value)
+{
+  z80_out_imm(builder, SMS_VDP_DATA, value);
+}
+
+/* Un tile de 8x8 solido del indice dado. El formato es de cuatro bitplanes:
+   cuatro bytes por fila, uno por plano, y el bit n de cada plano es el bit n
+   del color de ese pixel. */
+static void sms_solid_tile(struct rom_builder *builder, uint8_t color)
+{
+  unsigned int row, plane;
+  for (row = 0; row < 8u; ++row)
+    for (plane = 0; plane < 4u; ++plane)
+      sms_vdp_write(builder, (uint8_t)((color & (1u << plane)) ? 0xFFu : 0x00u));
+}
+
+static void emit_reset_program_sms(struct rom_builder *builder)
+{
+  unsigned int i;
+
+  emit_u8(builder, 0xF3u);          /* DI            */
+  emit_u8(builder, 0xEDu);          /* IM 1          */
+  emit_u8(builder, 0x56u);
+  emit_u8(builder, 0x31u);          /* LD SP,0xDFF0  */
+  emit_u8(builder, 0xF0u);
+  emit_u8(builder, 0xDFu);
+
+  /* Registros del VDP. reg1 arranca con la pantalla APAGADA: escribir VRAM con
+     el display encendido compite con el fetch del renderer, y el fixture tiene
+     que salir igual en cada corrida. */
+  sms_vdp_register(builder, 0u,  0x06u);   /* Mode 4                        */
+  sms_vdp_register(builder, 1u,  0x00u);   /* pantalla apagada por ahora    */
+  sms_vdp_register(builder, 2u,  0xFFu);   /* name table -> 0x3800          */
+  sms_vdp_register(builder, 3u,  0xFFu);   /* sin uso en Mode 4             */
+  sms_vdp_register(builder, 4u,  0xFFu);   /* sin uso en Mode 4             */
+  sms_vdp_register(builder, 5u,  0xFFu);   /* SAT -> 0x3F00                 */
+  sms_vdp_register(builder, 6u,  0xFBu);   /* patrones de sprite -> 0x0000  */
+  sms_vdp_register(builder, 7u,  0x00u);   /* backdrop = entrada 16         */
+  sms_vdp_register(builder, 8u,  0x00u);   /* scroll horizontal             */
+  sms_vdp_register(builder, 9u,  0x00u);   /* scroll vertical               */
+  sms_vdp_register(builder, 10u, 0xFFu);   /* contador de linea apagado     */
+
+  /* CRAM: 32 entradas de un byte, --BBGGRR. Las 16 primeras son la paleta de
+     fondo y las 16 siguientes la de sprites; el backdrop sale de la segunda. */
+  sms_vdp_address(builder, 0x0000u, SMS_CRAM_WRITE);
+  for (i = 0; i < 32u; ++i)
+  {
+    uint8_t color = 0x00u;
+    if (i == 1u)  color = 0x03u;   /* fondo:    rojo  */
+    if (i == 16u) color = 0x30u;   /* backdrop: azul  */
+    if (i == 18u) color = 0x0Cu;   /* sprites:  verde */
+    sms_vdp_write(builder, color);
+  }
+
+  /* Patron 0 (0x0000): el fondo. Patron 1 (0x0020): los sprites. */
+  sms_vdp_address(builder, 0x0000u, SMS_VRAM_WRITE);
+  sms_solid_tile(builder, 1u);
+  sms_solid_tile(builder, 2u);
+
+  /* SAT. Las 64 primeras posiciones son las Y; 0xD0 corta la lista. La Y que
+     el VDP quiere es la de pantalla MENOS uno. */
+  sms_vdp_address(builder, 0x3F00u, SMS_VRAM_WRITE);
+  for (i = 0; i < SMS_SPRITES; ++i)
+    sms_vdp_write(builder, (uint8_t)(SMS_SPRITE_Y - 1u));
+  sms_vdp_write(builder, 0xD0u);
+
+  /* Desde 0x3F80 van los pares (X, patron), uno por sprite. Cada uno en su
+     propia X para que suprimir uno se note por posicion y no solo por conteo. */
+  sms_vdp_address(builder, 0x3F80u, SMS_VRAM_WRITE);
+  for (i = 0; i < SMS_SPRITES; ++i)
+  {
+    sms_vdp_write(builder, (uint8_t)(SMS_SPRITE_X0 + i * SMS_SPRITE_STEP));
+    sms_vdp_write(builder, 1u);
+  }
+
+  /* Recien ahora se enciende la pantalla. */
+  sms_vdp_register(builder, 1u, 0x40u);
+
+  /* Y a esperar para siempre: la escena es estatica a proposito. Un fixture
+     que cambia con el tiempo obliga a elegir en que frame mirarlo. */
+  emit_u8(builder, 0x18u);          /* JR -2 */
+  emit_u8(builder, 0xFEu);
+}
+
+size_t ayther_build_generated_rom_sms(uint8_t *rom, size_t capacity)
+{
+  struct rom_builder builder;
+
+  if (!rom || capacity < AYTHER_GENERATED_ROM_SIZE)
+    return 0;
+
+  memset(rom, 0, AYTHER_GENERATED_ROM_SIZE);
+  builder.rom = rom;
+  builder.pc = 0;                   /* el Z80 arranca en 0x0000 */
+  builder.failed = 0;
+
+  emit_reset_program_sms(&builder);
+  if (builder.failed)
+    return 0;
+
+  /* Cabecera "TMR SEGA": es lo que mira el core para la region y el tamanio.
+     Sin ella el cartucho igual corre, pero la deteccion queda a la deriva y el
+     fixture dejaria de ser deterministico entre versiones. */
+  memcpy(rom + 0x7FF0u, "TMR SEGA", 8u);
+  rom[0x7FFAu] = 0x00u;             /* checksum, ignorado por el core */
+  rom[0x7FFBu] = 0x00u;
+  rom[0x7FFCu] = 0x00u;             /* codigo de producto             */
+  rom[0x7FFDu] = 0x00u;
+  rom[0x7FFEu] = 0x00u;
+  rom[0x7FFFu] = 0x4Cu;             /* region export, tamanio 32 KB   */
+
+  return AYTHER_GENERATED_ROM_SIZE;
+}
+
 size_t ayther_build_generated_rom_sprites(uint8_t *rom, size_t capacity)
 {
   return build_rom(rom, capacity, emit_reset_program_sprites);

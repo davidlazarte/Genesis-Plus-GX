@@ -525,3 +525,43 @@ Two things that fell out of building the job, both real:
   A diagnosis that already answered its question and is left in informative mode
   is a job nobody reads. The handlers stay installed: if it ever comes back, the
   log will say why instead of leaving an unexplained exit code.
+## The SMS fixture, and what it caught (#40)
+
+`make -C tests check-mode4 CORE=...` now runs in CI. It used to skip, because
+Mode 4 could only be exercised with a commercial Master System cartridge and one
+cannot live in this repository.
+
+The generator emits **68000**; a Master System cartridge runs **Z80**. That is
+not a parameter, it is another processor and another VDP, so
+`ayther_build_generated_rom_sms` is a second emitter. What keeps it small is
+leaving the name table at **zero**: every cell then points at tile 0, so writing
+one pattern gives the whole screen a background instead of emitting 1,536 bytes
+of table.
+
+The scene is built so each assertion has a **colour** oracle:
+
+| | |
+|---|---|
+| background | tile 0 solid, background palette index 1 — red |
+| backdrop | `reg7 = 0`, i.e. entry 16 — blue |
+| sprites | eight 8×8, pattern 1 solid, index 2 — green |
+
+Hiding the background leaves the screen blue; suppressing a sprite removes its
+green square. And because the positions are known, "suppressing slot 3 removes
+*exactly* that sprite" stops being "the hash changed" and becomes a check by
+coordinate: **64 pixels differ, 0 of them outside that sprite's 8×8**. That is
+the acceptance criterion as written.
+
+**On its first run the fixture found a defect the commercial ROM could not
+show.** The Mode 4 suppression gate did `++i` before `continue`, and the loop is
+`do { } while (++i < 64)` — so it skipped **two** slots, and suppressing slot 3
+also erased slot 4. Against Sonic the test only asserted "the hash changed",
+which was true either way. A deterministic scene with known coordinates is what
+turns a passing test into a failing one.
+
+`AYTHER_SMS_ROM` still exists and is now the *optional* path: point it at a real
+cartridge and the same test runs against it. The fixture proves the contract
+holds; a real cartridge proves it holds on something nobody designed to pass it.
+That path is also weaker by necessity — `DRAWN` means "reached the draw loop",
+not "painted visible pixels", so with an arbitrary ROM the test tries the drawn
+slots until one visibly changes the frame and asserts that *some* slot does.

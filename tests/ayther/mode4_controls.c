@@ -1,16 +1,15 @@
-/* #40 fase 2: los controles del fork en Mode 4, contra un cartucho real.
+/* #40 fase 2: los controles del fork en Mode 4.
  *
- * Es OPT-IN: necesita un ROM de Master System, y un ROM comercial no puede
- * estar en el repo. Sin `AYTHER_SMS_ROM` apuntando a uno, el test se saltea y
- * lo dice. En CI se saltea siempre.
+ * Corre con el FIXTURE SMS del repo -- codigo Z80 generado por
+ * `ayther_build_generated_rom_sms`-, asi que entra en CI como cualquier otra
+ * suite. Antes dependia de un ROM comercial, que no puede vivir aca, y por eso
+ * se salteaba: una implementacion sin nada que la ejercite es como llegamos a
+ * que `raster_rom_probe` estuviera roto durante meses.
  *
- * Por que existe igual. Hasta fase 1 estos controles contestaban
- * UNSUPPORTED_MODE en Mode 4 -- honesto, pero inutil: el frontend sabia que no
- * podia ocultar nada-. Fase 2 los implementa, y una implementacion sin nada que
- * la ejercite es como llegamos a que `raster_rom_probe` estuviera roto durante
- * meses. Mientras no exista un fixture SMS en el repo -- el generador emite
- * 68000 y un cartucho de Master System corre Z80-, esto es lo que hay, y es
- * mucho mejor que nada.
+ * `AYTHER_SMS_ROM` sigue existiendo y ahora es lo OPCIONAL: apuntandola a un
+ * cartucho real, el mismo test corre sobre el. El fixture prueba que el
+ * contrato se cumple; un cartucho real prueba que se cumple sobre algo que
+ * nadie diseno para pasarlo.
  *
  * Lo que afirma, todo con oraculo por diferencia contra el mismo frame sin
  * tocar nada:
@@ -30,6 +29,7 @@
 #include <stdint.h>
 #include <libretro.h>
 #include "ayther_api.h"
+#include "generated_rom.h"
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -97,6 +97,26 @@ static void poll_cb(void) {}
 static int16_t input_cb(unsigned a, unsigned b, unsigned c, unsigned d)
 { (void)a; (void)b; (void)c; (void)d; return 0; }
 
+/* #40: cuantos pixeles difieren, y si alguno cae FUERA de un rectangulo dado.
+   Con el fixture -- ocho sprites de 8x8 en posiciones conocidas-- eso convierte
+   "suprimir el slot 3" en una afirmacion por coordenada en vez de un hash que
+   cambio. Un hash distinto solo dice que algo se movio; esto dice QUE. */
+static void diff_outside(const uint16_t *before, unsigned x0, unsigned y0,
+                         unsigned w, unsigned h,
+                         unsigned *total, unsigned *outside)
+{
+  unsigned x, y;
+  *total = 0; *outside = 0;
+  for (y = 0; y < frame_h; ++y)
+    for (x = 0; x < frame_w; ++x)
+    {
+      size_t k = (size_t)y * frame_w + x;
+      if (before[k] == frame_px[k]) continue;
+      ++*total;
+      if (x < x0 || x >= x0 + w || y < y0 || y >= y0 + h) ++*outside;
+    }
+}
+
 static uint64_t hash_frame(void)
 {
   uint64_t h = UINT64_C(1469598103934665603);
@@ -112,6 +132,7 @@ int main(int argc, char **argv)
 {
   const char *rom_path = getenv("AYTHER_SMS_ROM");
   static uint8_t rom[1u << 20];
+  const char *rom_name;
   static uint16_t recomposed[MAX_PX];
   static uint8_t outcome[AYTHER_SPRITE_SAT_SLOTS];
   static uint8_t mask[16];
@@ -125,18 +146,30 @@ int main(int argc, char **argv)
   int i, fail = 0;
 
   if (argc < 2) { fprintf(stderr, "uso: %s <core>\n", argv[0]); return 2; }
-  if (!rom_path || !*rom_path) {
-    printf("mode4-controls: SALTEADO (defini AYTHER_SMS_ROM=<ruta a un .sms>)\n");
-    return 0;
+  if (rom_path && *rom_path)
+  {
+    f = fopen(rom_path, "rb");
+    if (!f) {
+      fprintf(stderr, "no se puede abrir %s\n", rom_path);
+      return 2;
+    }
+    rom_size = fread(rom, 1, sizeof(rom), f);
+    fclose(f);
+    if (!rom_size) { fprintf(stderr, "ROM vacio\n"); return 2; }
+    rom_name = rom_path;
+    printf("cartucho: %s (%lu bytes)\n", rom_path, (unsigned long)rom_size);
   }
-  f = fopen(rom_path, "rb");
-  if (!f) {
-    printf("mode4-controls: SALTEADO (no se puede abrir %s)\n", rom_path);
-    return 0;
+  else
+  {
+    rom_size = ayther_build_generated_rom_sms(rom, sizeof(rom));
+    if (!rom_size) {
+      fprintf(stderr, "no se pudo construir el fixture SMS\n");
+      return 2;
+    }
+    rom_name = "ayther-sms-v1.sms";
+    printf("cartucho: fixture SMS del repo (%lu bytes)\n",
+           (unsigned long)rom_size);
   }
-  rom_size = fread(rom, 1, sizeof(rom), f);
-  fclose(f);
-  if (!rom_size) { printf("mode4-controls: SALTEADO (ROM vacio)\n"); return 0; }
 
   lib = open_library(argv[1]);
   if (!lib) { fprintf(stderr, "no carga %s\n", argv[1]); return 2; }
@@ -161,11 +194,11 @@ int main(int argc, char **argv)
     p_init();
 
     memset(&gi_ext, 0, sizeof(gi_ext));
-    gi_ext.full_path = rom_path; gi_ext.dir = "."; gi_ext.name = "sms";
+    gi_ext.full_path = rom_name; gi_ext.dir = "."; gi_ext.name = "sms";
     gi_ext.ext = "sms"; gi_ext.data = rom; gi_ext.size = rom_size;
     gi_ext.persistent_data = true;
     memset(&gi, 0, sizeof(gi));
-    gi.path = rom_path; gi.data = rom; gi.size = rom_size;
+    gi.path = rom_name; gi.data = rom; gi.size = rom_size;
     if (!p_load(&gi)) { fprintf(stderr, "load_game fallo\n"); close_library(lib); return 2; }
 
     api = p_iface(0);
@@ -245,20 +278,77 @@ int main(int argc, char **argv)
         fail = 1;
       } else {
         uint64_t suppressed;
-        printf("se suprime el slot %d, que estaba dibujandose\n", victim);
-        memset(mask, 0, sizeof(mask));
-        mask[victim >> 3] = (uint8_t)(1u << (victim & 7));
-        if (api->write_control(AYTHER_REGION_SPRITE_SUPPRESS, 0, mask,
-                               sizeof(mask), AYTHER_GENERATION_ANY, NULL)
-              != AYTHER_STATUS_OK) {
-          printf("  FALLA: suprimir un sprite en Mode 4 tendria que aceptarse\n");
-          fail = 1;
+        static uint16_t before[MAX_PX];
+        /* Con el fixture se elige el slot 3, que es el que nombra el criterio
+           de aceptacion y del que sabemos que es visible.
+
+           Con un cartucho arbitrario no se puede saber cual lo es: DRAWN
+           significa "llego al bucle de dibujo", no "pinto pixeles que se ven".
+           Un sprite con patron transparente, o tapado por otro de mayor
+           prioridad, llega igual. Asi que se prueban los slots dibujados hasta
+           encontrar uno que de verdad cambie el frame, y lo que se afirma es
+           que ALGUNO lo hace: suprimir tiene que tener efecto visible en
+           alguna parte, aunque no sepamos de antemano en cual. */
+        {
+          int tried = 0, changed = 0;
+          for (i = 0; i < (int)sizeof(outcome) && !changed && tried < 16; ++i)
+          {
+            if (!(outcome[i] & AYTHER_SPR_OUT_DRAWN)) continue;
+            if (!rom_path && i != 3 && (outcome[3] & AYTHER_SPR_OUT_DRAWN))
+              continue;              /* el fixture usa el 3 y solo el 3 */
+            victim = i;
+            ++tried;
+            memcpy(before, frame_px, sizeof(before));
+            memset(mask, 0, sizeof(mask));
+            mask[victim >> 3] = (uint8_t)(1u << (victim & 7));
+            if (api->write_control(AYTHER_REGION_SPRITE_SUPPRESS, 0, mask,
+                                   sizeof(mask), AYTHER_GENERATION_ANY, NULL)
+                  != AYTHER_STATUS_OK) {
+              printf("  FALLA: suprimir un sprite en Mode 4 tendria que aceptarse\n");
+              fail = 1;
+              break;
+            }
+            {
+              int f2;
+              for (f2 = 0; f2 < 8; f2++) p_run();
+            }
+            suppressed = hash_frame();
+            changed = (suppressed != base_hash);
+            if (!changed) {
+              memset(mask, 0, sizeof(mask));
+              api->write_control(AYTHER_REGION_SPRITE_SUPPRESS, 0, mask,
+                                 sizeof(mask), AYTHER_GENERATION_ANY, NULL);
+              {
+                int f2;
+                for (f2 = 0; f2 < 8; f2++) p_run();
+              }
+            }
+          }
+          printf("se suprimio el slot %d (%d probados)\n", victim, tried);
+          if (!changed) {
+            printf("  FALLA: ningun sprite dibujado cambia el frame al "
+                   "suprimirlo\n");
+            fail = 1;
+          }
         }
-        for (i = 0; i < 8; i++) p_run();
-        suppressed = hash_frame();
-        if (suppressed == base_hash) {
-          printf("  FALLA: el sprite se dibujaba y suprimirlo no cambio nada\n");
-          fail = 1;
+        /* El oraculo exacto: con el fixture sabemos DONDE esta ese sprite, asi
+           que lo que cambio tiene que caber en sus 8x8 y nada mas. */
+        if (!rom_path)
+        {
+          unsigned total = 0, outside = 0;
+          unsigned x0 = AYTHER_SMS_SPRITE_X0 + (unsigned)victim * 24u;
+          diff_outside(before, x0, AYTHER_SMS_SPRITE_Y, 8u, 8u,
+                       &total, &outside);
+          printf("  cambiaron %u pixeles, %u fuera del sprite %d (%u,%u 8x8)\n",
+                 total, outside, victim, x0, AYTHER_SMS_SPRITE_Y);
+          if (total != 64u) {
+            printf("  FALLA: un sprite de 8x8 son 64 pixeles, no %u\n", total);
+            fail = 1;
+          }
+          if (outside) {
+            printf("  FALLA: suprimir un sprite tiene que sacar EXACTAMENTE ese\n");
+            fail = 1;
+          }
         }
         if (api->read_region(AYTHER_REGION_SPRITE_OUTCOME, 0, outcome,
                              sizeof(outcome), AYTHER_GENERATION_ANY, NULL)

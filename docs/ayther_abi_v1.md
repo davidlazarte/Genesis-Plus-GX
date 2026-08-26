@@ -437,6 +437,30 @@ answer.
 `vdp_mode` is `0` on a Mega Drive cartridge until the program writes register 1:
 before that the VDP has not chosen, and answering "Mode 4" would be inventing.
 
+### The viewport is the *emitted* frame (#40)
+
+`viewport_w/h` are the dimensions of the frame the frontend receives through
+`video_refresh`: 256x224 on Mega Drive, 256x192 on Master System, **160x144 on
+Game Gear**. `ATTRIBUTION` describes that same rectangle, one byte per pixel,
+and `recompose_frame` returns that same size.
+
+The Game Gear is the case where this stops being a formality. The core crops it
+by giving `bitmap.viewport` *negative* offsets (`x = -48`, `y = -24`) and
+leaving `w/h` at the VDP's internal 256x192; the emitted width is
+`w + 2*x`. Copying `w/h` into the descriptor made all three regions report the
+internal area while advertising the emitted one, and because the fields are
+unsigned, `x = -48` wrapped to 65488 — so a consumer could not even recover the
+crop to correct for it. Attribution was worse than either consistent choice: it
+already added `viewport.y` to the row but neither subtracted `viewport.x` from
+the column nor shrank its declared height, so indexing it by emitted-frame
+coordinates read a shifted row *and* the wrong column.
+
+`viewport_x/y` are the offset at which the emitted frame starts inside the
+active area — `(48,24)` on Game Gear, `(0,0)` everywhere else. When a build
+delivers overscan the frame is *larger* than the active area rather than
+smaller; there is no offset to give, so they stay zero and `viewport_w/h`
+already include the borders.
+
 ## Control × video mode (#40)
 
 Not every control means something in every video mode. Until #40 the ones that

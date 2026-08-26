@@ -71,8 +71,25 @@ AYTHER_HOT_INLINE void ayther_line_before_bg(int line, int ayther_observed,
         /* Las dimensiones son las del frame emitido y se refrescan por línea: el
            viewport puede cambiar entre frames y el consumidor tiene que poder
            interpretar el buffer sin adivinarlas. */
-        ayther_attrib_width  = (uint32)bitmap.viewport.w;
-        ayther_attrib_height = (uint32)bitmap.viewport.h;
+        /* #40: las dimensiones son las del frame EMITIDO, no las del area
+           interna del VDP, y en Game Gear no son lo mismo.
+
+           El core recorta la Game Gear a 160x144 con offsets NEGATIVOS
+           (`viewport.x = -48`, `y = -24`), asi que `viewport.w/h` siguen
+           diciendo 256x192 mientras el frontend recibe 160x144. Esta region
+           promete "un byte por pixel del frame emitido"; describir el area
+           interna la convertia en una promesa falsa justo en el hardware donde
+           las dos cosas se separan.
+
+           Y estaba a MEDIO ajustar, que es peor que cualquiera de las dos
+           opciones consistentes: la fila ya sumaba `viewport.y` -- ver mas
+           abajo-- pero el alto seguia siendo el interno y la columna no
+           restaba `viewport.x`. Un consumidor que indexara por coordenada del
+           frame emitido leia la fila corrida y la columna equivocada. */
+        ayther_attrib_width  = (uint32)(bitmap.viewport.w +
+                                        2 * bitmap.viewport.x);
+        ayther_attrib_height = (uint32)(bitmap.viewport.h +
+                                        2 * bitmap.viewport.y);
         ayther_attrib_flags  = (interlaced && config.render) ? 1u : 0u;
       }
 }
@@ -143,16 +160,21 @@ AYTHER_HOT_INLINE void ayther_line_render_obj(int line, int ayther_observed,
          lo son (#31 defecto 2). */
       if (ayther_attrib_capture_pending)
       {
-        const uint32 w = (uint32)bitmap.viewport.w;
+        /* #40: fila Y columna en coordenadas del frame emitido. `viewport.y`
+           ya se sumaba; `viewport.x` no se restaba, asi que en Game Gear la
+           columna 0 de la region era la columna -48 de la pantalla. */
         const int row = ayther_attrib_row + bitmap.viewport.y;
-        if (row >= 0 && (uint32)row < ayther_attrib_height && w <= 320)
+        const int skip = (bitmap.viewport.x < 0) ? -bitmap.viewport.x : 0;
+        if (row >= 0 && (uint32)row < ayther_attrib_height &&
+            ayther_attrib_width <= 320)
         {
           uint8 *out = &ayther_attrib[(size_t)row * ayther_attrib_width];
           uint32 x;
-          for (x = 0; x < w && x < ayther_attrib_width; ++x)
+          for (x = 0; x < ayther_attrib_width; ++x)
           {
-            uint8 attr = ayther_attrib_line[x];
-            if (ayther_sprite_px[0x20 + x])
+            uint32 src = x + (uint32)skip;
+            uint8 attr = ayther_attrib_line[src];
+            if (ayther_sprite_px[0x20 + src])
               attr |= AYTHER_ATTRIB_SPRITE;
             out[x] = attr;
           }

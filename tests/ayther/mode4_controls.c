@@ -183,6 +183,7 @@ int main(int argc, char **argv)
     void (*p_init)(void)                          = load_symbol(lib, "retro_init");
     bool (*p_load)(const struct retro_game_info *)= load_symbol(lib, "retro_load_game");
     void (*p_run)(void)                           = load_symbol(lib, "retro_run");
+    void (*p_unload)(void)                        = load_symbol(lib, "retro_unload_game");
     ayther_get_interface_fn p_iface =
       (ayther_get_interface_fn)load_symbol(lib, "ayther_get_interface");
     if (!p_set_env || !p_init || !p_load || !p_run || !p_iface) {
@@ -390,6 +391,132 @@ int main(int argc, char **argv)
         if (diff) {
           printf("  FALLA: la recomposicion tiene que dar el mismo frame\n");
           fail = 1;
+        }
+      }
+    }
+
+    /* --- 6. Game Gear: el frame emitido es 160x144 ---------------------- */
+    /*
+     * La Game Gear usa el MISMO VDP en Mode 4; lo que cambia es que el area
+     * visible se recorta a 160x144. El core lo hace con offsets NEGATIVOS
+     * (`viewport.x = -48`, `y = -24`), asi que `viewport.w/h` siguen diciendo
+     * 256x192 y el frame que sale por `video_refresh` mide 160x144.
+     *
+     * Esa diferencia es la pregunta del issue: si las regiones del fork
+     * describen el frame que el frontend recibe o el area interna del VDP. Un
+     * consumidor que indexe la atribucion con las coordenadas del frame
+     * emitido y reciba dimensiones internas lee la fila equivocada.
+     *
+     * El fixture sirve igual: son los mismos bytes, cargados con extension
+     * .gg. Es lo unico que el core mira para elegir el hardware.
+     */
+    {
+      struct retro_game_info gg;
+      ayther_region_info_v1 info;
+
+      p_unload();
+      memset(&gi_ext, 0, sizeof(gi_ext));
+      gi_ext.full_path = "ayther-sms-v1.gg"; gi_ext.dir = ".";
+      gi_ext.name = "gg"; gi_ext.ext = "gg";
+      gi_ext.data = rom; gi_ext.size = rom_size;
+      gi_ext.persistent_data = true;
+      memset(&gg, 0, sizeof(gg));
+      gg.path = "ayther-sms-v1.gg"; gg.data = rom; gg.size = rom_size;
+      if (!p_load(&gg)) {
+        printf("  FALLA: el mismo fixture no carga como Game Gear\n");
+        fail = 1;
+      } else {
+        api->set_subscriptions(AYTHER_SUB_RENDER_CONTROLS |
+                               AYTHER_SUB_SPRITE_CAPTURE |
+                               AYTHER_SUB_RECOMPOSITION |
+                               AYTHER_SUB_ATTRIBUTION |
+                               AYTHER_SUB_VDP_MEMORY);
+        for (i = 0; i < FRAMES; i++) p_run();
+
+        memset(&sys, 0, sizeof(sys));
+        api->read_region(AYTHER_REGION_SYSTEM, 0, &sys, sizeof(sys),
+                         AYTHER_GENERATION_ANY, NULL);
+        printf("\ngame gear: hw=%02x modo=%u descriptor=%ux%u frame emitido=%ux%u\n",
+               sys.system_hw, sys.vdp_mode, sys.viewport_w, sys.viewport_h,
+               frame_w, frame_h);
+        if (sys.system_hw != AYTHER_SYSTEM_HW_GG) {
+          printf("  FALLA: el mismo ROM con extension .gg tiene que ser Game Gear\n");
+          fail = 1;
+        }
+        if (frame_w != 160u || frame_h != 144u) {
+          printf("  FALLA: la Game Gear emite 160x144\n");
+          fail = 1;
+        }
+
+        /* El descriptor promete el frame emitido. Es la promesa que se
+           rompia: el core recorta con offsets negativos y los campos, que son
+           unsigned, publicaban 256x192 con un x envuelto a 65488. */
+        if (sys.viewport_w != frame_w || sys.viewport_h != frame_h) {
+          printf("  FALLA: el descriptor dice %ux%u y el frame es %ux%u\n",
+                 sys.viewport_w, sys.viewport_h, frame_w, frame_h);
+          fail = 1;
+        }
+        if (sys.viewport_x != 48u || sys.viewport_y != 24u) {
+          printf("  FALLA: el offset dentro del area interna es (48,24), "
+                 "no (%u,%u)\n", sys.viewport_x, sys.viewport_y);
+          fail = 1;
+        }
+
+        /* ATTRIBUTION dice "un byte por pixel del frame emitido". */
+        memset(&info, 0, sizeof(info));
+        if (api->query_region(AYTHER_REGION_ATTRIBUTION, &info, sizeof(info))
+              != AYTHER_STATUS_OK) {
+          printf("  FALLA: ATTRIBUTION tendria que existir en Game Gear\n");
+          fail = 1;
+        } else if (info.byte_size != (uint64_t)frame_w * frame_h) {
+          printf("  FALLA: atribucion de %u bytes para un frame de %ux%u\n",
+                 (unsigned)info.byte_size, frame_w, frame_h);
+          fail = 1;
+        } else {
+          printf("atribucion: %u bytes = %ux%u\n",
+                 (unsigned)info.byte_size, frame_w, frame_h);
+        }
+
+        /* Y la prueba de que los offsets del recorte son los correctos y no
+           dos numeros que dan el tamano justo: la recomposicion tiene que
+           coincidir pixel a pixel con el frame que recibio el frontend. Si el
+           recorte estuviera corrido, el tamano seguiria estando bien y esta
+           comparacion fallaria en cada pixel. */
+        {
+          uint32_t w = 0, h = 0;
+          int32_t st = api->recompose_frame(recomposed, MAX_PX, 0, &w, &h);
+          if (st != AYTHER_STATUS_OK) {
+            printf("  FALLA: recomponer en Game Gear devolvio %d\n", (int)st);
+            fail = 1;
+          } else if (w != frame_w || h != frame_h) {
+            printf("  FALLA: la recomposicion mide %ux%u y el frame %ux%u\n",
+                   w, h, frame_w, frame_h);
+            fail = 1;
+          } else {
+            unsigned diff = 0, k;
+            for (k = 0; k < w * h; ++k)
+              if (recomposed[k] != frame_px[k]) ++diff;
+            printf("recomposicion en GG: %ux%u, %u pixeles distintos de %u\n",
+                   w, h, diff, w * h);
+            if (diff) {
+              printf("  FALLA: la recomposicion de Game Gear no reproduce el "
+                     "frame emitido\n");
+              fail = 1;
+            }
+          }
+        }
+
+        /* La descomposicion por capas es de Mode 5 y punto: la Game Gear no
+           tiene plano B ni ventana. Lo que importa es que lo diga en vez de
+           devolver un tamano cualquiera, asi que se afirma el rechazo. */
+        {
+          int32_t st = api->recompose_multilayer(recomposed, NULL, NULL, NULL,
+                                                 NULL, MAX_PX, 0, NULL, NULL);
+          if (st == AYTHER_STATUS_OK) {
+            printf("  FALLA: descomponer en capas no existe en Mode 4; "
+                   "aceptarlo devuelve un plano B inventado\n");
+            fail = 1;
+          }
         }
       }
     }

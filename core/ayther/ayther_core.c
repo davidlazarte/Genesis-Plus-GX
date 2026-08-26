@@ -259,6 +259,7 @@ int ayther_recompose_frame(uint16 *out, int cap, unsigned int flags,
 #else
   ayther_render_ctx ctx;
   int    l, w, h, vs, ste, sh_rebuilt;
+  int    bitmap_viewport_x_in, bitmap_viewport_y_in;
   int    ayther_mode4;
   uint64_t rc_controls;
   uint8  rc_mask;
@@ -267,6 +268,8 @@ int ayther_recompose_frame(uint16 *out, int cap, unsigned int flags,
 
   w = bitmap.viewport.w;
   h = bitmap.viewport.h;
+  bitmap_viewport_x_in = bitmap.viewport.x;
+  bitmap_viewport_y_in = bitmap.viewport.y;
 
   /* AYTHER (#40 fase 2): Mode 4 deja de ser un rechazo y pasa a ser un camino.
      Se sigue rechazando lo que de verdad no se puede reproducir -- interlace 2,
@@ -412,6 +415,36 @@ int ayther_recompose_frame(uint16 *out, int cap, unsigned int flags,
 
   /* ---- restaurar ---- */
   ayther_render_ctx_restore(&ctx, sh_rebuilt);
+
+  /* #40: recortar al frame EMITIDO.
+
+     El renderer trabaja sobre el area interna del VDP y eso no cambia: para
+     reproducir la linea hay que reproducirla entera. Pero lo que se devuelve
+     es lo que el frontend recibe, que en Game Gear es una ventana de 160x144
+     dentro de esos 256x192. Devolver el area interna volvia imposible comparar
+     la recomposicion contra el frame -- que es exactamente para lo que existe
+     esta funcion-- y contradecia lo que ya declaran SYSTEM y ATTRIBUTION.
+
+     Se compacta en el mismo buffer: el destino de cada fila siempre queda en
+     un offset menor o igual que el origen, asi que recorrer hacia adelante no
+     pisa nada que falte leer. En Mega Drive y Master System los offsets son
+     cero, las dos dimensiones coinciden y el bucle no se ejecuta. */
+  {
+    const int off_x = (bitmap_viewport_x_in < 0) ? -bitmap_viewport_x_in : 0;
+    const int off_y = (bitmap_viewport_y_in < 0) ? -bitmap_viewport_y_in : 0;
+    const int ew = w - 2 * off_x;
+    const int eh = h - 2 * off_y;
+    if (ew > 0 && eh > 0 && (ew != w || eh != h))
+    {
+      int r;
+      for (r = 0; r < eh; r++)
+        memmove(out + (size_t)r * ew,
+                out + (size_t)(r + off_y) * w + off_x,
+                (size_t)ew * 2);
+      w = ew;
+      h = eh;
+    }
+  }
 
   if (out_w) *out_w = w;
   if (out_h) *out_h = h;

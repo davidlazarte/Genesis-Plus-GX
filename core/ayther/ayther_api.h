@@ -592,7 +592,17 @@ typedef struct ayther_system_v1
   uint16_t lines_per_frame;  /* 262 NTSC / 313 PAL                        */
 
   /* Viewport del frame emitido, en pixeles, incluido el overscan que el
-     build entrega. Es el mismo rectangulo que describe ATTRIBUTION. */
+     build entrega. Es el mismo rectangulo que describe ATTRIBUTION.
+
+     `viewport_w/h` son las dimensiones del frame que sale por video_refresh:
+     256x224 en Mega Drive, 256x192 en Master System, 160x144 en Game Gear.
+     Es la misma cuenta que hace el propio frontend del core.
+
+     `viewport_x/y` son el offset donde ese frame empieza dentro del area
+     activa del VDP. Solo la Game Gear los tiene distintos de cero (48,24),
+     porque es la unica que RECORTA. Cuando el build entrega overscan el frame
+     es mas grande que el area activa en vez de mas chico: ahi no hay offset
+     que dar y valen cero, con `viewport_w/h` ya incluyendo los bordes. */
   uint16_t viewport_x, viewport_y, viewport_w, viewport_h;
 
   uint32_t cpu_clock;        /* Hz del 68000 (o del Z80 en 8 bits)        */

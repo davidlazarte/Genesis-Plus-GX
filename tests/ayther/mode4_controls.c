@@ -371,6 +371,112 @@ int main(int argc, char **argv)
       }
     }
 
+    /* --- 5b. suprimir una celda revela el backdrop ---------------------- */
+    /*
+     * La region 0x104 oculta una CELDA de pantalla. En Mode 5 eso significa
+     * "pela el primer plano y mostra lo que hay detras": plano B, o el
+     * backdrop si B esta vacio, y lo resuelve el merge de A con B. En Mode 4
+     * hay UN plano de fondo y `render_bg_m4` no llama a `merge()`, asi que el
+     * peel no tenia donde engancharse: la region se rechazaba.
+     *
+     * Con un solo plano la operacion sigue teniendo un significado y solo uno:
+     * revelar el backdrop. El fixture lo hace comprobable por color -- fondo
+     * rojo, backdrop azul- sin reimplementar el renderer.
+     */
+    {
+      static uint16_t before[MAX_PX];
+      uint8_t cells[512];
+      unsigned total, outside;
+      const unsigned COL_A = 2u, COL_B = 20u, ROW = 1u;
+
+      memcpy(before, frame_px, sizeof(before));
+      memset(cells, 0, sizeof(cells));
+      #define MARK_CELL(r, c) do { unsigned b_ = (r) * 64u + (c);         cells[b_ >> 3] |= (uint8_t)(1u << (b_ & 7u)); } while (0)
+      MARK_CELL(ROW, COL_A);
+      MARK_CELL(ROW, COL_B);
+
+      if (api->write_control(AYTHER_REGION_TILE_SUPPRESS, 0, cells,
+                             sizeof(cells), AYTHER_GENERATION_ANY, NULL)
+            != AYTHER_STATUS_OK) {
+        printf("  FALLA: ocultar una celda en Mode 4 tendria que aceptarse\n");
+        fail = 1;
+      }
+      for (i = 0; i < 8; i++) p_run();
+
+      /* Solo esas dos celdas cambian. Se cuenta el total y se mira que nada
+         caiga fuera de la fila: el rectangulo de `diff_outside` es uno solo,
+         asi que se le pasa la fila entera y se comprueba el total aparte. */
+      diff_outside(before, 0u, ROW * 8u, frame_w, 8u, &total, &outside);
+      if (outside) {
+        printf("  FALLA: %u pixeles cambiaron fuera de la fila de celdas %u\n",
+               outside, ROW);
+        fail = 1;
+      }
+      if (total != 128u) {
+        printf("  FALLA: dos celdas de 8x8 son 128 pixeles, cambiaron %u\n",
+               total);
+        fail = 1;
+      }
+
+      /* Y lo que se revela es UN color, el mismo en las dos celdas y distinto
+         del fondo. Eso es el backdrop sin tener que decodificar RGB565. */
+      {
+        uint16_t rev = frame_px[(size_t)(ROW * 8u) * frame_w + COL_A * 8u];
+        uint16_t bg  = before[(size_t)(ROW * 8u) * frame_w + COL_A * 8u];
+        unsigned x, y, distintos = 0;
+        for (y = ROW * 8u; y < ROW * 8u + 8u; ++y) {
+          for (x = COL_A * 8u; x < COL_A * 8u + 8u; ++x)
+            if (frame_px[(size_t)y * frame_w + x] != rev) ++distintos;
+          for (x = COL_B * 8u; x < COL_B * 8u + 8u; ++x)
+            if (frame_px[(size_t)y * frame_w + x] != rev) ++distintos;
+        }
+        printf("celda oculta: %u pixeles, revelan %04x sobre un fondo %04x\n",
+               total, rev, bg);
+        if (distintos) {
+          printf("  FALLA: %u de los 128 pixeles revelados no son el mismo "
+                 "color\n", distintos);
+          fail = 1;
+        }
+        if (rev == bg) {
+          printf("  FALLA: ocultar la celda no cambio el color\n");
+          fail = 1;
+        }
+      }
+
+      /* La prueba de que se pela el FONDO y no el frame: la celda que el
+         sprite 0 tapa por completo. El sprite es 8x8 solido y cae justo en
+         una celda, y se dibuja DESPUES del peel, asi que ocultar esa celda no
+         tiene que cambiar un solo pixel. Si el peel corriera despues de los
+         sprites, o si borrara el frame en vez del fondo, aca se veria. */
+      memset(cells, 0, sizeof(cells));
+      api->write_control(AYTHER_REGION_TILE_SUPPRESS, 0, cells, sizeof(cells),
+                         AYTHER_GENERATION_ANY, NULL);
+      for (i = 0; i < 8; i++) p_run();
+      memcpy(before, frame_px, sizeof(before));
+      MARK_CELL(AYTHER_SMS_SPRITE_Y / 8u, AYTHER_SMS_SPRITE_X0 / 8u);
+      if (api->write_control(AYTHER_REGION_TILE_SUPPRESS, 0, cells,
+                             sizeof(cells), AYTHER_GENERATION_ANY, NULL)
+            != AYTHER_STATUS_OK) {
+        printf("  FALLA: ocultar la celda del sprite tendria que aceptarse\n");
+        fail = 1;
+      }
+      for (i = 0; i < 8; i++) p_run();
+      diff_outside(before, 0u, 0u, frame_w, frame_h, &total, &outside);
+      printf("celda tapada por el sprite 0: %u pixeles cambiados\n", total);
+      if (total) {
+        printf("  FALLA: el sprite tapa la celda entera; pelar el fondo "
+               "debajo no puede verse\n");
+        fail = 1;
+      }
+      #undef MARK_CELL
+
+      /* Limpiar para las secciones que siguen. */
+      memset(cells, 0, sizeof(cells));
+      api->write_control(AYTHER_REGION_TILE_SUPPRESS, 0, cells, sizeof(cells),
+                         AYTHER_GENERATION_ANY, NULL);
+      for (i = 0; i < 8; i++) p_run();
+    }
+
     /* --- 5. recomponer da el mismo frame -------------------------------- */
     {
       uint32_t w = 0, h = 0;

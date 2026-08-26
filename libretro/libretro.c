@@ -4703,18 +4703,16 @@ static int32_t AYTHER_CALL ayther_write_control_v1(uint32_t region_id,
    {
       /* #40 fase 2: lo que YA funciona en Mode 4 deja de rechazarse. La lista
          de arriba era correcta en fase 1 -- contestar UNSUPPORTED_MODE es mejor
-         que aceptar y no hacer nada-, pero hoy `parse_satb_m4` suprime por slot
-         y `render_bg_m4` suprime por (patron, paleta) y respeta la capa de
-         fondo. Seguir rechazandolos seria el error simetrico del que fase 1
-         arreglo: negar algo que si se puede cumplir. */
+         que aceptar y no hacer nada-, pero hoy `parse_satb_m4` suprime por slot,
+         `render_bg_m4` suprime por (patron, paleta) y respeta la capa de fondo,
+         y la supresion por celda (0x104) revela el backdrop desde el hook de
+         linea. Seguir rechazandolos seria el error simetrico del que fase 1
+         arreglo: negar algo que si se puede cumplir.
+
+         Lo que queda rechazado es lo que de verdad no tiene referente: apagar
+         un plano que no existe. */
       switch (region_id)
       {
-         case AYTHER_REGION_TILE_SUPPRESS:
-            /* La supresion por CELDA de pantalla (0x104) sigue sin existir en
-               Mode 4: `render_bg_m4` no pasa por el merge donde vive el peel.
-               Se dice, en vez de aceptarla y no hacer nada. */
-            ayther_raster_dirty |= AYTHER_RASTER_REASON_UNSUPPORTED_CONTROLS;
-            return AYTHER_STATUS_UNSUPPORTED_MODE;
          case AYTHER_REGION_LAYER_MASK:
             /* En Mode 4 hay UN plano de fondo: el bit de "Plano A" se
                reinterpreta como ese fondo y los de B y Window no significan

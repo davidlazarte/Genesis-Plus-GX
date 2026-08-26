@@ -108,6 +108,40 @@ AYTHER_HOT_INLINE void ayther_line_render_obj(int line, int ayther_observed,
       /* Condicional por lo mismo: si nunca se encendio, no hace falta apagarlo. */
       if (ayther_attrib_capture_pending)
         ayther_attrib_capture = 0;
+      /* AYTHER (#40): en Mode 4 y en los modos TMS el peel no tiene donde
+         engancharse. Hay UN plano de fondo, `render_bg_m4` no llama a `merge()`
+         y el hook del merge -- donde vive el peel de Mode 5- nunca corre. La
+         region 0x104 se aceptaba y no pasaba nada, o se rechazaba con
+         UNSUPPORTED_MODE; lo primero es la clase de defecto que este fork viene
+         cerrando y lo segundo era cierto pero incompleto.
+
+         Con un solo plano, "pelar la capa de adelante para ver que hay detras"
+         solo puede significar una cosa: revelar el backdrop. Es la misma rama
+         que ya toma `ayther_peel_merge` cuando la celda no tiene primer plano
+         opaco, y 0x40 es el backdrop tambien aca -- `pixel[0x40]` lo define y
+         el blanking de bordes de estos modos hace `memset(lb, 0x40, 8)`.
+
+         Va justo aca por la ventana, no por comodidad: despues de render_bg y
+         antes de los sprites, que es exactamente lo que dura el peel. Un sprite
+         sobre una celda oculta sigue viendose, igual que en Mode 5. */
+      if (ayther_peel_active && !(reg[1] & 0x04))
+      {
+        uint8 *lb = &linebuf[0][0x20];
+        const int w = bitmap.viewport.w;
+        int x = 0;
+        while (x < w)
+        {
+          const int fx   = x + ayther_peel_vx;
+          const int fcol = fx >> 3;          /* aritmetico: negativo a la izq. */
+          int seg = 8 - (fx & 7);            /* px hasta el proximo borde      */
+          if (seg > w - x) seg = w - x;
+          if (fcol >= 0 && fcol < AYTHER_TILE_COLS &&
+              AYTHER_TILE_SUPPRESSED(ayther_peel_row, fcol))
+            memset(&lb[x], 0x40, (size_t)seg);
+          x += seg;
+        }
+      }
+
       /* AYTHER: el peel sólo aplica a los merges de BG, no a los de sprites. */
       ayther_peel_active = 0;
 

@@ -468,9 +468,9 @@ do not simply returned `AYTHER_STATUS_OK` and did nothing, which is the worst
 contract available: a frontend believes it hid a sprite and draws its HD
 replacement on top of the original.
 
-Phase 2 implemented most of what phase 1 could only report. The remaining
-`UNSUPPORTED_MODE` rows are the ones that still have no referent or no
-implementation — and saying so is still better than accepting and doing nothing.
+Phase 2 implemented what phase 1 could only report. The one `UNSUPPORTED_MODE`
+row left is the one with no referent at all — turning off a plane that does not
+exist — and saying so is still better than accepting and doing nothing.
 
 | Control | Mode 5 (MD) | Mode 4 (SMS/GG/PBC) |
 |---|---|---|
@@ -478,7 +478,7 @@ implementation — and saying so is still better than accepting and doing nothin
 | `LAYER_MASK` A bit | yes — plane A | yes — **reinterpreted as *the* background**, the only one Mode 4 has |
 | `LAYER_MASK` B/W bits | yes | **`UNSUPPORTED_MODE`** — those planes do not exist, the bits have no referent |
 | `SPRITE_SUPPRESS` (0x103) | yes | yes — same mask; the Mode 4 SAT has 64 entries and the mask holds 128 |
-| `TILE_SUPPRESS` / peel (0x104) | yes | **`UNSUPPORTED_MODE`** — `render_bg_m4` does not go through the merge where the peel lives |
+| `TILE_SUPPRESS` / peel (0x104) | yes — reveals plane B, or the backdrop where B is empty | yes — reveals the backdrop; with one background plane that is the only thing "peel a layer" can mean |
 | `PLANE_TILE_SUPPRESS` (0x105/0x106) | yes | yes — same key shape (pattern, palette); in Mode 4 the fields are 9 and 1 bits instead of 11 and 2 |
 | `LAYER_DIM` (0x108) | yes | yes — `remap_line` is shared |
 | Audio mute and gain (0x10D) | yes | yes |
@@ -496,7 +496,14 @@ Master System cartridge: the system descriptor reports mode 4 at 256×192, hidin
 the background changes the frame, hiding plane B is rejected, 9 sprites are
 captured, suppressing a drawn slot changes the frame and reports `SUPPRESSED`
 rather than `DRAWN`, and recomposition returns **0 differing pixels out of
-49,152**. `tests/ci/validate_roms.sh` extends that to 300 consecutive frames,
+49,152**.
+
+The peel is checked by colour rather than by hash, which the fixture is built
+for: a hidden cell turns from the background red (`f800`) to the backdrop blue
+(`001f`), two cells change exactly 128 pixels and nothing outside them, and all
+128 revealed pixels are the *same* colour. Hiding the cell that sprite 0 covers
+completely changes **zero** pixels — which is what says the peel is applied to
+the background and before the sprite pass, not to the finished frame. `tests/ci/validate_roms.sh` extends that to 300 consecutive frames,
 all `clean_equal` with no fallback reason at all.
 
 That last part also fixed a lie: `ayther_recompose_mode_supported()` rejected

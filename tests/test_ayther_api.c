@@ -68,11 +68,13 @@ int main(void)
         "ABI 1.6 is a minor bump over 1.5");
   CHECK(AYTHER_ABI_VERSION_1_9 == UINT32_C(0x00010009),
         "ABI 1.9 is a minor bump over 1.8");
+  CHECK(AYTHER_ABI_VERSION_1_10 == UINT32_C(0x0001000A),
+        "ABI 1.10 is a minor bump over 1.9");
   /* El mensaje decia "1.6" con la constante en 1.8: se movio la comparacion y
      no el texto, asi que el test pasaba diciendo otra cosa. Ahora nombra la
      version que compara. */
-  CHECK(AYTHER_ABI_VERSION_LATEST == AYTHER_ABI_VERSION_1_9,
-        "latest ABI is 1.9");
+  CHECK(AYTHER_ABI_VERSION_LATEST == AYTHER_ABI_VERSION_1_10,
+        "latest ABI is 1.10");
 
   /* #30: la 1.4 es ADITIVA. Lo que hay que fijar no es que los campos nuevos
      existan -- eso lo dice el compilador-- sino que los viejos NO se movieron:
@@ -148,6 +150,9 @@ int main(void)
         offsetof(ayther_system_v1, lines_per_frame) == 14 &&
         offsetof(ayther_system_v1, viewport_x) == 16 &&
         offsetof(ayther_system_v1, master_clock) == 28 &&
+        /* #77: 1.10 renombra reserved0 a flags EN EL MISMO byte; si se moviera,
+           un lector de 1.5 leeria el flag donde esperaba el cero reservado. */
+        offsetof(ayther_system_v1, flags) == 35 &&
         offsetof(ayther_system_v1, rom_crc32) == 36 &&
         offsetof(ayther_system_v1, rom_bytes) == 40,
         "system descriptor fields are at frozen offsets");

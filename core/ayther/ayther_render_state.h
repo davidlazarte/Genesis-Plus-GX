@@ -180,6 +180,18 @@ uint8 ayther_spr_outcome[AYTHER_SPRITE_SAT_SLOTS];
   }                                                                          \
   else
 
+/* #43.4: el latch de suscripciones por scanline, en una linea.
+ *
+ * Se lee UNA vez por linea y no por sprite: adentro del bucle serian globales
+ * que el compilador tiene que asumir que cambian, y eso le impide mantener
+ * cosas en registros justo donde importa. Los tres parsers -- m5, m5_im2 y m4--
+ * lo tenian escrito igual. */
+#define AYTHER_SATB_LATCH()                                                  \
+  const int ayther_capture_active =                                          \
+    AYTHER_SUBSCRIBED(AYTHER_SUB_SPRITE_CAPTURE);                            \
+  const int ayther_suppression_active =                                      \
+    AYTHER_SUBSCRIBED(AYTHER_SUB_RENDER_CONTROLS)
+
 #define AYTHER_SPR_OUT_ACTIVE  AYTHER_SUBSCRIBED(AYTHER_SUB_SPRITE_CAPTURE)
 #define AYTHER_SPR_OUT_MARK(idx, bits)                                       \
   do {                                                                       \
@@ -679,6 +691,10 @@ uint64_t ayther_controls_fingerprint(void)
 #define AYTHER_SPR_MARK_PIXEL_LIMIT()  ((void)0)
 
 #define AYTHER_SPR_SUPPRESS_GATE(active, slot) if (0) { } else
+
+#define AYTHER_SATB_LATCH()                                                   \
+  const int ayther_capture_active = 0;                                        \
+  const int ayther_suppression_active = 0
 
 #define AYTHER_SPR_OUT_ACTIVE 0
 /* Sin extensiones los bits ni siquiera existen -- viven en ayther_api.h-,

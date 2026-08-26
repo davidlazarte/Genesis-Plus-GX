@@ -978,17 +978,7 @@ static uint32 make_lut_bgobj_m4(uint32 bx, uint32 sx)
 
 INLINE void merge(uint8 *srca, uint8 *srcb, uint8 *dst, uint8 *table, int width)
 {
-#ifdef AYTHER_EXTENSIONS
-  /* Antes del merge: lo consume in-place (dst == srcb). */
-  if (ayther_obj_pass)
-    ayther_obj_capture(srca, srcb, width);
-  if (ayther_attrib_capture)
-  {
-    ayther_merge_capture(srca, srcb, dst, table, width);
-    return;
-  }
-  if (ayther_peel_active) { ayther_peel_merge(srca, srcb, dst, table, width); return; }
-#endif
+  AYTHER_MERGE_HOOKS(srca, srcb, dst, table, width);
   do
   {
     *dst++ = table[(*srcb++ << 8) | (*srca++)];
@@ -4741,18 +4731,7 @@ void parse_satb_m4(int line)
   int i = 0;
   uint8 *st;
 
-  /* AYTHER (#40 fase 2): el mismo latch por scanline que en Mode 5 -- se lee
-     una vez y no por sprite-, para que el bucle no consulte un global que el
-     compilador tiene que asumir volatil. */
-#ifdef AYTHER_EXTENSIONS
-  const int ayther_capture_active =
-    AYTHER_SUBSCRIBED(AYTHER_SUB_SPRITE_CAPTURE);
-  const int ayther_suppression_active =
-    AYTHER_SUBSCRIBED(AYTHER_SUB_RENDER_CONTROLS);
-#else
-  const int ayther_capture_active = 0;
-  const int ayther_suppression_active = 0;
-#endif
+  AYTHER_SATB_LATCH();
 
   /* Sprite counter (8 max. per line) */
   int count = 0;
@@ -4913,16 +4892,7 @@ void parse_satb_m5(int line)
   int total = max_sprite_pixels >> 2;
   int total0 = total;   /* AYTHER: para chain_pos = total0 - total */
 
-  /* Runtime feature state is latched once per scanline, outside the SAT loop. */
-#ifdef AYTHER_EXTENSIONS
-  const int ayther_capture_active =
-    AYTHER_SUBSCRIBED(AYTHER_SUB_SPRITE_CAPTURE);
-  const int ayther_suppression_active =
-    AYTHER_SUBSCRIBED(AYTHER_SUB_RENDER_CONTROLS);
-#else
-  const int ayther_capture_active = 0;
-  const int ayther_suppression_active = 0;
-#endif
+  AYTHER_SATB_LATCH();
 
   /* Pointer to sprite attribute table */
   uint16 *p = (uint16 *) &vram[satb];
@@ -5035,16 +5005,7 @@ void parse_satb_m5_im2(int line)
   int total = max_sprite_pixels >> 2;
   int total0 = total;   /* AYTHER: para chain_pos = total0 - total */
 
-  /* Runtime feature state is latched once per scanline, outside the SAT loop. */
-#ifdef AYTHER_EXTENSIONS
-  const int ayther_capture_active =
-    AYTHER_SUBSCRIBED(AYTHER_SUB_SPRITE_CAPTURE);
-  const int ayther_suppression_active =
-    AYTHER_SUBSCRIBED(AYTHER_SUB_RENDER_CONTROLS);
-#else
-  const int ayther_capture_active = 0;
-  const int ayther_suppression_active = 0;
-#endif
+  AYTHER_SATB_LATCH();
 
   /* Pointer to sprite attribute table */
   uint16 *p = (uint16 *) &vram[satb];
@@ -5542,36 +5503,3 @@ void remap_line(int line)
  #endif
   }
 }
-
-
-/*--------------------------------------------------------------------------*/
-/* AYTHER (#270): recomposición del frame desde el estado FINAL del VDP     */
-/*--------------------------------------------------------------------------*/
-/* Re-renderiza el frame recién emulado con ESTE MISMO renderer, pero con el
-   estado del VDP congelado a fin de frame (VRAM/CRAM/VSRAM/regs/SAT como
-   quedaron). La pantalla real se dibujó línea a línea con el estado VIGENTE
-   en cada línea (efectos raster: scroll/CRAM/regs a media pantalla); la
-   diferencia contra el framebuffer real ES la medida de cuánto pierde una
-   recomposición single-state — el dato que decide la épica del render propio.
-
-   `flags` permite además APAGAR comportamientos del VDP uno a uno para
-   atribuirles su parte del error (¿cuánto cuesta NO modelar shadow/highlight?
-   ¿el límite de sprites? ¿el window?): cada flag renderiza como si ese
-   comportamiento no existiera.
-
-   No perturba la emulación: todo estado mutado (status, spr_ovr/spr_col,
-   obj_info/object_count, clip, regs tocados, bitmap.*, pixel[] si NO_SH) se
-   salva y restaura. Sólo modo 5 no entrelazado, sin filtro NTSC, 16bpp.
-   Devuelve 1 y escribe w*h píxeles RGB565 contiguos en `out` (cap = capacidad
-   en píxeles); 0 si no aplica. */
-
-/**
- * @brief Re-renders the emulated frame synchronously with the VDP's final state.
- *
- * This function MUST be executed EXCLUSIVELY and synchronously on the emulator's
- * main thread (core thread). It temporarily clobbers internal VDP globals
- * (like linebuf, obj_info, etc.) and restores them before returning.
- * It is safe to call immediately after a frame has finished emulating, and
- * guarantees that the VDP state is left completely identical to how it was found.
- */
-

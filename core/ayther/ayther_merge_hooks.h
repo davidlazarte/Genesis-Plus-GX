@@ -172,4 +172,37 @@ static AYTHER_NOINLINE void ayther_obj_capture(const uint8 *srca,
   ayther_obj_px_exact = 1;
 }
 #endif
+
+/* #43.4: los tres enganches que `merge` consulta, en una linea.
+ *
+ * `merge` es el punto por el que pasan los CINCO renderers Mode 5, y por eso
+ * es donde viven las capturas que necesitan las dos fuentes. El bloque estaba
+ * escrito adentro de la funcion, en el archivo mas divergente de upstream, para
+ * tres condiciones que se evaluan en orden y salen temprano.
+ *
+ * El orden importa y por eso esta aca escrito una sola vez: la captura de
+ * sprites va ANTES -- el merge consume las fuentes in-place, dst == srcb-, y
+ * la atribucion tiene que ganarle al peel porque hace el merge ella misma. */
+#ifdef AYTHER_EXTENSIONS
+#define AYTHER_MERGE_HOOKS(srca, srcb, dst, table, width)                    \
+  do {                                                                       \
+    if (ayther_obj_pass)                                                     \
+      ayther_obj_capture((srca), (srcb), (width));                           \
+    if (ayther_attrib_capture)                                               \
+    {                                                                        \
+      ayther_merge_capture((srca), (srcb), (dst), (table), (width));         \
+      return;                                                                \
+    }                                                                        \
+    if (ayther_peel_active)                                                  \
+    {                                                                        \
+      ayther_peel_merge((srca), (srcb), (dst), (table), (width));            \
+      return;                                                                \
+    }                                                                        \
+  } while (0)
+#else
+/* Sin extensiones no hay nada que enganchar: el merge de upstream, tal cual. */
+#define AYTHER_MERGE_HOOKS(srca, srcb, dst, table, width) ((void)0)
+#endif
+
+
 #endif /* AYTHER_MERGE_HOOKS_H */

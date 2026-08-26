@@ -11,6 +11,37 @@
 #include "ayther_runtime.h"
 #include "ayther_metrics.h"
 
+/*--------------------------------------------------------------------------*/
+/* AYTHER (#270): recomposición del frame desde el estado FINAL del VDP     */
+/*--------------------------------------------------------------------------*/
+/* Re-renderiza el frame recién emulado con ESTE MISMO renderer, pero con el
+   estado del VDP congelado a fin de frame (VRAM/CRAM/VSRAM/regs/SAT como
+   quedaron). La pantalla real se dibujó línea a línea con el estado VIGENTE
+   en cada línea (efectos raster: scroll/CRAM/regs a media pantalla); la
+   diferencia contra el framebuffer real ES la medida de cuánto pierde una
+   recomposición single-state — el dato que decide la épica del render propio.
+
+   `flags` permite además APAGAR comportamientos del VDP uno a uno para
+   atribuirles su parte del error (¿cuánto cuesta NO modelar shadow/highlight?
+   ¿el límite de sprites? ¿el window?): cada flag renderiza como si ese
+   comportamiento no existiera.
+
+   No perturba la emulación: todo estado mutado (status, spr_ovr/spr_col,
+   obj_info/object_count, clip, regs tocados, bitmap.*, pixel[] si NO_SH) se
+   salva y restaura. Sólo modo 5 no entrelazado, sin filtro NTSC, 16bpp.
+   Devuelve 1 y escribe w*h píxeles RGB565 contiguos en `out` (cap = capacidad
+   en píxeles); 0 si no aplica. */
+
+/**
+ * @brief Re-renders the emulated frame synchronously with the VDP's final state.
+ *
+ * This function MUST be executed EXCLUSIVELY and synchronously on the emulator's
+ * main thread (core thread). It temporarily clobbers internal VDP globals
+ * (like linebuf, obj_info, etc.) and restores them before returning.
+ * It is safe to call immediately after a frame has finished emulating, and
+ * guarantees that the VDP state is left completely identical to how it was found.
+ */
+
 #ifdef AYTHER_EXTENSIONS
 
 extern uint64_t ayther_core_frame_generation;

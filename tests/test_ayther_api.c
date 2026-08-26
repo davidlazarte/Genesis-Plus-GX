@@ -66,8 +66,13 @@ int main(void)
         "ABI 1.7 keeps its encoding");
   CHECK(AYTHER_ABI_VERSION_1_6 == UINT32_C(0x00010006),
         "ABI 1.6 is a minor bump over 1.5");
-  CHECK(AYTHER_ABI_VERSION_LATEST == AYTHER_ABI_VERSION_1_8,
-        "latest ABI is 1.6");
+  CHECK(AYTHER_ABI_VERSION_1_9 == UINT32_C(0x00010009),
+        "ABI 1.9 is a minor bump over 1.8");
+  /* El mensaje decia "1.6" con la constante en 1.8: se movio la comparacion y
+     no el texto, asi que el test pasaba diciendo otra cosa. Ahora nombra la
+     version que compara. */
+  CHECK(AYTHER_ABI_VERSION_LATEST == AYTHER_ABI_VERSION_1_9,
+        "latest ABI is 1.9");
 
   /* #30: la 1.4 es ADITIVA. Lo que hay que fijar no es que los campos nuevos
      existan -- eso lo dice el compilador-- sino que los viejos NO se movieron:
@@ -115,10 +120,13 @@ int main(void)
   CHECK(AYTHER_STATUS_RC_JOURNAL_OVERFLOW == -24 &&
         AYTHER_RC_ERR_JOURNAL_OVERFLOW == -5,
         "the journal-overflow status codes are stable");
-  CHECK(AYTHER_REGION_COUNT == 26, "every region is inventoried");
+  CHECK(AYTHER_REGION_COUNT == 27, "every region is inventoried");
   /* #41/#39: la region nueva va al FINAL del enum. Meterla en el medio
      correria los ids de todas las siguientes, y los ids viajan por la ABI. */
-  CHECK(AYTHER_REGION_SPRITE_OUTCOME == AYTHER_REGION_COUNT - 1 &&
+  /* #563: Z80_RAM se agrega AL FINAL, que es lo que hace aditiva a 1.9: un
+     consumidor de 1.8 que transcribio el enum sigue leyendo los mismos ids. */
+  CHECK(AYTHER_REGION_Z80_RAM == AYTHER_REGION_COUNT - 1 &&
+        AYTHER_REGION_SPRITE_OUTCOME == AYTHER_REGION_Z80_RAM - 1 &&
         AYTHER_REGION_PALETTE == AYTHER_REGION_SPRITE_OUTCOME - 1 &&
         AYTHER_REGION_FRAME_HASH == AYTHER_REGION_PALETTE - 1 &&
         AYTHER_REGION_RASTER_JOURNAL == AYTHER_REGION_FRAME_HASH - 1 &&

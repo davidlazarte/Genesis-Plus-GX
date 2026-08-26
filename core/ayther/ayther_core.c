@@ -609,8 +609,15 @@ int ayther_core_recompose_multilayer(
         {
           if (ev->reason == AYTHER_RASTER_REASON_CRAM)
           {
-            uint16 *p = (uint16 *)&cram[ev->address & 0x7E];
-            int index = (ev->address >> 1) & 0x3F;
+            /* #35: `address` es el INDICE de entrada (0-63), que es lo que
+               ponen los cuatro sitios que marcan CRAM. Esto lo leia como
+               direccion en bytes y escribia la entrada n/2: el fixture de
+               siempre escribe la entrada 2 cada linea y el replay tocaba la
+               1, sin que nada lo viera porque esa escena converge al estado
+               final. La escena r_cram, que cambia la entrada 1 a mitad de
+               frame y la deshace despues, lo mostro en el primer intento. */
+            int index = ev->address & 0x3F;
+            uint16 *p = (uint16 *)&cram[index << 1];
             *p = ev->data;
             if (index & 0x0F) color_update_m5(index, ev->data);
             if (index == border) color_update_m5(0x00, ev->data);

@@ -224,9 +224,19 @@ static int hblank_start_cycle;  /* HBLANK flag set cycle */
 static int hblank_end_cycle;    /* HBLANK flag clear cycle */
 
 #ifdef AYTHER_EXTENSIONS
+/* La linea que VE el cambio, no la linea en que ocurre. system_frame_gen
+   renderiza la linea v_counter ANTES de correr la CPU durante esa linea, asi
+   que una escritura hecha "en la linea N" recien se dibuja en la N+1. El
+   journal anotaba N y el replay la aplicaba una linea antes de tiempo; con el
+   fixture de siempre no se notaba porque converge al estado final, y las
+   escenas raster de #35 -- que deshacen el evento antes del fin del frame--
+   lo mostraron: exactamente una linea de diferencia por evento. Tambien
+   corrige el otro extremo: una escritura durante la ultima linea visible ya
+   no se marca como raster, porque la primera linea que la dibuja es del
+   blanking. */
 static unsigned int ayther_raster_line_at(unsigned int cycles)
 {
-  unsigned int line = v_counter;
+  unsigned int line = v_counter + 1u;
   if (cycles >= mcycles_vdp)
   {
     line += (cycles - mcycles_vdp) / MCYCLES_PER_LINE;

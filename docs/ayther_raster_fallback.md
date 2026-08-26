@@ -148,3 +148,42 @@ the written window are not the same memory.
 It also no longer writes to `ayther_raster_dirty`. Merging reasons from inside
 the replay mutated the frame's public fallback mask from a call the ABI defines
 as read-only.
+
+## What the replay reproduces, measured (#35)
+
+The scenes above `r_*` in `tests/ayther/generated_rom.c` each perform **one**
+mid-frame event and undo it before the frame ends, so the final state is not
+the state of the middle band. `tests/ayther/scenes.c` recomposes the last frame
+through `recompose_multilayer` and compares it with the frame the core emitted.
+That is the assertion the original fixture could not make: its per-line CRAM
+writes converge to the final state, so a replay that restored nothing — or
+wrote the wrong entry — passed just the same. Two such defects surfaced on the
+first run:
+
+- **CRAM events name the entry, not a byte offset.** Every mark site passes the
+  CRAM entry index (0–63) as `address`; the replay read it as a byte offset and
+  wrote entry `n/2`. The base fixture writes entry 2 every line, so the replay
+  had been touching entry 1 all along. Fixed in the replay; the journal's
+  `address` keeps its meaning, now stated per reason in `ayther_journal_event_v1`.
+- **`v_counter` is the first line that sees the change.** `system_frame_gen`
+  renders line N *before* running the CPU for line N, so a write "on line N"
+  is first drawn on N+1. The journal recorded N and the replay applied the
+  event one line early — exactly one line off per event. `ayther_raster_line_at`
+  now reports the line that will be drawn next. The same rule drops writes made
+  during the last visible line from the mask: the first line that would draw
+  them is in blanking.
+
+| scene | event | replay |
+|---|---|---|
+| `r_reg11` | reg 11 (hscroll mode) | pixel-perfect |
+| `r_cram` | CRAM entry 1, restored later | pixel-perfect |
+| `r_hscroll` | one hscroll-table entry, restored later | pixel-perfect (undo log) |
+| `r_hscb` | reg 13 moves the hscroll base | pixel-perfect |
+| `r_display` | reg 1 display off / on | identical outside the two toggle lines |
+| `r_h32` | reg 12 bit 0 (H40→H32) | `UNSUPPORTED_MODE` reported |
+| `r_overflow` | two CRAM writes per line (448 events) | `RC_JOURNAL_OVERFLOW`, no prefix |
+
+Display toggles are reproduced with **line granularity**: turning the display
+off or on mid-line blanks or draws the *rest* of that line in the emitted frame,
+and the replay only knows lines. The two toggle lines may differ; the band
+between them must not, and that is what the scene asserts.

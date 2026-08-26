@@ -485,7 +485,9 @@ typedef struct ayther_journal_event_v1
 {
   uint16_t v_counter;   /* linea en que ocurrio                        */
   uint16_t reason;      /* AYTHER_RASTER_REASON_* del core             */
-  uint16_t address;     /* direccion afectada, segun el motivo         */
+  uint16_t address;     /* segun el motivo: REG = numero de registro;   */
+                        /* CRAM = indice de entrada (0-63); VSRAM =      */
+                        /* byte par; HSCROLL = direccion de VRAM (#35)  */
   uint16_t data;        /* los 16 bits que el bus puso                 */
 } ayther_journal_event_v1;
 

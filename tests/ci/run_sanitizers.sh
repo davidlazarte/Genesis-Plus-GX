@@ -57,7 +57,7 @@ replay_status=${PIPESTATUS[0]}
 # La decision de "que UB se acepta" vive en filter_known_ub.sh, compartida con
 # el job nocturno de fuzzing (#34). Dos copias divergen, y el modo de fallar es
 # el peor: el gate que se quedo viejo sigue verde.
-"$here/filter_known_ub.sh" "$log" "$known" || exit 1
+bash "$here/filter_known_ub.sh" "$log" "$known" || exit 1
 
 if [ "$replay_status" -ne 0 ]; then
   echo "el replay fallo por si mismo (golden o assert), no por el sanitizer" >&2

@@ -633,7 +633,35 @@ typedef struct ayther_system_v1
 #define AYTHER_ATTRIB_SH_HIGHLIGHT   2
 #define AYTHER_ATTRIB_SPRITE         UINT8_C(0x01)
 
-/* Native-endian in-process layout. Multi-byte fields use host endianness as
+/* Un sprite que el parser vio, con el MISMO layout en Mode 5 y en Mode 4.
+ *
+ * No lleva un campo `mode`, y eso es deliberado. Esta struct viaja como
+ * ARRAY: agregarle un byte corre todas las entradas siguientes y rompe el
+ * indexado de cualquier consumidor ya compilado -- la razon exacta por la que
+ * SPRITE_OUTCOME (#39.C) es una region paralela y no un campo mas. Una region
+ * paralela de modos, a su vez, llevaria el mismo byte hasta 64 veces para
+ * contestar algo que es constante por frame. El modo se lee de
+ * `AYTHER_REGION_SYSTEM` (`vdp_mode`), que existe para eso (#39.B).
+ *
+ * Lo que cambia entre modos es el SIGNIFICADO de los campos, no su forma:
+ *
+ *   yr        Y CRUDA de la SAT, sin convertir a coordenada de pantalla. En
+ *             Mode 5 son 9 bits con el sesgo de 128 del VDP; en Mode 4 es la
+ *             Y de pantalla MENOS uno, que es lo que el hardware quiere.
+ *   xr        X cruda: 9 bits con sesgo en Mode 5, X de pantalla en Mode 4.
+ *   attr      La word de atributos tal cual. En Mode 5 trae patron (11 bits),
+ *             paleta (2 bits), prioridad y los dos flips. En Mode 4 es el
+ *             indice de patron sobre la base de reg[6], con UNA de dos
+ *             paletas de 16 (bit 3) y sin flips ni prioridad por sprite.
+ *   w, h      Tamanio en CELDAS de 8x8, no en pixeles. Mode 5 da 1..4 en cada
+ *             eje; Mode 4 siempre 1 de ancho y 1 o 2 de alto (reg[1] bit 1).
+ *   sat_idx   Indice en la SAT, y por lo tanto el bit que le corresponde en la
+ *             mascara de supresion 0x103. 64 entradas en Mode 4, 80 en Mode 5.
+ *   chain_pos Paso en el recorrido: la prioridad real de dibujo. En Mode 5 la
+ *             SAT es una cadena enlazada y no coincide con sat_idx; en Mode 4
+ *             es una lista plana y el recorrido va en orden.
+ *
+ * Native-endian in-process layout. Multi-byte fields use host endianness as
  * reported by ayther_interface_v1.host_endianness. Pointers are never stored
  * in captured data. */
 typedef struct ayther_sprite_v1

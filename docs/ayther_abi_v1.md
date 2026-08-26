@@ -485,7 +485,7 @@ exist — and saying so is still better than accepting and doing nothing.
 | `ATTRIBUTION` | yes | background layer only |
 | `SPRITE_OUTCOME` (#39.C) | six bits | `PARSED`, `DRAWN`, `DROP_LINE`, `SUPPRESSED` — Mode 4 has no x=0 mask and no pixel budget |
 | Recomposition | yes | yes — pixel-perfect, measured |
-| Sprite capture | yes | yes — same layout; in Mode 4 height is 8 or 16, width is always 8, and the palette is one of **two** of 16 |
+| Sprite capture | yes | yes — same layout, no `mode` field; `w`/`h` are in 8×8 **cells** (Mode 4: always 1 wide, 1 or 2 tall), and the palette is one of **two** of 16 |
 
 A rejected write also raises `AYTHER_RASTER_REASON_UNSUPPORTED_CONTROLS` in
 `0x10E`, so a frontend polling the fallback reasons sees it without having to
@@ -505,6 +505,24 @@ for: a hidden cell turns from the background red (`f800`) to the backdrop blue
 completely changes **zero** pixels — which is what says the peel is applied to
 the background and before the sprite pass, not to the finished frame. `tests/ci/validate_roms.sh` extends that to 300 consecutive frames,
 all `clean_equal` with no fallback reason at all.
+
+### Why `AytherSpr` has no `mode` field
+
+The issue asks for one. It is not there, and the reason is the same one that
+made `SPRITE_OUTCOME` a parallel region in #39.C: `ayther_sprite_v1` travels as
+an **array**, so a new byte shifts every following entry and breaks indexing for
+any consumer already compiled against it. A parallel region of modes would then
+carry the same byte up to 64 times to answer something that is constant for the
+whole frame.
+
+`AYTHER_REGION_SYSTEM` already answers it — and the issue's own dependency
+section says so: phase 2 depends on the system descriptor "so the frontend knows
+the mode without decoding registers". What was actually missing was not a field
+but a contract: the struct documented none of its units. It does now, field by
+field, including the two that read wrong at a glance — `w`/`h` are in 8×8 cells,
+not pixels, and `yr`/`xr` are the raw SAT values, not screen coordinates (in
+Mode 4 the raw Y is screen Y *minus one*, which is what the hardware wants).
+`mode4_controls.c` asserts all of it against the fixture's known scene.
 
 That last part also fixed a lie: `ayther_recompose_mode_supported()` rejected
 everything that was not Mode 5, so the core was recomposing an SMS frame

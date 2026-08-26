@@ -268,6 +268,67 @@ int main(int argc, char **argv)
         printf("  FALLA: la escena tiene sprites y la captura no devolvio ninguno\n");
         fail = 1;
       }
+
+      /* El issue pide un campo `mode` en `AytherSpr`. No lo lleva, y esto es
+         lo que ocupa su lugar.
+
+         `ayther_sprite_v1` viaja como ARRAY: agregarle un byte corre todas las
+         entradas siguientes y rompe el indexado de cualquier consumidor ya
+         compilado. Es la razon exacta por la que #39.C hizo SPRITE_OUTCOME una
+         region paralela en vez de un campo. Y una region paralela de modos
+         llevaria el mismo byte 64 veces para contestar algo que es constante
+         por frame y que `SYSTEM.vdp_mode` ya contesta -- el propio issue lo
+         dice en sus dependencias: fase 2 depende del descriptor de sistema
+         "para que el frontend sepa el modo sin decodificar registros".
+
+         Lo que si hay que probar es que la struct se describe a si misma en
+         Mode 4 con el mismo layout, sin campos que signifiquen otra cosa en
+         silencio. El fixture da el oraculo por coordenada: ocho de 8x8 en
+         y=96, x = 40 + i*24. */
+      if (!rom_path && count)
+      {
+        ayther_sprite_v1 spr[64];
+        ayther_region_info_v1 si;
+        unsigned n = (count > 64u) ? 64u : count, bad = 0;
+
+        memset(&si, 0, sizeof(si));
+        if (api->query_region(AYTHER_REGION_PARSED_SPRITES, &si, sizeof(si))
+              == AYTHER_STATUS_OK && si.element_size != sizeof(ayther_sprite_v1)) {
+          printf("  FALLA: la entrada mide %u bytes y el header dice %u; en "
+                 "Mode 4 el layout es el mismo\n",
+                 (unsigned)si.element_size, (unsigned)sizeof(ayther_sprite_v1));
+          fail = 1;
+        }
+        memset(spr, 0, sizeof(spr));
+        if (api->read_region(AYTHER_REGION_PARSED_SPRITES, 0, spr,
+                             n * sizeof(spr[0]), AYTHER_GENERATION_ANY, NULL)
+              != AYTHER_STATUS_OK) {
+          printf("  FALLA: la captura de sprites tendria que leerse en Mode 4\n");
+          fail = 1;
+        } else {
+          unsigned k;
+          for (k = 0; k < n; ++k) {
+            /* `w`/`h` van en CELDAS de 8x8, igual que en Mode 5; lo que
+               cambia es el rango: Mode 5 da 1..4 en cada eje y Mode 4 siempre
+               1 de ancho y 1 o 2 de alto. La escena usa 8x8, o sea 1x1.
+
+               `yr` es la Y CRUDA de la SAT, no la de pantalla: en Mode 4 el
+               hardware quiere la de pantalla menos uno, y el fixture la
+               escribe asi. Comparar contra 96 seria pedirle a la captura que
+               mienta sobre lo que leyo. */
+            if (spr[k].w != 1u || spr[k].h != 1u) ++bad;
+            if (spr[k].yr != AYTHER_SMS_SPRITE_Y - 1u) ++bad;
+            if (spr[k].xr != AYTHER_SMS_SPRITE_X0 + k * 24u) ++bad;
+          }
+          printf("captura: %u sprites de %ux%u celdas, el primero en la SAT "
+                 "en (%u,%u)\n", n, spr[0].w, spr[0].h, spr[0].xr, spr[0].yr);
+          if (bad) {
+            printf("  FALLA: %u campos no coinciden con la escena; el modo se "
+                   "lee de SYSTEM.vdp_mode, no de la entrada\n", bad);
+            fail = 1;
+          }
+        }
+      }
       if (api->read_region(AYTHER_REGION_SPRITE_OUTCOME, 0, outcome,
                            sizeof(outcome), AYTHER_GENERATION_ANY, NULL)
             == AYTHER_STATUS_OK)

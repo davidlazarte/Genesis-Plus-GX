@@ -123,6 +123,14 @@ jobs:
       - name: Every Mode 5 renderer consults the layer gates
         run: bash tests/ci/check_render_gates.sh
 
+      # #68: cuantos hunks nuestros hay en cada archivo de upstream, contra una
+      # linea base versionada. Subir un numero es legitimo, pero se hace a
+      # proposito y se dice: el PR que agrega un hook regenera la linea base
+      # (`bash tests/ci/check_upstream_contact.sh --regen`) y el cambio queda a
+      # la vista en el diff. Mismo trato que un golden.
+      - name: Contact points with upstream do not grow unannounced
+        run: bash tests/ci/check_upstream_contact.sh
+
   linux-core:
     name: Linux core (${{ matrix.compiler }}, extensions=${{ matrix.ayther_extensions }}, probe=${{ matrix.sound_probe }}, legacy=${{ matrix.legacy_profile }})
     runs-on: ubuntu-latest

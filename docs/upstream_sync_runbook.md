@@ -131,6 +131,12 @@ git fetch upstream master
 git diff upstream/master --stat | grep -v 'core/ayther\|core/debug\|tests/\|docs/\|bench/'
 ```
 
+La versión que **bloquea** es `tests/ci/upstream_contact.txt`: hunks nuestros
+por archivo de upstream, medidos contra el merge-base con `upstream/master`, y
+`tests/ci/check_upstream_contact.sh` falla en cada PR si alguno sube sin que la
+línea base se haya regenerado en el mismo commit (`--regen`). Un sync mueve el
+merge-base, así que el PR del sync la regenera (ver §4).
+
 ### La métrica que importa en `vdp_render.c`
 
 El número de líneas engaña. Lo que decide cuánto duele un sync es **en cuántos
@@ -204,6 +210,11 @@ bash tests/ci/check_exports.sh /tmp/exp.txt 1 0 1
 
 # 5. El perfil sin extensiones no filtra implementación
 make -B -f Makefile.libretro platform=win AYTHER_EXTENSIONS=0 SOUND_PROBE=0 -j8
+
+# 6. Puntos de contacto con upstream: el sync mueve el merge-base, así que la
+#    línea base se regenera en el PR del sync y el diff de ese archivo es la
+#    lista de dónde quedamos parados después
+bash tests/ci/check_upstream_contact.sh --regen
 ```
 
 Si falla el determinismo (`audio_probe_trace`) o el replay full-core, **evaluar

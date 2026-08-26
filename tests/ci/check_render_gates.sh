@@ -53,9 +53,41 @@ for name in $renderers; do
     echo "$name no limpia linebuf[0] al ocultar Plano B" >&2
     fail=1
   fi
+
+  # #68: DRAW_COLUMN plegado. El macro lee dos locales con nombre fijo que
+  # cada renderer declara (AYTHER_COLUMN_LOCALS) y fija antes de cada plano
+  # (AYTHER_COLUMN_PLANE). Olvidar las locales no compila -- ese modo de falla
+  # se cuida solo--; olvidar un plano SI compila y deja la supresion de ese
+  # plano en un no-op silencioso. Esto es lo que lo vuelve ruidoso.
+  if ! printf '%s' "$body" | grep -q "AYTHER_COLUMN_LOCALS("; then
+    echo "$name no declara AYTHER_COLUMN_LOCALS: DRAW_COLUMN plegado no compila sin ellas" >&2
+    fail=1
+  fi
+  if [ "$name" = render_bg_m5_vs_enhanced ]; then
+    # Este renderer no aplica supresion de tiles por diseno (la declara
+    # UNSUPPORTED_CONTROLS): dibuja medias columnas por otro camino, y fijar un
+    # plano aca la aplicaria a medias.
+    if printf '%s' "$body" | grep -q "AYTHER_COLUMN_PLANE("; then
+      echo "$name fija un plano de supresion, y la supresion ahi es a medias por diseno" >&2
+      fail=1
+    fi
+  else
+    for plane in psupA psupB psupW; do
+      if ! printf '%s' "$body" | grep -q "AYTHER_COLUMN_PLANE($plane)"; then
+        echo "$name no fija $plane antes de dibujar ese plano: su supresion seria un no-op silencioso" >&2
+        fail=1
+      fi
+    done
+  fi
 done
 
+# Y que nadie vuelva al macro viejo: los sitios de llamada son los de upstream.
+if grep -q 'DRAW_COLUMN_AE(\|DRAW_COLUMN_IM2_AE(' "$src"; then
+  echo "vdp_render.c usa DRAW_COLUMN_AE: desde #68 los sitios de llamada son DRAW_COLUMN a secas" >&2
+  fail=1
+fi
+
 if [ "$fail" = 0 ]; then
-  echo "render gates OK: $(printf '%s' "$renderers" | wc -w) renderers Mode 5 consultan las mascaras"
+  echo "render gates OK: $(printf '%s' "$renderers" | wc -w) renderers Mode 5 consultan las mascaras y cumplen el contrato de DRAW_COLUMN"
 fi
 exit "$fail"

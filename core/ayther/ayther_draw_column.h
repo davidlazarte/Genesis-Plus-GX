@@ -88,7 +88,32 @@ INLINE uint32 *ayther_draw_col_im2(uint32 *dst, uint32 atbuf, uint32 v_line,
    un salto por columna en el camino que no debe pagar nada.
 
    Solo en el renderer por defecto: ALT_RENDERER tiene sus propios render_bg_*
-   sin clones ni locales, y con el macro redefinido no compilarian. */
+   sin clones ni locales, y con el macro redefinido no compilarian.
+
+   CONTRATO, para quien agregue o toque un render_bg_* de la seccion por
+   defecto (lo hace cumplir tests/ci/check_render_gates.sh en cada PR):
+
+     1. Declarar AYTHER_COLUMN_LOCALS(cells) entre las locales, con `cells` =
+        `ayther_observed && AYTHER_LINE_CELLS_ACTIVE` en los clones dual path
+        y 0 en los renderers que no registran celdas. Sin esto no compila:
+        ese modo de falla se cuida solo.
+     2. Llamar AYTHER_COLUMN_PLANE(psupX) antes de dibujar cada plano (A, B y
+        Window). Sin esto SI compila, y la supresion de ese plano queda en un
+        no-op silencioso: por eso el lint lo exige por nombre.
+     3. Lo que no debe cambiar: con las dos locales en 0 el macro tiene que
+        generar el cuerpo de upstream. Se midio con objdump al introducirlo
+        (#69): los clones rapidos de render_bg_m5, _vs y render_line, y los
+        renderers im2 e im2_vs, salieron instruccion por instruccion iguales a
+        los de antes del plegado. Cualquier cambio en ayther_draw_col, en
+        AYTHER_CELL_PUSH o en este macro tiene que volver a medirlo.
+     4. render_bg_m5_vs_enhanced declara las locales y NO fija planos: no
+        aplica supresion de tiles por diseno (UNSUPPORTED_CONTROLS). Es la
+        unica excepcion, y el lint la exige como excepcion.
+
+   Sobre la forma del macro: DRAW_COLUMN se define como bloque `{ }` y no como
+   `do { } while (0)` porque upstream lo invoca sin punto y coma, igual que su
+   propio macro (que es una secuencia de sentencias). AYTHER_CELL_PUSH si lleva
+   `do { } while (0)`: se usa como sentencia normal. */
 #if defined(AYTHER_EXTENSIONS) && !defined(ALT_RENDERER)
 #define AYTHER_COLUMN_LOCALS(cells) \
   const uint8 *ayther_psup = (const uint8 *)0; \

@@ -41,9 +41,6 @@ INLINE uint32 *ayther_draw_col(uint32 *dst, uint32 atbuf, uint32 v_line, const u
 #endif
   return dst;
 }
-/* Atajo: usa el fast path (DRAW_COLUMN) cuando no hay supresión en este plano. */
-#define DRAW_COLUMN_AE(ATTR, LINE, PS) \
-  do { if (PS) dst = ayther_draw_col(dst, (ATTR), (LINE), (PS)); else { DRAW_COLUMN((ATTR), (LINE)) } } while (0)
 
 /* AYTHER (#28): el mismo dibujo de columna para interlace mode 2. Los
    renderers de im2 usan su propio par de getters -el patrón se indexa distinto
@@ -68,11 +65,68 @@ INLINE uint32 *ayther_draw_col_im2(uint32 *dst, uint32 atbuf, uint32 v_line,
 #endif
   return dst;
 }
-#define DRAW_COLUMN_IM2_AE(ATTR, LINE, PS) \
-  do { if (PS) dst = ayther_draw_col_im2(dst, (ATTR), (LINE), (PS)); \
-       else { DRAW_COLUMN_IM2((ATTR), (LINE)) } } while (0)
+#endif /* AYTHER_EXTENSIONS */
+
+/* #68: DRAW_COLUMN y DRAW_COLUMN_IM2 absorben la supresion por plano y el
+   registro de celdas, para que los sitios de llamada de upstream vuelvan a ser
+   los de upstream. Antes cada uno era `DRAW_COLUMN_AE(atbuf, v_line, psupX);
+   AYTHER_CELL_RECORD(atbuf);`: veinte lineas de upstream modificadas, o sea
+   veinte hunks en cada rebase.
+
+   El macro se redefine ACA, despues de las cuatro variantes de upstream (que
+   quedan intactas y sin uso en este perfil), y lee dos locales con nombre fijo
+   que cada renderer declara con AYTHER_COLUMN_LOCALS y fija con
+   AYTHER_COLUMN_PLANE antes de dibujar cada plano:
+
+     ayther_psup   la mascara de supresion del plano en curso, o NULL
+     ayther_cells  si el registro de celdas (#42.C) esta activo en esta linea
+
+   Locales y no globales a proposito: en el clon rapido (render_bg_m5_impl con
+   ayther_observed = 0) las dos valen 0 en tiempo de compilacion y el
+   compilador deja exactamente el cuerpo de upstream, igual que hacia
+   DRAW_COLUMN_AE con PS = NULL. Un global no se pliega, y eso es una carga y
+   un salto por columna en el camino que no debe pagar nada.
+
+   Solo en el renderer por defecto: ALT_RENDERER tiene sus propios render_bg_*
+   sin clones ni locales, y con el macro redefinido no compilarian. */
+#if defined(AYTHER_EXTENSIONS) && !defined(ALT_RENDERER)
+#define AYTHER_COLUMN_LOCALS(cells) \
+  const uint8 *ayther_psup = (const uint8 *)0; \
+  const int ayther_cells = (cells)
+#define AYTHER_COLUMN_PLANE(ps) (ayther_psup = (ps))
+
+/* El cuerpo de upstream, en dos variantes en vez de cuatro porque AYTHER_PUTS
+   ya resuelve ALIGN_LONG. Mismas sentencias, mismo codigo. */
+#ifdef LSB_FIRST
+#define AYTHER_DRAW_COLUMN_PLAIN(ATTR, LINE) \
+  GET_LSB_TILE(ATTR, LINE) AYTHER_PUTS(); GET_MSB_TILE(ATTR, LINE) AYTHER_PUTS();
+#define AYTHER_DRAW_COLUMN_IM2_PLAIN(ATTR, LINE) \
+  GET_LSB_TILE_IM2(ATTR, LINE) AYTHER_PUTS(); GET_MSB_TILE_IM2(ATTR, LINE) AYTHER_PUTS();
 #else
-#define DRAW_COLUMN_AE(ATTR, LINE, PS) DRAW_COLUMN((ATTR), (LINE))
-#define DRAW_COLUMN_IM2_AE(ATTR, LINE, PS) DRAW_COLUMN_IM2((ATTR), (LINE))
+#define AYTHER_DRAW_COLUMN_PLAIN(ATTR, LINE) \
+  GET_MSB_TILE(ATTR, LINE) AYTHER_PUTS(); GET_LSB_TILE(ATTR, LINE) AYTHER_PUTS();
+#define AYTHER_DRAW_COLUMN_IM2_PLAIN(ATTR, LINE) \
+  GET_MSB_TILE_IM2(ATTR, LINE) AYTHER_PUTS(); GET_LSB_TILE_IM2(ATTR, LINE) AYTHER_PUTS();
+#endif
+
+/* Como AYTHER_CELL_RECORD pero sin `ayther_observed`, que no existe en los
+   renderers que no son clones (im2, vs_enhanced): el gate es `ayther_cells`. */
+#define AYTHER_CELL_PUSH(pair) \
+  do { if (ayther_cell_dst && *ayther_cell_count < AYTHER_LINE_CELL_COLUMNS) \
+         ayther_cell_dst[(*ayther_cell_count)++] = (uint32)(pair); } while (0)
+
+/* Sin `do { } while (0)`: upstream invoca DRAW_COLUMN sin punto y coma. */
+#undef DRAW_COLUMN
+#undef DRAW_COLUMN_IM2
+#define DRAW_COLUMN(ATTR, LINE) { \
+  if (ayther_psup) dst = ayther_draw_col(dst, (ATTR), (LINE), ayther_psup); \
+  else { AYTHER_DRAW_COLUMN_PLAIN((ATTR), (LINE)) } \
+  if (ayther_cells) AYTHER_CELL_PUSH(ATTR); }
+#define DRAW_COLUMN_IM2(ATTR, LINE) { \
+  if (ayther_psup) dst = ayther_draw_col_im2(dst, (ATTR), (LINE), ayther_psup); \
+  else { AYTHER_DRAW_COLUMN_IM2_PLAIN((ATTR), (LINE)) } }
+#else
+#define AYTHER_COLUMN_LOCALS(cells) ((void)0)
+#define AYTHER_COLUMN_PLANE(ps) ((void)0)
 #endif
 #endif /* AYTHER_DRAW_COLUMN_H */

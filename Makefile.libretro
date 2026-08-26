@@ -976,8 +976,12 @@ clean:
 # esto. distclean deja el arbol como un clon recien hecho.
 distclean: clean
 	$(MAKE) -C tests clean
+	$(MAKE) -C tests/fuzz clean
 	$(MAKE) -C bench clean
 	rm -rf tests/artifacts bench/artifacts ayther-artifacts
+	# Objetos de perfiles opcionales (SOUND_PROBE, AYTHER_EXTENSIONS): no estan
+	# en $(OBJECTS) del perfil con el que se invoque distclean, y quedaban.
+	rm -f core/ayther/*.o core/debug/*.o
 	rm -rf .uv-cache-raster
 	# Los overrides de BUILD_DIR/ARTIFACT_DIR de corridas viejas dejan
 	# arboles con sufijo (.build-issue9, artifacts-sanitize-gcc...) que

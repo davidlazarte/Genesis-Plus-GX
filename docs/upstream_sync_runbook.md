@@ -40,6 +40,20 @@ El corolario práctico: **sincronizar seguido**. La política de «rebases
 pequeños» era, en el fondo, una política de *rangos pequeños*. Eso se consigue
 sincronizando a menudo, no eligiendo el verbo de git.
 
+### Idioma: uno por archivo (#43)
+
+* **Archivos propios** (`core/ayther/`, `tests/`, `bench/`, `docs/`, commits):
+  español.
+* **Líneas nuestras dentro de archivos de upstream** (`core/vdp_*.c`,
+  `core/sound/*.c`, `libretro/libretro.c`, ...): inglés, y con el prefijo
+  `AYTHER` y el `#N` del issue de este repo, para que quien lea el archivo
+  entero encuentre un solo idioma y una sola forma de referirse a un tracker.
+
+La regla aplica a lo que se escribe **de ahora en adelante**. Los comentarios
+en español que ya están en archivos de upstream se quedan: reescribirlos es
+tocar cientos de líneas que hoy no son superficie de conflicto para que pasen
+a serlo, que es lo contrario de lo que este runbook persigue.
+
 ### Fin de línea: los archivos de upstream se guardan con los bytes de upstream
 
 Upstream no tiene `.gitattributes` y guarda CRLF en la mayoría de los `.c`/`.h`.
@@ -89,21 +103,54 @@ Rama corta, PR, merge, y la rama se borra. Nadie rebasea 74 commits nunca.
 
 ## 3. Dónde miran nuestros parches
 
-Medido contra `upstream/master`: parcheamos **27 archivos**. Concentrados, así
-que un sync que no toque estos casi no nos puede romper.
+Medido contra `upstream/master` el 2026-08-26, **fuera** de lo que es
+enteramente nuestro (`core/ayther/`, `core/debug/`, `tests/`, `bench/`, docs):
 
 | Archivo | Líneas | Qué vive ahí |
 |---|---:|---|
-| `core/vdp_render.c` | 1066 | `render_line`, `parse_satb_m5`, recomposición, atribución |
-| `libretro/libretro.c` | 943 | `retro_get_memory_data`, ABI AYTHER, inicialización |
-| `core/vdp_ctrl.c` | 308 | journal raster, `raster_dirty` |
-| `core/sound/psg.c` | 188 | telemetría PSG |
-| `core/sound/ym2612.c` | 124 | shadow registers |
-| `core/sound/sound.c` | 86 | loop del mixer |
+| `libretro/libretro.c` | 1668 | `retro_get_memory_data`, ABI AYTHER, inicialización |
+| `core/vdp_render.c` | 1071 | hooks de `render_bg_*`/`render_obj_*`/`render_line`, `parse_satb_*` |
+| `core/vdp_ctrl.c` | 427 | journal raster, `raster_dirty`, marcas en los caminos de escritura |
+| `core/sound/psg.c` | 169 | telemetría PSG, dual path |
+| `core/sound/sound.c` | 126 | loop del mixer |
+| `core/sound/ym2612.c` | 116 | shadow registers, dual path, saneado al cargar estado |
+| `core/sound/sound.h` | 112 | contrato del mixer |
+| `core/vdp_render.h` | 106 | lo que `ayther_core.c` necesita ver |
+| `core/vdp_render_internal.h` | 90 | idem, statics que dejaron de serlo |
 | `core/cd_hw/pcm.c` | 74 | eventos PCM |
+| `core/sound/ym3438.c` | 61 | mute por canal en Nuked |
+| `core/vdp_ctrl.h` | 47 | símbolos del journal |
 | `core/state.c` | 30 | latch de input hardware en el savestate |
-| `libretro/Makefile.common` | 26 | perfiles `AYTHER_EXTENSIONS` / `SOUND_PROBE` |
+| `libretro/Makefile.common` | 32 | perfiles `AYTHER_EXTENSIONS` / `SOUND_PROBE` |
 | `core/input_hw/gamepad.c` | 22 | latch de fase TH |
+
+Para regenerar la tabla:
+
+```bash
+git fetch upstream master
+git diff upstream/master --stat | grep -v 'core/ayther\|core/debug\|tests/\|docs/\|bench/'
+```
+
+### La métrica que importa en `vdp_render.c`
+
+El número de líneas engaña. Lo que decide cuánto duele un sync es **en cuántos
+lugares** de un archivo de upstream estamos parados, porque cada uno es un
+conflicto en potencia si upstream toca cerca. Medido el 2026-08-26:
+
+```bash
+git diff upstream/master -U0 -- core/vdp_render.c | grep -c '^@@'   # 147 hunks
+git diff upstream/master -U0 -- core/vdp_render.c \
+  | awk '/^@@/{if(h!="")print a+d" "h; h=$0; a=0; d=0; next} /^\+[^+]/{a++} /^-[^-]/{d++} END{print a+d" "h}' \
+  | sort -rn | head                                                  # el mayor: 29 líneas
+```
+
+Son **147 hunks y ninguno pasa de 30 líneas**: los gates ya no son bloques de
+cincuenta líneas dentro de un bucle (#43 partía de eso; `ayther_core.c` es una
+unidad propia, los clones fast/observed salen de `AYTHER_DUAL_PATH`, y los
+hooks viven en `core/ayther/*.h`). Lo que queda es la *cantidad* de puntos de
+contacto, y bajarla exige otra forma de enganchar el renderer — no se hace
+moviendo líneas. Cuando se intente, este par de comandos es la vara: menos
+hunks, no menos líneas.
 
 El resto (`core/vdp_render.h`, `core/sound/sound.h`, `core/vdp_ctrl.h`,
 `core/shared.h`, `core/system.c`, `core/loadrom.c`, `core/debug/cpuhook.h`,
@@ -112,6 +159,27 @@ chicos.
 
 `libretro/Makefile.common` merece atención aparte: es el que históricamente
 choca de verdad, porque upstream también lo edita.
+
+### Rebase de prueba: cuánto nos costaría sincronizar hoy
+
+Se puede saber **sin tocar la rama de trabajo**: un worktree descartable, un
+merge sin commit, la lista de archivos en conflicto, y se tira todo.
+
+```bash
+git fetch upstream master
+git rev-list --count HEAD..upstream/master          # commits que nos faltan
+git worktree add --detach /tmp/wt-upstream HEAD
+( cd /tmp/wt-upstream \
+  && git merge --no-commit --no-ff upstream/master >/dev/null 2>&1 \
+  ; git diff --name-only --diff-filter=U \
+  ; git merge --abort 2>/dev/null )
+git worktree remove --force /tmp/wt-upstream
+```
+
+Los archivos que salgan tienen que estar en la tabla de arriba; uno que no
+esté es un parche nuestro que nadie inventarió. Último resultado, 2026-08-26:
+`master` al día con `upstream/master` (`b7e79b36`, 2026-08-21), 0 commits por
+traer, 0 conflictos.
 
 ## 4. Verificación obligatoria
 

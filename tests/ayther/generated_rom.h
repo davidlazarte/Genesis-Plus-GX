@@ -94,6 +94,40 @@ size_t ayther_build_generated_rom_scene(uint8_t *rom, size_t capacity,
 size_t ayther_scene_count(void);
 const char *ayther_scene_name(size_t index);
 
+/* #35 (traido de #27): escenas con un evento raster A MITAD DE FRAME.
+ *
+ * El fixture de siempre solo produce eventos que convergen al estado final
+ * (CRAM desde el h-int, cada linea, con el valor de la linea), asi que un
+ * replay que no restaurara nada era indistinguible de uno correcto -- se
+ * verifico rompiendo la restauracion de CRAM y viendo el test pasar igual.
+ *
+ * Cada una de estas escenas hace el evento en LINE_A y lo DESHACE en LINE_B:
+ * el estado final es el de arriba del evento, y el frame emitido tiene la
+ * franja del medio distinta. Una recomposicion que no rejuegue el journal se
+ * equivoca en esa franja; una que no restaure lo que toco deja el core sucio
+ * para el frame siguiente. Las dos cosas se miden en scenes.c.
+ *
+ *   REG11     modo de hscroll (reg 11) a pantalla entera y de vuelta
+ *   CRAM      entrada 1 de CRAM con un valor DISTINTO al final del frame
+ *   HSCROLL   una entrada de la tabla de hscroll, en la franja del medio
+ *   DISPLAY   pantalla apagada (reg 1) entre dos lineas
+ *   HSCB      reg 13 mueve la BASE de la tabla de hscroll a otra tabla
+ *   H32       reg 12 bit 0 (H40->H32) a mitad de pantalla: UNSUPPORTED_MODE
+ *   OVERFLOW  dos escrituras a CRAM por linea: mas eventos que el journal */
+#define AYTHER_SCENE_RASTER_NONE      0u
+#define AYTHER_SCENE_RASTER_REG11     1u
+#define AYTHER_SCENE_RASTER_CRAM      2u
+#define AYTHER_SCENE_RASTER_HSCROLL   3u
+#define AYTHER_SCENE_RASTER_DISPLAY   4u
+#define AYTHER_SCENE_RASTER_HSCB      5u
+#define AYTHER_SCENE_RASTER_H32       6u
+#define AYTHER_SCENE_RASTER_OVERFLOW  7u
+/* Dentro de las cuatro filas de celdas que el fondo llena (lineas 0-31): mas
+   abajo solo hay backdrop y el evento no se veria en el frame emitido. */
+#define AYTHER_RASTER_LINE_A 8u
+#define AYTHER_RASTER_LINE_B 24u
+unsigned int ayther_scene_raster(size_t index);
+
 /* #63: el Z80 escribiendo sin parar al puerto de datos del VDP por la ventana
    de banco. Es el camino por el que el bucle de slots del FIFO se salia de la
    tabla, y ningun otro fixture tiene codigo Z80 en un cartucho de Mega Drive.

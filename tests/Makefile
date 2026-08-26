@@ -328,7 +328,7 @@ check-attribution-scene: $(ATTRIB_SCENE_BIN)
 	$(ATTRIB_SCENE_BIN) "$(CORE)"
 
 $(SCENES_BIN): ayther/scenes.c ayther/generated_rom.c 		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther 		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include 		-Iayther -o $@ ayther/scenes.c ayther/generated_rom.c 		$(LDFLAGS) $(ROM_PROBE_LIBS)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther 		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include 		-I$(CORE_DIR)/core -Iayther -o $@ ayther/scenes.c ayther/generated_rom.c 		$(LDFLAGS) $(ROM_PROBE_LIBS)
 
 $(LINE_STATE_BIN): ayther/line_state.c ayther/generated_rom.c 		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther 		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include 		-Iayther -o $@ ayther/line_state.c ayther/generated_rom.c 		$(LDFLAGS) $(ROM_PROBE_LIBS)
@@ -361,6 +361,14 @@ check-profile-comparison: $(FULL_CORE_BIN) | $(ARTIFACT_DIR)
 	$(call require_profile_cores)
 	$(FULL_CORE_BIN) --compare-profiles "$(PROFILE_OFF_CORE)" \
 		"$(PROFILE_IDLE_CORE)" $(PROFILE_COMPARISON)
+
+# #35 (traido de #33): un savestate tomado en un perfil carga en el otro y los
+# diez frames siguientes dan el mismo video que una corrida nativa. Usa los
+# mismos dos cores que la comparacion de arriba, pero BLOQUEA: esto es
+# correccion, no tiempo.
+check-state-cross-profile: $(FULL_CORE_BIN)
+	$(call require_profile_cores)
+	$(FULL_CORE_BIN) --cross-profiles "$(PROFILE_OFF_CORE)" "$(PROFILE_IDLE_CORE)"
 
 $(TRACE_BIN): ayther/audio_probe_trace.c $(PROBE_SRC) $(PROBE_HEADERS) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(COMMON_CPPFLAGS) -o $@ ayther/audio_probe_trace.c $(PROBE_SRC) $(LDFLAGS)

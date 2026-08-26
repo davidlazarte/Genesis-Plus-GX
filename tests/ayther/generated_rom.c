@@ -318,9 +318,16 @@ static void emit_reset_program_fm(struct rom_builder *builder)
   emit_u16(builder, 0x60fau);
 }
 
+static uint32_t emit_raster_handler(struct rom_builder *builder);
+
 static uint32_t emit_horizontal_handler(struct rom_builder *builder)
 {
-  uint32_t address = (uint32_t)builder->pc;
+  /* #35: una escena raster trae su propio handler (ver emit_raster_handler);
+     el de siempre escribe la SAT cada linea, y eso es VRAM, que el replay no
+     reproduce: con el, ninguna escena podia ser pixel-perfect. */
+  uint32_t address = emit_raster_handler(builder);
+  if (address) return address;
+  address = (uint32_t)builder->pc;
   emit_move_word_absolute_d0(builder, VDP_CONTROL); /* acknowledge */
   emit_move_long_immediate_absolute(builder, cram_write_command(2),
                                     VDP_CONTROL);
@@ -706,19 +713,29 @@ struct ayther_scene
   uint8_t window;    /* 1 = programa el plano window    */
   uint8_t pal;       /* 1 = fuerza 313 lineas           */
   uint8_t dma_fill;  /* 1 = hace un DMA fill a VRAM     */
+  uint8_t raster;    /* AYTHER_SCENE_RASTER_*: evento a mitad de frame */
 };
 
 static const struct ayther_scene ayther_scenes[] =
 {
   /* name          reg1  reg11 reg12 reg16 win pal dma */
-  { "h40",         0x74u, 0x03u, 0x81u, 0x01u, 0u, 0u, 0u },
-  { "h32",         0x74u, 0x03u, 0x80u, 0x01u, 0u, 0u, 0u },
-  { "window",      0x74u, 0x03u, 0x81u, 0x01u, 1u, 0u, 0u },
-  { "shadow",      0x74u, 0x00u, 0x89u, 0x01u, 0u, 0u, 0u },
-  { "interlace1",  0x74u, 0x03u, 0x83u, 0x01u, 0u, 0u, 0u },
-  { "interlace2",  0x74u, 0x03u, 0x87u, 0x01u, 0u, 0u, 0u },
-  { "pal",         0x7cu, 0x03u, 0x81u, 0x01u, 0u, 1u, 0u },
-  { "dma_fill",    0x74u, 0x03u, 0x81u, 0x01u, 0u, 0u, 1u }
+  { "h40",         0x74u, 0x03u, 0x81u, 0x01u, 0u, 0u, 0u, 0u },
+  { "h32",         0x74u, 0x03u, 0x80u, 0x01u, 0u, 0u, 0u, 0u },
+  { "window",      0x74u, 0x03u, 0x81u, 0x01u, 1u, 0u, 0u, 0u },
+  { "shadow",      0x74u, 0x00u, 0x89u, 0x01u, 0u, 0u, 0u, 0u },
+  { "interlace1",  0x74u, 0x03u, 0x83u, 0x01u, 0u, 0u, 0u, 0u },
+  { "interlace2",  0x74u, 0x03u, 0x87u, 0x01u, 0u, 0u, 0u, 0u },
+  { "pal",         0x7cu, 0x03u, 0x81u, 0x01u, 0u, 1u, 0u, 0u },
+  { "dma_fill",    0x74u, 0x03u, 0x81u, 0x01u, 0u, 0u, 1u, 0u },
+  /* #35 (traido de #27): la configuracion base de "h40", mas UN evento raster
+     a mitad de frame que se deshace antes de que termine. Ver generated_rom.h. */
+  { "r_reg11",     0x74u, 0x03u, 0x81u, 0x01u, 0u, 0u, 0u, AYTHER_SCENE_RASTER_REG11 },
+  { "r_cram",      0x74u, 0x03u, 0x81u, 0x01u, 0u, 0u, 0u, AYTHER_SCENE_RASTER_CRAM },
+  { "r_hscroll",   0x74u, 0x03u, 0x81u, 0x01u, 0u, 0u, 0u, AYTHER_SCENE_RASTER_HSCROLL },
+  { "r_display",   0x74u, 0x03u, 0x81u, 0x01u, 0u, 0u, 0u, AYTHER_SCENE_RASTER_DISPLAY },
+  { "r_hscb",      0x74u, 0x03u, 0x81u, 0x01u, 0u, 0u, 0u, AYTHER_SCENE_RASTER_HSCB },
+  { "r_h32",       0x74u, 0x03u, 0x81u, 0x01u, 0u, 0u, 0u, AYTHER_SCENE_RASTER_H32 },
+  { "r_overflow",  0x74u, 0x03u, 0x81u, 0x01u, 0u, 0u, 0u, AYTHER_SCENE_RASTER_OVERFLOW }
 };
 
 size_t ayther_scene_count(void)
@@ -732,7 +749,162 @@ const char *ayther_scene_name(size_t index)
   return ayther_scenes[index].name;
 }
 
+unsigned int ayther_scene_raster(size_t index)
+{
+  if (index >= ayther_scene_count()) return AYTHER_SCENE_RASTER_NONE;
+  return ayther_scenes[index].raster;
+}
+
 static const struct ayther_scene *ayther_current_scene;
+
+/* #35 (traido de #27): el handler de H-int de las escenas raster.
+ *
+ * Corre en cada linea (reg 10 = 0) y compara RAM_LINE con la linea del evento:
+ * en LINE_A lo hace, en LINE_B lo deshace. Deshacerlo es lo que hace que el
+ * estado final NO sea el del evento, y por eso una recomposicion desde el
+ * estado final se equivoca justo en la franja del medio. El de siempre
+ * reescribe la SAT cada linea; aca no se toca VRAM fuera de la tabla de
+ * hscroll, porque el replay solo reproduce REG, CRAM, VSRAM y HSCROLL. */
+#define RASTER_LINE_DISPLAY_OFF AYTHER_RASTER_LINE_A
+#define RASTER_LINE_DISPLAY_ON  AYTHER_RASTER_LINE_B
+#define RASTER_LINE_HSCROLL     4u     /* antes de que se dibuje la 16 */
+#define RASTER_HSCROLL_TARGET   16u    /* la entrada de esta linea */
+#define RASTER_HSCB_ALT         0xF400u /* reg 13 = 0x3D */
+
+/* cmpi.w #line,(RAM_LINE).l ; bne.s skip. Devuelve donde quedo el bne para
+   parchear el desplazamiento cuando se sepa cuanto mide el cuerpo. */
+static size_t emit_if_line(struct rom_builder *builder, unsigned int line)
+{
+  size_t bne;
+  emit_u16(builder, 0x0c79u);            /* cmpi.w #imm,(abs).l */
+  emit_u16(builder, (uint16_t)line);
+  emit_u32(builder, RAM_LINE);
+  bne = builder->pc;
+  emit_u16(builder, 0x6600u);            /* bne.s, desplazamiento a parchear */
+  return bne;
+}
+
+static void emit_end_if(struct rom_builder *builder, size_t bne)
+{
+  size_t body = builder->pc - (bne + 2u);
+  if (builder->failed) return;
+  if (body == 0u || body > 127u) { builder->failed = 1; return; }
+  builder->rom[bne + 1u] = (uint8_t)body;
+}
+
+static void emit_cram_word(struct rom_builder *builder, unsigned int entry,
+                           uint16_t value)
+{
+  emit_move_long_immediate_absolute(builder,
+                                    cram_write_command((uint16_t)(entry * 2u)),
+                                    VDP_CONTROL);
+  emit_move_word_immediate_absolute(builder, value, VDP_DATA);
+}
+
+/* La entrada de plano A de la tabla de hscroll para una linea: dos words por
+   linea (A, B) desde 0xF000, que es donde emit_scene_data pone la tabla. */
+static uint16_t hscroll_entry_a(unsigned int line)
+{
+  return (uint16_t)(0xF000u + line * 4u);
+}
+
+static uint32_t emit_raster_handler(struct rom_builder *builder)
+{
+  const struct ayther_scene *scene = ayther_current_scene;
+  uint32_t address;
+  size_t bne;
+
+  if (!scene || scene->raster == AYTHER_SCENE_RASTER_NONE) return 0;
+  address = (uint32_t)builder->pc;
+  emit_move_word_absolute_d0(builder, VDP_CONTROL); /* acknowledge */
+
+  switch (scene->raster)
+  {
+    case AYTHER_SCENE_RASTER_REG11:
+      bne = emit_if_line(builder, AYTHER_RASTER_LINE_A);
+      emit_vdp_register(builder, 11, 0x00u);        /* hscroll de pantalla entera */
+      emit_end_if(builder, bne);
+      bne = emit_if_line(builder, AYTHER_RASTER_LINE_B);
+      emit_vdp_register(builder, 11, scene->reg11);
+      emit_end_if(builder, bne);
+      break;
+
+    case AYTHER_SCENE_RASTER_CRAM:
+      bne = emit_if_line(builder, AYTHER_RASTER_LINE_A);
+      emit_cram_word(builder, 1u, 0x0eeeu);         /* blanco */
+      emit_end_if(builder, bne);
+      bne = emit_if_line(builder, AYTHER_RASTER_LINE_B);
+      emit_cram_word(builder, 1u, 0x000eu);         /* el rojo de la paleta */
+      emit_end_if(builder, bne);
+      break;
+
+    case AYTHER_SCENE_RASTER_HSCROLL:
+      bne = emit_if_line(builder, RASTER_LINE_HSCROLL);
+      emit_move_long_immediate_absolute(builder,
+        vram_write_command(hscroll_entry_a(RASTER_HSCROLL_TARGET)), VDP_CONTROL);
+      emit_move_word_immediate_absolute(builder, 0x0040u, VDP_DATA);
+      emit_end_if(builder, bne);
+      bne = emit_if_line(builder, AYTHER_RASTER_LINE_B);
+      emit_move_long_immediate_absolute(builder,
+        vram_write_command(hscroll_entry_a(RASTER_HSCROLL_TARGET)), VDP_CONTROL);
+      emit_move_word_immediate_absolute(builder,
+        (uint16_t)(0u - (uint16_t)(RASTER_HSCROLL_TARGET & 31u)), VDP_DATA);
+      emit_end_if(builder, bne);
+      break;
+
+    case AYTHER_SCENE_RASTER_DISPLAY:
+      bne = emit_if_line(builder, RASTER_LINE_DISPLAY_OFF);
+      emit_vdp_register(builder, 1, (unsigned int)(scene->reg1 & ~0x40u));
+      emit_end_if(builder, bne);
+      bne = emit_if_line(builder, RASTER_LINE_DISPLAY_ON);
+      emit_vdp_register(builder, 1, scene->reg1);
+      emit_end_if(builder, bne);
+      break;
+
+    case AYTHER_SCENE_RASTER_HSCB:
+      bne = emit_if_line(builder, AYTHER_RASTER_LINE_A);
+      emit_vdp_register(builder, 13, 0x3du);         /* tabla en 0xF400 */
+      emit_end_if(builder, bne);
+      bne = emit_if_line(builder, AYTHER_RASTER_LINE_B);
+      emit_vdp_register(builder, 13, 0x3cu);         /* de vuelta a 0xF000 */
+      emit_end_if(builder, bne);
+      break;
+
+    case AYTHER_SCENE_RASTER_H32:
+      bne = emit_if_line(builder, AYTHER_RASTER_LINE_A);
+      emit_vdp_register(builder, 12, (unsigned int)(scene->reg12 & ~0x01u));
+      emit_end_if(builder, bne);
+      bne = emit_if_line(builder, AYTHER_RASTER_LINE_B);
+      emit_vdp_register(builder, 12, scene->reg12);
+      emit_end_if(builder, bne);
+      break;
+
+    case AYTHER_SCENE_RASTER_OVERFLOW:
+      /* Dos entradas de CRAM con el numero de linea, cada linea: 448 eventos
+         reproducibles por frame contra un journal de 256. El valor va por DOS
+         (add.w d0,d0): el bus empaqueta BBB0GGG0RRR0 a 9 bits y tira el bit
+         0, asi que con el numero de linea a secas dos lineas seguidas dan el
+         mismo color, "no cambio" no es evento, y el journal no desborda. */
+      emit_move_long_immediate_absolute(builder, cram_write_command(2),
+                                        VDP_CONTROL);
+      emit_move_word_absolute_d0(builder, RAM_LINE);
+      emit_u16(builder, 0xd040u);   /* add.w d0,d0 */
+      emit_move_word_d0_absolute(builder, VDP_DATA);
+      emit_move_long_immediate_absolute(builder, cram_write_command(6),
+                                        VDP_CONTROL);
+      emit_move_word_absolute_d0(builder, RAM_LINE);
+      emit_u16(builder, 0xd040u);
+      emit_move_word_d0_absolute(builder, VDP_DATA);
+      break;
+
+    default:
+      break;
+  }
+
+  emit_addq_word_absolute(builder, RAM_LINE);
+  emit_u16(builder, 0x4e73u); /* rte */
+  return address;
+}
 
 static void emit_scene_data(struct rom_builder *builder)
 {
@@ -799,6 +971,20 @@ static void emit_scene_data(struct rom_builder *builder)
     words[index * 4u + 3u] = (uint16_t)(136u + ((index * 21u) % 280u));
   }
   emit_vdp_words(builder, 0xd800u, words, 48u);
+
+  /* #35: la escena que mueve reg 13 necesita que en 0xF400 haya OTRA tabla de
+     hscroll, con un scroll distinto al de 0xF000, o el cambio de base no
+     cambiaria un pixel. Solo esa escena la escribe: en las demas esa VRAM no
+     la lee nadie, pero no hace falta tocar lo que no se mide. */
+  if (scene->raster == AYTHER_SCENE_RASTER_HSCB)
+  {
+    for (index = 0; index < 224u; ++index)
+    {
+      words[index * 2u] = 32u;
+      words[index * 2u + 1u] = (uint16_t)(0u - 32u);
+    }
+    emit_vdp_words(builder, (uint16_t)RASTER_HSCB_ALT, words, 448u);
+  }
 }
 
 static void emit_reset_program_scene(struct rom_builder *builder)
@@ -1233,7 +1419,12 @@ size_t ayther_build_generated_rom_sprites(uint8_t *rom, size_t capacity)
 size_t ayther_build_generated_rom_scene(uint8_t *rom, size_t capacity,
                                         size_t scene)
 {
+  size_t built;
   if (scene >= ayther_scene_count()) return 0;
   ayther_current_scene = &ayther_scenes[scene];
-  return build_rom(rom, capacity, emit_reset_program_scene);
+  built = build_rom(rom, capacity, emit_reset_program_scene);
+  /* #35: el handler de H-int mira ayther_current_scene; dejarla puesta haria
+     que el proximo ROM de otra familia heredara el handler raster. */
+  ayther_current_scene = 0;
+  return built;
 }

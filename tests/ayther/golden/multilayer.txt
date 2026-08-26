@@ -7,8 +7,8 @@ fixture sh 320 224
   sprites    a608c4b644fc9783
   composite  c9a3cd10cf0fed83
 fixture window 320 224
-  bg_a       98ffaae7316d557d
-  bg_b       ed6b7532c70fb583
-  window     a0a19cbc3f9b9a83
-  sprites    a0a55fbcb2323243
-  composite  c1ec00d5c71e7283
+  bg_a       f38fe6d4d3a29942
+  bg_b       f483c590d8dab303
+  window     1bfd79c8623bb383
+  sprites    75928729572dc083
+  composite  65f4c40bc0f2e0d3

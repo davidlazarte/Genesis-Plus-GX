@@ -326,6 +326,14 @@ jobs:
           CC=clang
           CORE=../genesis_plus_gx_libretro.so
 
+      # #77: el descriptor de sistema describe el frame emitido, y avisa cuando
+      # los registros ya cambiaron la geometria del que viene.
+      - name: System descriptor names the frame it describes
+        run: >-
+          make -C tests check-system-transition
+          CC=clang
+          CORE=../genesis_plus_gx_libretro.so
+
       # #63: el Z80 martillando el puerto de datos del VDP por la ventana de
       # banco. Sin instrumentar solo verifica que el camino existe y el core
       # sigue vivo; con ASan (job nocturno) es el que ve la lectura fuera de
@@ -662,6 +670,14 @@ jobs:
           CC=clang
           CORE=../genesis_plus_gx_libretro.dll
 
+      - name: System descriptor names the frame it describes
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        shell: pwsh
+        run: >-
+          make -C tests check-system-transition
+          CC=clang
+          CORE=../genesis_plus_gx_libretro.dll
+
       - name: Z80 hammering the VDP data port keeps the core alive
         if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
         shell: pwsh
@@ -812,6 +828,12 @@ jobs:
         if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
         run: >-
           make -C tests check-frame-delta
+          CORE=../genesis_plus_gx_libretro.dylib
+
+      - name: System descriptor names the frame it describes
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -C tests check-system-transition
           CORE=../genesis_plus_gx_libretro.dylib
 
       - name: Z80 hammering the VDP data port keeps the core alive

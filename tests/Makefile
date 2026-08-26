@@ -35,6 +35,7 @@ STATE_GUARD_BIN := $(BUILD_DIR)/state_guard$(EXE_EXT)
 STATE_LAYOUT_BIN := $(BUILD_DIR)/state_layout$(EXE_EXT)
 AUDIO_CTRL_BIN := $(BUILD_DIR)/audio_controls$(EXE_EXT)
 FRAME_DELTA_BIN := $(BUILD_DIR)/frame_delta$(EXE_EXT)
+SYSTEM_TRANSITION_BIN := $(BUILD_DIR)/system_transition$(EXE_EXT)
 Z80_VDP_BIN := $(BUILD_DIR)/z80_vdp_fifo$(EXE_EXT)
 IDLE_METRICS_BIN := $(BUILD_DIR)/idle_metrics$(EXE_EXT)
 ATTRIB_SCENE_BIN := $(BUILD_DIR)/attribution_scene$(EXE_EXT)
@@ -198,6 +199,19 @@ $(FRAME_DELTA_BIN): ayther/frame_delta.c ayther/generated_rom.c \
 check-frame-delta: $(FRAME_DELTA_BIN)
 	$(call require_core)
 	$(FRAME_DELTA_BIN) "$(CORE)"
+
+$(SYSTEM_TRANSITION_BIN): ayther/system_transition.c ayther/generated_rom.c \
+		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther \
+		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include \
+		-Iayther -o $@ ayther/system_transition.c ayther/generated_rom.c \
+		$(LDFLAGS) $(ROM_PROBE_LIBS)
+
+# #77: SYSTEM dice de que frame habla. Necesita el core real: lo que se mide
+# es el viewport contra lo que video_refresh entrego, frame por frame.
+check-system-transition: $(SYSTEM_TRANSITION_BIN)
+	$(call require_core)
+	$(SYSTEM_TRANSITION_BIN) "$(CORE)"
 
 $(Z80_VDP_BIN): ayther/z80_vdp_fifo.c ayther/generated_rom.c \
 		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)

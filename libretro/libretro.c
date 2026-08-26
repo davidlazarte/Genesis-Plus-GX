@@ -333,7 +333,9 @@ static void ayther_fill_system(void)
    ayther_system_desc.vdp_mode = (reg[1] & 0x04) ? 5
                                : ((system_hw & SYSTEM_PBC) == SYSTEM_MD ? 0 : 4);
    ayther_system_desc.interlace = (uint8_t)(im2_flag ? 2 : (interlaced ? 1 : 0));
-   ayther_system_desc.h40 = (reg[12] & 0x01) ? 1 : 0;
+   /* 1.10: del frame EMITIDO, como viewport_w. reg 12 bit 0 vive en VDP_REGS y
+      puede ir un frame adelante; el flag de abajo dice cuando. */
+   ayther_system_desc.h40 = (bitmap.viewport.w >= 320) ? 1 : 0;
    ayther_system_desc.shadow_highlight = (reg[12] & 0x08) ? 1 : 0;
    ayther_system_desc.lines_per_frame = (uint16_t)lines_per_frame;
 
@@ -356,6 +358,12 @@ static void ayther_fill_system(void)
                                               2 * bitmap.viewport.x);
    ayther_system_desc.viewport_h = (uint16_t)(bitmap.viewport.h +
                                               2 * bitmap.viewport.y);
+   /* 1.10: `changed & 2` es exactamente "hubo un cambio de geometria en los
+      registros que el proximo frame aplica" (system_frame_gen lo consume al
+      arrancar). Entre frames, si esta puesto, viewport y registros hablan de
+      frames distintos. */
+   ayther_system_desc.flags = (bitmap.viewport.changed & 2)
+                            ? AYTHER_SYSTEM_GEOMETRY_PENDING : 0;
 
    ayther_system_desc.master_clock = system_clock;
    ayther_system_desc.cpu_clock = ((system_hw & SYSTEM_PBC) == SYSTEM_MD)

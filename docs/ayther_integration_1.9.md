@@ -168,10 +168,21 @@ al leer.
   de leer `reg[1]` bit 2. Las reglas de decodificación ya se corrigieron una
   vez en el core (#28) y la copia del Engine no se enteró.
 - `viewport_w/h` son las dimensiones del frame que llega por `video_refresh`:
-  256×224 MD, 256×192 SMS, **160×144 Game Gear**. `viewport_x/y` es el offset
+  320×224 (H40) o 256×224 (H32) en MD —240 líneas en V30—, 256×192 SMS,
+  **160×144 Game Gear**. `viewport_x/y` es el offset
   del recorte: `(48,24)` sólo en Game Gear. `ATTRIBUTION` y `recompose_frame`
   describen **ese mismo rectángulo** (en 1.3 no era así en Game Gear:
   describían el VDP interno y la atribución indexaba corrida).
+
+**Frame de transición (1.10):** el core aplica la geometría de los registros
+al inicio del frame *siguiente*, así que leído entre frames el descriptor
+mezcla dos frames: `viewport_w/h`, `interlace` y `h40` son del frame emitido;
+`vdp_mode` y `shadow_highlight`, de los registros. `flags &
+AYTHER_SYSTEM_GEOMETRY_PENDING` está puesto exactamente mientras difieren (en
+Sonic 2, el primer frame: `vdp_mode = 5`, `viewport = 256x192`, `h40 = 0`,
+`pending = 1`; el segundo ya es 320×224). Para la geometría "definitiva",
+esperar a que el flag se apague; para dibujar el frame recibido, usar el
+viewport tal cual. En 1.9 `h40` salía de reg 12 y contradecía al viewport.
 
 Prueba de aceptación en el Engine: cargar un `.gg`, exigir `vdp_mode == 4`,
 `viewport 160x144`, `ATTRIBUTION` de 23 040 bytes y `recompose_frame` de

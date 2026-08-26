@@ -362,6 +362,14 @@ check-profile-comparison: $(FULL_CORE_BIN) | $(ARTIFACT_DIR)
 	$(FULL_CORE_BIN) --compare-profiles "$(PROFILE_OFF_CORE)" \
 		"$(PROFILE_IDLE_CORE)" $(PROFILE_COMPARISON)
 
+# #35 (traido de #33): un savestate tomado en un perfil carga en el otro y los
+# diez frames siguientes dan el mismo video que una corrida nativa. Usa los
+# mismos dos cores que la comparacion de arriba, pero BLOQUEA: esto es
+# correccion, no tiempo.
+check-state-cross-profile: $(FULL_CORE_BIN)
+	$(call require_profile_cores)
+	$(FULL_CORE_BIN) --cross-profiles "$(PROFILE_OFF_CORE)" "$(PROFILE_IDLE_CORE)"
+
 $(TRACE_BIN): ayther/audio_probe_trace.c $(PROBE_SRC) $(PROBE_HEADERS) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(COMMON_CPPFLAGS) -o $@ ayther/audio_probe_trace.c $(PROBE_SRC) $(LDFLAGS)
 

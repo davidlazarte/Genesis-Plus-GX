@@ -1906,13 +1906,182 @@ static int write_benchmark(const char *path,
   return 1;
 }
 
+/* #35 (traido de #33): un savestate cruza entre perfiles.
+ *
+ * Los tres perfiles se despliegan -- estandar, legacy, probe-- y nada
+ * garantizaba que un estado tomado con uno cargara en otro. El guard de layout
+ * (state_guard) distingue arquitecturas, no perfiles; y si el blob divergiera
+ * entre perfiles el sintoma no seria un rechazo sino un estado que carga
+ * "bien" y se va de rumbo unos frames despues. Por eso el criterio no es "carga"
+ * sino "los diez frames siguientes dan el MISMO video que una corrida nativa
+ * del perfil destino desde el mismo punto", en las dos direcciones.
+ *
+ * Mismo esquema que profile_core: los dos cores se abren uno a la vez, con el
+ * mismo ROM sintetico y el mismo bootstrap, y el checkpoint del uno se carga en
+ * el otro. Un tamanio distinto tambien es un fallo, y se dice aparte: es la
+ * pista de que un perfil serializa algo que el otro no. */
+#define CROSS_FRAMES 10u
+
+static int cross_profile_run(const char *core_path,
+                             const void *load_state, size_t load_size,
+                             void *save_state, size_t *save_size,
+                             uint64_t *video_hash)
+{
+  struct core_api api;
+  struct retro_game_info game;
+  library_t library = NULL;
+  uint8_t *rom = NULL;
+  size_t state_size = 0;
+  unsigned int frame;
+  int initialized = 0;
+  int loaded = 0;
+  int success = 0;
+
+  *video_hash = FNV_OFFSET;
+  library = library_open(core_path);
+  if (!library)
+  {
+    library_error(core_path);
+    goto cleanup;
+  }
+  if (!load_api(library, &api, 0))
+    goto cleanup;
+  rom = (uint8_t *)malloc(AYTHER_GENERATED_ROM_SIZE);
+  if (!rom || !ayther_build_generated_rom(rom, AYTHER_GENERATED_ROM_SIZE))
+  {
+    fprintf(stderr, "cross-profile: cannot build generated ROM\n");
+    goto cleanup;
+  }
+  memset(&generated_game_info, 0, sizeof(generated_game_info));
+  generated_game_info.full_path = "ayther-generated-v1.md";
+  generated_game_info.dir = ".";
+  generated_game_info.name = "ayther-generated-v1";
+  generated_game_info.ext = "md";
+  generated_game_info.data = rom;
+  generated_game_info.size = AYTHER_GENERATED_ROM_SIZE;
+  generated_game_info.persistent_data = true;
+  memset(&game, 0, sizeof(game));
+  game.path = "ayther-generated-v1.md";
+  game.data = rom;
+  game.size = AYTHER_GENERATED_ROM_SIZE;
+  install_callbacks(&api);
+  api.init();
+  initialized = 1;
+  if (!api.load_game(&game))
+  {
+    fprintf(stderr, "cross-profile: core rejected generated ROM\n");
+    goto cleanup;
+  }
+  loaded = 1;
+  for (frame = 0; frame < BOOTSTRAP_FRAMES; ++frame)
+  {
+    current_input_mask = 0;
+    current_video_hash = FNV_OFFSET;
+    current_audio_hash = FNV_OFFSET;
+    api.run();
+  }
+  state_size = api.serialize_size();
+  if (!state_size)
+  {
+    fprintf(stderr, "cross-profile: serialize_size is zero\n");
+    goto cleanup;
+  }
+  if (save_state)
+  {
+    *save_size = state_size;
+    if (!api.serialize(save_state, state_size))
+    {
+      fprintf(stderr, "cross-profile: cannot serialize checkpoint\n");
+      goto cleanup;
+    }
+  }
+  if (load_state)
+  {
+    if (load_size != state_size)
+    {
+      fprintf(stderr,
+              "cross-profile: %s serializa %lu bytes y el estado ajeno mide %lu\n",
+              core_path, (unsigned long)state_size, (unsigned long)load_size);
+      goto cleanup;
+    }
+    if (!api.unserialize(load_state, load_size))
+    {
+      fprintf(stderr, "cross-profile: %s rechazo el estado del otro perfil\n",
+              core_path);
+      goto cleanup;
+    }
+  }
+  for (frame = 0; frame < CROSS_FRAMES; ++frame)
+  {
+    current_input_mask = input_for_frame(frame);
+    current_video_hash = FNV_OFFSET;
+    current_audio_hash = FNV_OFFSET;
+    api.run();
+    *video_hash = hash_u64(*video_hash, current_video_hash);
+  }
+  success = 1;
+cleanup:
+  if (loaded) api.unload_game();
+  if (initialized) api.deinit();
+  if (library) library_close(library);
+  free(rom);
+  return success;
+}
+
+static int cross_profiles(const char *core_a, const char *core_b)
+{
+  enum { STATE_CAP = 4u << 20 };
+  void *state_a = malloc(STATE_CAP);
+  void *state_b = malloc(STATE_CAP);
+  size_t size_a = 0, size_b = 0;
+  uint64_t native_a, native_b, cross_ab, cross_ba;
+  int ok;
+
+  if (!state_a || !state_b) { free(state_a); free(state_b); return 2; }
+
+  /* Nativos: cada perfil desde su propio checkpoint. */
+  if (!cross_profile_run(core_a, NULL, 0, state_a, &size_a, &native_a) ||
+      !cross_profile_run(core_b, NULL, 0, state_b, &size_b, &native_b))
+  {
+    free(state_a); free(state_b); return 1;
+  }
+  if (size_a > STATE_CAP || size_b > STATE_CAP)
+  {
+    fprintf(stderr, "cross-profile: el estado no entra en el buffer\n");
+    free(state_a); free(state_b); return 1;
+  }
+  /* Cruzados: B arranca del checkpoint de A, y A del de B. */
+  if (!cross_profile_run(core_b, state_a, size_a, NULL, NULL, &cross_ba) ||
+      !cross_profile_run(core_a, state_b, size_b, NULL, NULL, &cross_ab))
+  {
+    free(state_a); free(state_b); return 1;
+  }
+
+  printf("savestate entre perfiles (%u frames tras el checkpoint):\n",
+         (unsigned)CROSS_FRAMES);
+  printf("  A = %s (%lu bytes)\n  B = %s (%lu bytes)\n", core_a,
+         (unsigned long)size_a, core_b, (unsigned long)size_b);
+  printf("  B nativo %016" PRIx64 "  B cargando el estado de A %016" PRIx64
+         " -> %s\n", native_b, cross_ba,
+         native_b == cross_ba ? "igual" : "DISTINTO");
+  printf("  A nativo %016" PRIx64 "  A cargando el estado de B %016" PRIx64
+         " -> %s\n", native_a, cross_ab,
+         native_a == cross_ab ? "igual" : "DISTINTO");
+  ok = native_b == cross_ba && native_a == cross_ab;
+  printf("%s\n", ok ? "cross-profile: OK"
+                    : "cross-profile: FALLO -- el estado carga y diverge");
+  free(state_a); free(state_b);
+  return ok ? 0 : 1;
+}
+
 static void usage(const char *program)
 {
   fprintf(stderr,
     "usage: %s CORE GOLDEN_JSON ACTUAL_JSON FRAME_REPORT_JSONL "
 "BENCHMARK_JSON\n"
-"       %s --compare-profiles OFF_CORE IDLE_CORE OUTPUT_JSON\n",
-    program, program);
+"       %s --compare-profiles OFF_CORE IDLE_CORE OUTPUT_JSON\n"
+"       %s --cross-profiles CORE_A CORE_B\n",
+    program, program, program);
 }
 
 int main(int argc, char **argv)
@@ -1953,6 +2122,8 @@ int main(int argc, char **argv)
 
   if (argc == 5 && strcmp(argv[1], "--compare-profiles") == 0)
     return compare_profiles(argv[2], argv[3], argv[4]);
+  if (argc == 4 && strcmp(argv[1], "--cross-profiles") == 0)
+    return cross_profiles(argv[2], argv[3]);
   if (argc != 6)
   {
     usage(argv[0]);

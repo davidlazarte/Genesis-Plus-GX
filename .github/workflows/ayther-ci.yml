@@ -427,6 +427,16 @@ jobs:
           PROFILE_OFF_CORE=artifacts/profiles/extensions-off.so
           PROFILE_IDLE_CORE=artifacts/profiles/compiled-idle.so
 
+      # #35: mismos dos cores, pero esto SI bloquea. Un estado de un perfil
+      # tiene que cargar en el otro y seguir igual; el modo de falla que se
+      # busca es el que carga "bien" y diverge despues.
+      - name: A savestate crosses profiles without diverging
+        run: >-
+          make -C tests check-state-cross-profile
+          CC=clang
+          PROFILE_OFF_CORE=artifacts/profiles/extensions-off.so
+          PROFILE_IDLE_CORE=artifacts/profiles/compiled-idle.so
+
       - name: Run audio_probe performance baseline
         run: make -C bench run CC=clang
 
@@ -678,6 +688,15 @@ jobs:
           make -B -f Makefile.libretro platform=win64 AYTHER_EXTENSIONS=0 SOUND_PROBE=0 -j2
           Copy-Item genesis_plus_gx_libretro.dll tests\artifacts\profiles\extensions-off.dll
           make -C tests check-profile-comparison CC=clang PROFILE_OFF_CORE=artifacts/profiles/extensions-off.dll PROFILE_IDLE_CORE=artifacts/profiles/compiled-idle.dll
+
+      - name: A savestate crosses profiles without diverging
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        shell: pwsh
+        run: >-
+          make -C tests check-state-cross-profile
+          CC=clang
+          PROFILE_OFF_CORE=artifacts/profiles/extensions-off.dll
+          PROFILE_IDLE_CORE=artifacts/profiles/compiled-idle.dll
 
       - name: Capture Windows performance baseline
         if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0

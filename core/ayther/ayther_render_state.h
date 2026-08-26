@@ -32,6 +32,154 @@ uint8 ayther_spr_outcome[AYTHER_SPRITE_SAT_SLOTS];
 
 /* Se marca solo cuando alguien mira: el bucle de sprites es codigo caliente
    y este store no tiene por que existir para quien no pidio la region. */
+/* #43.4: el preambulo de gates de un renderer de fondo, en UNA linea.
+ *
+ * Estas seis declaraciones estaban escritas a mano en los cinco renderers
+ * Mode 5, en dos formas segun el renderer tuviera clon observado o no. Son 16 y
+ * 6 lineas por sitio, todas identicas, todas en `vdp_render.c` -- el archivo mas
+ * divergente de upstream y el que hay que releer entero en cada rebase-.
+ *
+ * Que sean un macro no es solo por el largo. Nada obligaba a que las cinco
+ * copias coincidieran, y una que se desviara no fallaria: un renderer que se
+ * olvide de `psupW` simplemente no aplica la supresion de Window, sin error y
+ * sin sintoma salvo el resultado equivocado. Eso ya paso una vez -- es
+ * literalmente lo que #28 vino a arreglar en `render_bg_m5_vs_enhanced`-.
+ *
+ * Dos variantes porque hay dos clases de renderer:
+ *
+ *   _OBSERVED  los que tienen clon: el flag es un parametro constante, asi que
+ *              el clon rapido borra los gates enteros en compilacion.
+ *   (a secas)  los que no lo tienen: leen las mascaras directo.
+ */
+#define AYTHER_BG_GATES_OBSERVED(obs)                                         \
+  const uint8 *psupA = (obs) ? AYTHER_PSUP(0) : (const uint8 *)0;             \
+  const uint8 *psupB = (obs) ? AYTHER_PSUP(1) : (const uint8 *)0;             \
+  const uint8 *psupW = (obs) ? AYTHER_PSUP(2) : (const uint8 *)0;             \
+  const int hide_a = (obs) && !(ayther_layer_mask & AYTHER_LAYER_A);          \
+  const int hide_b = (obs) && !(ayther_layer_mask & AYTHER_LAYER_B);          \
+  const int hide_w = (obs) && !(ayther_layer_mask & AYTHER_LAYER_W)
+
+#define AYTHER_BG_GATES                                                       \
+  const uint8 *psupA = AYTHER_PSUP(0);                                        \
+  const uint8 *psupB = AYTHER_PSUP(1);                                        \
+  const uint8 *psupW = AYTHER_PSUP(2);                                        \
+  const int hide_a = AYTHER_HIDE_A;                                           \
+  const int hide_b = AYTHER_HIDE_B;                                           \
+  const int hide_w = AYTHER_HIDE_W
+
+/* #43.4: el plano B se borra en vez de dibujarse (ver #37.6). Cinco copias de
+   lo mismo, una por renderer. */
+#define AYTHER_SKIP_PLANE_B(shift_var, end_var)                               \
+  do {                                                                        \
+    if (hide_b && !AYTHER_LINE_CELLS_ACTIVE)                                  \
+    {                                                                         \
+      memset(&linebuf[0][0x20], 0, bitmap.viewport.w);                        \
+      (shift_var) = 0;                                                        \
+      (end_var) = 0;                                                          \
+      AYTHER_METRIC_INC(bg_b_skipped);                                        \
+    }                                                                         \
+  } while (0)
+
+/* #43.4: el desvio al parser rapido de la SAT, en una linea.
+ *
+ * La suscripcion habilita, pero lo que obliga al parser completo es que haya
+ * ALGO que hacer. SPRITE_CAPTURE si obliga -- el frontend pidio los sprites-.
+ * RENDER_CONTROLS no: sin un solo slot suprimido el parser rapido produce
+ * exactamente lo mismo, y `test_satb_equiv` (#33) es lo que sostiene esa
+ * afirmacion. Antes se pagaba la CAPACIDAD de suprimir en cada linea de cada
+ * frame, estuviera o no suprimido algo. */
+#define AYTHER_SATB_FAST_PATH(line, im2)                                     \
+  do {                                                                       \
+    if (!AYTHER_SUBSCRIBED(AYTHER_SUB_SPRITE_CAPTURE) &&                     \
+        !(AYTHER_SUBSCRIBED(AYTHER_SUB_RENDER_CONTROLS) &&                   \
+          ayther_sprite_suppress_active) &&                                  \
+        !ayther_rc_nolimit)                                                  \
+    {                                                                        \
+      parse_satb_m5_fast((line), (im2));                                     \
+      return;                                                                \
+    }                                                                        \
+    AYTHER_METRIC_INC(satb_slow_path);                                       \
+  } while (0)
+
+/* #39.C/#43.4: el que no entro por el limite de linea tambien es una
+ * respuesta. Se marca este y se sigue caminando la cadena SOLO para marcar los
+ * que vienen detras -- sin agregarlos a la lista, que es lo que el hardware
+ * hace-. El paseo extra existe unicamente cuando alguien pidio la region: sin
+ * suscripcion, el `break` del parser es el de siempre. */
+#define AYTHER_SATB_MARK_DROPPED(q, link, total)                             \
+  do {                                                                       \
+    if (AYTHER_SPR_OUT_ACTIVE)                                               \
+    {                                                                        \
+      unsigned int rest = (link), left = (total);                            \
+      while (left--)                                                         \
+      {                                                                      \
+        AYTHER_SPR_OUT_MARK(rest >> 2, AYTHER_SPR_OUT_DROP_LINE);            \
+        rest = ((q)[rest + 1] & 0x7F) << 2;                                  \
+        if ((rest == 0) || (rest >= (unsigned int)bitmap.viewport.w))        \
+          break;                                                             \
+      }                                                                      \
+    }                                                                        \
+  } while (0)
+
+/* #43.4: las marcas de resultado por sprite (#39.C), una linea por sitio.
+ *
+ * Los cuatro renderers Mode 5 las tenian escritas a mano, con su comentario,
+ * en cuatro copias identicas cada una: 172 lineas en `vdp_render.c` para tres
+ * stores y un barrido. Y estuvieron TRIPLICADAS un rato, porque un patch se
+ * aplico dos veces y nada lo noto -- son OR del mismo bit, asi que ni el
+ * golden ni un test podian verlo-. Cuatro copias que nada obliga a mantener
+ * iguales terminan desviandose; doce, antes.
+ */
+#define AYTHER_SPR_MARK_LISTED()                                             \
+  /* Llego hasta aca, o sea que el parser lo puso en la lista de la linea. */\
+  AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_PARSED)
+
+#define AYTHER_SPR_MARK_MASKED()                                             \
+  /* `masked` se pega una vez y ya no se suelta: este y todos los que siguen \
+     quedan tapados por la mascara de x=0. */                                \
+  do {                                                                       \
+    if (masked)                                                              \
+      AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_MASKED_X0);   \
+  } while (0)
+
+#define AYTHER_SPR_MARK_DRAWN()                                              \
+  AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_DRAWN)
+
+#define AYTHER_SPR_MARK_PIXEL_LIMIT()                                        \
+  /* Los que quedaban en la lista no se dibujan, y saber CUALES es justamente\
+     lo que un frontend no puede deducir sin recontar pixeles por linea. El  \
+     barrido existe solo si alguien pidio la region. */                      \
+  do {                                                                       \
+    if (AYTHER_SPR_OUT_ACTIVE)                                               \
+    {                                                                        \
+      object_info_t *rest = object_info;                                     \
+      int left = count + 1;                                                  \
+      while (left-- > 0)                                                     \
+      {                                                                      \
+        AYTHER_SPR_OUT_MARK(rest->sat_idx, AYTHER_SPR_OUT_DROP_PIXEL);       \
+        ++rest;                                                              \
+      }                                                                      \
+    }                                                                        \
+  } while (0)
+
+/* #43.4: el gate de supresion de un slot de la SAT, en una linea.
+ *
+ * Ocultar un sprite es saltear su slot: no se agrega a la lista de la linea,
+ * asi que no se dibuja. Solo el frame visible suprime -- la re-sim bare corre
+ * con la mascara vacia-, de modo que el status del VDP queda intacto y el
+ * replay no deriva.
+ *
+ * Se marca ademas SUPPRESSED y no un descarte del hardware: "no se dibujo
+ * porque vos lo pediste" y "no se dibujo porque el VDP no daba" son respuestas
+ * distintas, y un frontend que depura su propio overlay necesita separarlas.
+ */
+#define AYTHER_SPR_SUPPRESS_GATE(active, slot)                               \
+  if (AYTHER_SPR_SUPPRESSED_ACTIVE((active), (slot)))                        \
+  {                                                                          \
+    AYTHER_SPR_OUT_MARK((slot), AYTHER_SPR_OUT_SUPPRESSED);                  \
+  }                                                                          \
+  else
+
 #define AYTHER_SPR_OUT_ACTIVE  AYTHER_SUBSCRIBED(AYTHER_SUB_SPRITE_CAPTURE)
 #define AYTHER_SPR_OUT_MARK(idx, bits)                                       \
   do {                                                                       \
@@ -502,6 +650,36 @@ uint64_t ayther_controls_fingerprint(void)
 #define ayther_sprite_capture_record(yr, xr, attr, w, h, sat_idx, chain_pos) ((void)0)
 #define AYTHER_CELL_RECORD(pair) ((void)0)
 #define AYTHER_LINE_CELLS_ACTIVE 0
+/* Sin extensiones los gates son constantes cero: el macro tiene que existir
+   igual, porque los renderers lo nombran en los dos perfiles. */
+#define AYTHER_BG_GATES_OBSERVED(obs)                                         \
+  const uint8 *const psupA = 0;                                               \
+  const uint8 *const psupB = 0;                                               \
+  const uint8 *const psupW = 0;                                               \
+  const int hide_a = ((void)(obs), 0);                                        \
+  const int hide_b = 0;                                                       \
+  const int hide_w = 0
+
+#define AYTHER_BG_GATES                                                       \
+  const uint8 *const psupA = 0;                                               \
+  const uint8 *const psupB = 0;                                               \
+  const uint8 *const psupW = 0;                                               \
+  const int hide_a = 0;                                                       \
+  const int hide_b = 0;                                                       \
+  const int hide_w = 0
+
+#define AYTHER_SKIP_PLANE_B(shift_var, end_var) ((void)0)
+
+#define AYTHER_SATB_FAST_PATH(line, im2) ((void)0)
+#define AYTHER_SATB_MARK_DROPPED(q, link, total) ((void)0)
+
+#define AYTHER_SPR_MARK_LISTED()       ((void)0)
+#define AYTHER_SPR_MARK_MASKED()       ((void)0)
+#define AYTHER_SPR_MARK_DRAWN()        ((void)0)
+#define AYTHER_SPR_MARK_PIXEL_LIMIT()  ((void)0)
+
+#define AYTHER_SPR_SUPPRESS_GATE(active, slot) if (0) { } else
+
 #define AYTHER_SPR_OUT_ACTIVE 0
 /* Sin extensiones los bits ni siquiera existen -- viven en ayther_api.h-,
    asi que el stub no puede tocar sus argumentos. */

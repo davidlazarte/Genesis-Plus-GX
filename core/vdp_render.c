@@ -1168,6 +1168,23 @@ void color_update_m4(int index, unsigned int data)
 
 void color_update_m5(int index, unsigned int data)
 {
+  /* AYTHER (#34): `data` indexa `pixel_lut[3][0x200]`, asi que tiene que ser
+     de 9 bits. En el camino de escritura lo garantiza el empaquetado del bus
+     (`BBB0GGG0RRR0` -> `BBBGGGRRR`, en vdp_ctrl.c), que corre ANTES de llegar
+     aca. Los otros caminos no lo hacen: reconstruir la paleta despues de un
+     savestate, o al recomponer, lee `cram[]` y pasa la word tal cual.
+
+     Mientras `cram[]` solo lo escriba el VDP eso es cierto por construccion.
+     Pero CRAM es una region EXPUESTA al frontend (id legacy 0x100), asi que
+     "cierto por construccion" depende de que nadie de afuera escriba. El
+     fuzzing de #34 escribio bytes crudos ahi y el core leyo `pixel_lut` fuera
+     de rango con indice 43839.
+
+     La mascara va aca y no en cada llamador porque es una precondicion de
+     ESTA funcion, y aca cubre tambien los llamadores de upstream. No cambia
+     ningun valor legitimo: los de 9 bits ya pasan intactos. */
+  data &= 0x1FF;
+
   /* Palette Mode */
   if (!(reg[0] & 0x04))
   {

@@ -148,7 +148,7 @@ INLINE uint32 *ayther_draw_col_im2(uint32 *dst, uint32 atbuf, uint32 v_line,
   else { AYTHER_DRAW_COLUMN_PLAIN((ATTR), (LINE)) } \
   if (ayther_cells) AYTHER_CELL_PUSH(ATTR); }
 #define DRAW_COLUMN_IM2(ATTR, LINE) { \
-  if (ayther_psup) dst = ayther_draw_col_im2(dst, (ATTR), (LINE), ayther_psup); \
+  (void)ayther_cells; /* los renderers im2 no registran celdas; -Wall no lo ve sin uso */ \n  if (ayther_psup) dst = ayther_draw_col_im2(dst, (ATTR), (LINE), ayther_psup); \
   else { AYTHER_DRAW_COLUMN_IM2_PLAIN((ATTR), (LINE)) } }
 #else
 #define AYTHER_COLUMN_LOCALS(cells) ((void)0)

@@ -219,6 +219,7 @@ static uint16 fifo[4];          /* FIFO ring-buffer */
 static int fifo_idx;            /* FIFO write index */
 static int fifo_byte_access;    /* FIFO byte access flag */
 static int *fifo_timing;        /* FIFO slots timing table */
+static int fifo_timing_slots;   /* entries in the table fifo_timing points to (#63) */
 static int hblank_start_cycle;  /* HBLANK flag set cycle */
 static int hblank_end_cycle;    /* HBLANK flag clear cycle */
 
@@ -388,6 +389,21 @@ static const int fifo_timing_h40[] =
   MCYCLES_PER_LINE + 1332, MCYCLES_PER_LINE + 1460, MCYCLES_PER_LINE + 1588, MCYCLES_PER_LINE + 1844, 
   MCYCLES_PER_LINE + 1972, MCYCLES_PER_LINE + 2100, MCYCLES_PER_LINE + 2356, MCYCLES_PER_LINE + 2484
 };
+
+/* Las dos tablas cubren dos lineas (28 slots en H32, 30 en H40). El bucle
+   que busca el proximo slot avanza mientras `cycles` alcance la entrada, y no
+   tiene tope propio: confia en que `cycles` no se aleje mas de dos lineas de
+   mcycles_vdp.
+
+   Con el 68000 escribiendo se cumple: m68k.cycles avanza con cada acceso y el
+   FIFO lleno lo frena. Con el Z80 escribiendo por la ventana de banco
+   (zbank_write_vdp -> vdp_68k_data_w) no: m68k.cycles quedo clavado al final
+   de la linea, nada frena al Z80, y cada escritura sube un slot; a la decima
+   en la misma linea el indice pasa la ultima entrada (#63, lo encontro el
+   fuzzing). El tope deja la ultima entrada como slot: el timing de esa
+   escritura ya era ficticio, lo que se evita es leer fuera de la tabla. */
+#define FIFO_TIMING_SLOTS_H32 ((int)(sizeof(fifo_timing_h32) / sizeof(fifo_timing_h32[0])))
+#define FIFO_TIMING_SLOTS_H40 ((int)(sizeof(fifo_timing_h40) / sizeof(fifo_timing_h40[0])))
 
 /* DMA Timings (number of access slots per line) */
 static const uint8 dma_timing[2][2] =
@@ -580,6 +596,7 @@ void vdp_reset(void)
 
   /* default FIFO access slots timings */
   fifo_timing = (int *)fifo_timing_h32;
+  fifo_timing_slots = FIFO_TIMING_SLOTS_H32;
 
   /* default VINT timing */
   vint_cycle = VINT_H32_MCYCLE;
@@ -2413,6 +2430,7 @@ static void vdp_reg_w(unsigned int r, unsigned int d, unsigned int cycles)
 
           /* FIFO access slots timings */
           fifo_timing = (int *)fifo_timing_h40;
+          fifo_timing_slots = FIFO_TIMING_SLOTS_H40;
 
           /* VINT timing */
           vint_cycle = VINT_H40_MCYCLE;
@@ -2440,6 +2458,7 @@ static void vdp_reg_w(unsigned int r, unsigned int d, unsigned int cycles)
 
           /* FIFO access slots timings */
           fifo_timing = (int *)fifo_timing_h32;
+          fifo_timing_slots = FIFO_TIMING_SLOTS_H32;
 
           /* VINT timing */
           vint_cycle = VINT_H32_MCYCLE;
@@ -2699,7 +2718,7 @@ static void vdp_68k_data_w_m4(unsigned int data)
 
     /* Determine next FIFO entry processing slot */
     cycles -= mcycles_vdp;
-    while (cycles >= fifo_timing[slot]) slot++;
+    while ((slot + fifo_byte_access) < (fifo_timing_slots - 1) && (cycles >= fifo_timing[slot])) slot++;
 
     /* Update last FIFO entry read-out cycle */
     fifo_cycles[fifo_idx] = mcycles_vdp + fifo_timing[slot + fifo_byte_access];
@@ -2793,7 +2812,7 @@ static void vdp_68k_data_w_m5(unsigned int data)
 
     /* Determine next FIFO entry processing slot */
     cycles -= mcycles_vdp;
-    while (cycles >= fifo_timing[slot]) slot++;
+    while ((slot + fifo_byte_access) < (fifo_timing_slots - 1) && (cycles >= fifo_timing[slot])) slot++;
 
     /* Update last FIFO entry read-out cycle */
     fifo_cycles[fifo_idx] = mcycles_vdp + fifo_timing[slot + fifo_byte_access];

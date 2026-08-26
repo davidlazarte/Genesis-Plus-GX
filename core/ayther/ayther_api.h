@@ -89,7 +89,40 @@ extern "C" {
  * leeria el array corrido a partir del segundo elemento. Una region paralela
  * dice lo mismo sin romper a nadie. */
 #define AYTHER_ABI_VERSION_1_8 UINT32_C(0x00010008)
-#define AYTHER_ABI_VERSION_LATEST AYTHER_ABI_VERSION_1_8
+/* 1.9 (#563): la RAM del Z80. Aditiva: una region nueva, nada cambia de
+ * tamanio ni de orden.
+ *
+ * POR QUE HACE FALTA. El 68k y el Z80 se reparten el sonido, y varios juegos
+ * dejan el id del tema a tocar en la RAM del Z80 (0xA00000-0xA01FFF desde el
+ * bus del 68k) y no en work RAM. Sin esta region, una herramienta que quiera
+ * disparar un sonido por id -- grabar un tema limpio desde el Sound Test--
+ * puede BUSCAR la casilla en work RAM, descartar los candidatos y quedarse
+ * sin donde mirar. Paso en Golden Axe: los dos candidatos de work RAM se
+ * descartaron por confirmacion automatica, y la unica hipotesis que quedaba
+ * era esta RAM, que no se exponia.
+ *
+ * ESCRIBIBLE, y ahi esta el cuidado: escribir la RAM del Z80 mientras el Z80
+ * corre es una carrera. El consumidor tiene que hacerlo con el bus tomado, o
+ * aceptar que lo que escribio puede durar un frame -- que para disparar un
+ * sonido por id alcanza, y para cualquier otra cosa no. */
+#define AYTHER_ABI_VERSION_1_9 UINT32_C(0x00010009)
+#define AYTHER_ABI_VERSION_LATEST AYTHER_ABI_VERSION_1_9
+
+/* La version mas nueva, COMO TEXTO, derivada y no copiada.
+ *
+ * El `ayther_build_id` la traia escrita a mano y ya se desincronizo una vez
+ * (#55: decia 1.3 con el header en 1.7). El comentario que quedo de ese
+ * arreglo dice «si cambia la version, se cambia aca tambien» -- y eso es
+ * precisamente lo que no se puede garantizar. Al agregar 1.9 volvio a pasar:
+ * el string seguia diciendo 1.8.
+ *
+ * Derivarlo lo hace imposible: el numero y el texto salen de las mismas dos
+ * constantes, asi que no hay dos lugares que puedan discrepar. */
+#define AYTHER_ABI_VERSION_MAJOR_LATEST 1
+#define AYTHER_ABI_VERSION_MINOR_LATEST 9
+#define AYTHER__STR2(x) #x
+#define AYTHER__STR(x)  AYTHER__STR2(x)
+#define AYTHER_ABI_VERSION_LATEST_STR    AYTHER__STR(AYTHER_ABI_VERSION_MAJOR_LATEST) "."    AYTHER__STR(AYTHER_ABI_VERSION_MINOR_LATEST)
 
 #define AYTHER_ABI_VERSION_MAJOR(v) ((uint32_t)(v) >> 16)
 #define AYTHER_ABI_VERSION_MINOR(v) ((uint32_t)(v) & UINT32_C(0xFFFF))
@@ -271,6 +304,10 @@ enum ayther_region_id
   AYTHER_REGION_PALETTE,
   /* #39.C: que le paso a cada sprite de la SAT en este frame. */
   AYTHER_REGION_SPRITE_OUTCOME,
+  /* #563 (ABI 1.9): los 8 KB de RAM del Z80. Es donde varios juegos dejan el
+     id del tema a tocar, y sin esto no habia donde mirar cuando la casilla no
+     esta en work RAM. */
+  AYTHER_REGION_Z80_RAM,
   AYTHER_REGION_COUNT
 };
 
@@ -293,7 +330,9 @@ enum ayther_legacy_memory_id
   AYTHER_LEGACY_MEMORY_PARSED_SPRITES        = 0x10B,
   AYTHER_LEGACY_MEMORY_PARSED_SPRITE_COUNT   = 0x10C,
   AYTHER_LEGACY_MEMORY_AUDIO_MUTE            = 0x10D,
-  AYTHER_LEGACY_MEMORY_RASTER_DIRTY          = 0x10E
+  AYTHER_LEGACY_MEMORY_RASTER_DIRTY          = 0x10E,
+  /* #563 (ABI 1.9): RAM del Z80, 8 KB. */
+  AYTHER_LEGACY_MEMORY_Z80_RAM               = 0x10F
 };
 
 #define AYTHER_REGION_ACCESS_READ          (UINT32_C(1) << 0)

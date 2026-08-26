@@ -4462,6 +4462,18 @@ static int32_t ayther_map_region(uint32_t region_id,
          mapping->access_flags = AYTHER_REGION_ACCESS_READ |
             AYTHER_REGION_FRAME_SCOPED | AYTHER_REGION_NATIVE_ENDIAN;
          break;
+      /* #563 (ABI 1.9): la RAM del Z80, 8 KB. ESCRIBIBLE: el caso de uso es
+         dejar un id de sonido donde el Z80 lo va a leer. No es frame-scoped --
+         la RAM persiste entre frames como cualquier otra. */
+      case AYTHER_REGION_Z80_RAM:
+         mapping->data = zram;
+         mapping->element_size = 1;
+         mapping->capacity = sizeof(zram);
+         mapping->byte_size = sizeof(zram);
+         mapping->legacy_memory_id = 0x10F;
+         mapping->access_flags = AYTHER_REGION_ACCESS_READ |
+            AYTHER_REGION_ACCESS_CONTROL_WRITE | AYTHER_REGION_NATIVE_ENDIAN;
+         break;
       case AYTHER_REGION_RASTER_FALLBACK_REASONS:
          mapping->data = &ayther_raster_dirty;
          mapping->element_size = sizeof(ayther_raster_dirty);
@@ -5012,10 +5024,15 @@ static int32_t AYTHER_CALL ayther_set_subscriptions_v1(
 
    El campo numerico -- el que se usa para negociar-- sale ahora de
    AYTHER_ABI_VERSION_LATEST y no de una constante copiada a mano, y
-   `verify_ayther_api` compara el descriptor contra el header. Este string es
-   informativo; si cambia la version, se cambia aca tambien. */
+   `verify_ayther_api` compara el descriptor contra el header.
+
+   #563: el string TAMBIEN sale del header ahora. Decia «se cambia aca
+   tambien», y al agregar 1.9 no se cambio -- que es lo que pasa siempre con
+   una regla que depende de acordarse. Derivado, no hay dos lugares que puedan
+   discrepar. */
 static const char ayther_build_id[] =
-   "Genesis Plus GX AYTHER ABI 1.8; core v1.7.4" GIT_VERSION;
+   "Genesis Plus GX AYTHER ABI " AYTHER_ABI_VERSION_LATEST_STR
+   "; core v1.7.4" GIT_VERSION;
 
 #if defined(LSB_FIRST) || defined(_WIN32) || defined(__LITTLE_ENDIAN__)
 #define AYTHER_HOST_ENDIANNESS AYTHER_ENDIAN_LITTLE
@@ -5298,6 +5315,11 @@ void *retro_get_memory_data(unsigned id)
          la sustitución por evento (C-A3). core/sound/sound.c. */
       case 0x10D /* AYTHER_MEMORY_AUDIO_MUTE */:
          return &ayther_audio_mute;
+      /* AYTHER (#563): RAM del Z80 (8 KB, ESCRIBIBLE). Varios juegos dejan ahi
+         el id del tema a tocar; sin esto no hay donde mirar cuando la casilla
+         no esta en work RAM. core/genesis.c. */
+      case 0x10F /* AYTHER_MEMORY_Z80_RAM */:
+         return zram;
 #endif
       default:
          return NULL;
@@ -5411,6 +5433,9 @@ size_t retro_get_memory_size(unsigned id)
       /* AYTHER fork delta: máscara de mute por canal de audio (u16). */
       case 0x10D /* AYTHER_MEMORY_AUDIO_MUTE */:
          return sizeof(ayther_audio_mute);
+      /* AYTHER (#563): RAM del Z80. */
+      case 0x10F /* AYTHER_MEMORY_Z80_RAM */:
+         return sizeof(zram);
 #endif
 
       default:

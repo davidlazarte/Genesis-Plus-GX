@@ -43,6 +43,7 @@ MULTILAYER_BIN := $(BUILD_DIR)/multilayer$(EXE_EXT)
 OBSERVABILITY_BIN := $(BUILD_DIR)/observability$(EXE_EXT)
 SPR_OUTCOME_BIN := $(BUILD_DIR)/sprite_outcome$(EXE_EXT)
 MODE4_BIN := $(BUILD_DIR)/mode4_controls$(EXE_EXT)
+MODE4_RASTER_BIN := $(BUILD_DIR)/mode4_raster$(EXE_EXT)
 ABI_DYNAMIC_BIN := $(BUILD_DIR)/verify_ayther_api$(EXE_EXT)
 SCENES_BIN := $(BUILD_DIR)/scenes$(EXE_EXT)
 LINE_STATE_BIN := $(BUILD_DIR)/line_state$(EXE_EXT)
@@ -275,14 +276,27 @@ $(MODE4_BIN): ayther/mode4_controls.c ayther/generated_rom.c \
 		-Iayther -o $@ ayther/mode4_controls.c ayther/generated_rom.c \
 		$(LDFLAGS) $(ROM_PROBE_LIBS)
 
-# #40 fase 2: los controles del fork en Mode 4, contra un cartucho real.
-# OPT-IN: sin AYTHER_SMS_ROM apuntando a un .sms, el test se saltea y lo dice.
-# Un ROM comercial no puede estar en el repo, y mientras no exista un fixture
-# SMS -- el generador emite 68000 y un cartucho de Master System corre Z80--
-# esto es lo que hay, y es mucho mejor que nada.
+# #40 fase 2: los controles del fork en Mode 4. Corre con el fixture SMS del
+# repo; AYTHER_SMS_ROM=<.sms> es lo OPCIONAL y hace correr lo mismo sobre un
+# cartucho real.
 check-mode4: $(MODE4_BIN)
 	$(call require_core)
 	$(MODE4_BIN) "$(CORE)"
+
+$(MODE4_RASTER_BIN): ayther/mode4_raster.c ayther/generated_rom.c \
+		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther \
+		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include \
+		-I$(CORE_DIR)/core -Iayther -o $@ ayther/mode4_raster.c ayther/generated_rom.c \
+		$(LDFLAGS) $(ROM_PROBE_LIBS)
+
+# #40, ultimo criterio: scroll lock y cambio de paleta a mitad de frame en
+# Mode 4. Lo que se afirma es que el core DIGA que el frame tiene raster
+# (0x10E, journal) ademas de dibujarlo bien; antes lo dibujaba bien y no decia
+# nada.
+check-mode4-raster: $(MODE4_RASTER_BIN)
+	$(call require_core)
+	$(MODE4_RASTER_BIN) "$(CORE)"
 
 # #39.C: por que cada sprite se dibujo o no.
 check-sprite-outcome: $(SPR_OUTCOME_BIN)

@@ -1035,13 +1035,61 @@ static void sms_solid_tile(struct rom_builder *builder, uint8_t color)
       sms_vdp_write(builder, (uint8_t)((color & (1u << plane)) ? 0xFFu : 0x00u));
 }
 
-static void emit_reset_program_sms(struct rom_builder *builder)
+/* Donde arranca el programa principal cuando hay handler de interrupcion:
+   IM 1 salta a 0x0038, asi que el codigo de reset tiene que saltar por encima
+   del handler. Sin handler, el programa sigue en 0x0000 como siempre. */
+#define SMS_MAIN 0x0080u
+
+static void sms_pad_to(struct rom_builder *builder, size_t address)
+{
+  while (builder->pc < address && !builder->failed)
+    emit_u8(builder, 0x00u);        /* NOP */
+}
+
+/* #40: el handler de IM 1. Un solo vector para las dos interrupciones del VDP;
+   leer el registro de estado las reconoce (y limpia) y deja en el bit 7 cual
+   fue. Interrupcion de frame: la entrada 1 de CRAM vuelve al rojo del fondo.
+   Interrupcion de linea: pasa a SPLIT_COLOR. Las dos escriben la MISMA entrada,
+   asi que el frame sale rojo arriba de SPLIT_LINE y del otro color abajo.
+
+   LD A,n y OUT no tocan las banderas: el acarreo que deja RLCA llega intacto
+   al JR C, aunque en el medio se haya puesto la direccion de CRAM. */
+static void sms_emit_irq_handler(struct rom_builder *builder)
+{
+  sms_pad_to(builder, 0x0038u);
+  emit_u8(builder, 0xF5u);          /* PUSH AF                          */
+  emit_u8(builder, 0xDBu);          /* IN A,(0xBF): estado del VDP      */
+  emit_u8(builder, SMS_VDP_CONTROL);
+  emit_u8(builder, 0x07u);          /* RLCA: acarreo = bit 7 (frame)    */
+  z80_out_imm(builder, SMS_VDP_CONTROL, 0x01u);            /* entrada 1  */
+  z80_out_imm(builder, SMS_VDP_CONTROL, SMS_CRAM_WRITE);
+  emit_u8(builder, 0x38u);          /* JR C,frame  (+6)                 */
+  emit_u8(builder, 0x06u);
+  z80_out_imm(builder, SMS_VDP_DATA, AYTHER_SMS_SPLIT_COLOR); /* linea    */
+  emit_u8(builder, 0x18u);          /* JR done     (+4)                 */
+  emit_u8(builder, 0x04u);
+  z80_out_imm(builder, SMS_VDP_DATA, 0x03u);                /* frame: rojo */
+  emit_u8(builder, 0xF1u);          /* POP AF                           */
+  emit_u8(builder, 0xFBu);          /* EI                               */
+  emit_u8(builder, 0xC9u);          /* RET                              */
+  sms_pad_to(builder, SMS_MAIN);
+}
+
+static void emit_reset_program_sms_scene(struct rom_builder *builder,
+                                         unsigned int flags)
 {
   unsigned int i;
 
   emit_u8(builder, 0xF3u);          /* DI            */
   emit_u8(builder, 0xEDu);          /* IM 1          */
   emit_u8(builder, 0x56u);
+  if (flags & AYTHER_SMS_SCENE_PALETTE_SPLIT)
+  {
+    emit_u8(builder, 0xC3u);        /* JP SMS_MAIN   */
+    emit_u8(builder, (uint8_t)(SMS_MAIN & 0xFFu));
+    emit_u8(builder, (uint8_t)(SMS_MAIN >> 8));
+    sms_emit_irq_handler(builder);
+  }
   emit_u8(builder, 0x31u);          /* LD SP,0xDFF0  */
   emit_u8(builder, 0xF0u);
   emit_u8(builder, 0xDFu);
@@ -1049,7 +1097,9 @@ static void emit_reset_program_sms(struct rom_builder *builder)
   /* Registros del VDP. reg1 arranca con la pantalla APAGADA: escribir VRAM con
      el display encendido compite con el fetch del renderer, y el fixture tiene
      que salir igual en cada corrida. */
-  sms_vdp_register(builder, 0u,  0x06u);   /* Mode 4                        */
+  sms_vdp_register(builder, 0u, (uint8_t)(0x06u                /* Mode 4   */
+    | ((flags & AYTHER_SMS_SCENE_SCROLL_LOCK)   ? 0x40u : 0u)  /* lock H   */
+    | ((flags & AYTHER_SMS_SCENE_PALETTE_SPLIT) ? 0x10u : 0u))); /* IE1    */
   sms_vdp_register(builder, 1u,  0x00u);   /* pantalla apagada por ahora    */
   sms_vdp_register(builder, 2u,  0xFFu);   /* name table -> 0x3800          */
   sms_vdp_register(builder, 3u,  0xFFu);   /* sin uso en Mode 4             */
@@ -1057,9 +1107,12 @@ static void emit_reset_program_sms(struct rom_builder *builder)
   sms_vdp_register(builder, 5u,  0xFFu);   /* SAT -> 0x3F00                 */
   sms_vdp_register(builder, 6u,  0xFBu);   /* patrones de sprite -> 0x0000  */
   sms_vdp_register(builder, 7u,  0x00u);   /* backdrop = entrada 16         */
-  sms_vdp_register(builder, 8u,  0x00u);   /* scroll horizontal             */
+  sms_vdp_register(builder, 8u, (flags & AYTHER_SMS_SCENE_SCROLL_LOCK)
+                                  ? (uint8_t)AYTHER_SMS_HSCROLL : 0x00u);
   sms_vdp_register(builder, 9u,  0x00u);   /* scroll vertical               */
-  sms_vdp_register(builder, 10u, 0xFFu);   /* contador de linea apagado     */
+  sms_vdp_register(builder, 10u, (flags & AYTHER_SMS_SCENE_PALETTE_SPLIT)
+                                   ? (uint8_t)AYTHER_SMS_SPLIT_LINE
+                                   : 0xFFu); /* contador de linea apagado */
 
   /* CRAM: 32 entradas de un byte, --BBGGRR. Las 16 primeras son la paleta de
      fondo y las 16 siguientes la de sprites; el backdrop sale de la segunda. */
@@ -1070,6 +1123,8 @@ static void emit_reset_program_sms(struct rom_builder *builder)
     if (i == 1u)  color = 0x03u;   /* fondo:    rojo  */
     if (i == 16u) color = 0x30u;   /* backdrop: azul  */
     if (i == 18u) color = 0x0Cu;   /* sprites:  verde */
+    if (i == 2u && (flags & AYTHER_SMS_SCENE_SCROLL_LOCK))
+      color = 0x3Fu;               /* marcador: blanco */
     sms_vdp_write(builder, color);
   }
 
@@ -1094,8 +1149,29 @@ static void emit_reset_program_sms(struct rom_builder *builder)
     sms_vdp_write(builder, 1u);
   }
 
-  /* Recien ahora se enciende la pantalla. */
-  sms_vdp_register(builder, 1u, 0x40u);
+  if (flags & AYTHER_SMS_SCENE_SCROLL_LOCK)
+  {
+    /* Dos celdas con el patron 1 -- que en la paleta de fondo es blanco--: la
+       de la fila 0 queda donde esta porque el lock no la deja scrollear; la de
+       la fila MARKER_ROW se corre HSCROLL pixeles. Misma columna a proposito:
+       la diferencia entre las dos ES el efecto. */
+    sms_vdp_address(builder, (uint16_t)(0x3800u + AYTHER_SMS_MARKER_COL * 2u),
+                    SMS_VRAM_WRITE);
+    sms_vdp_write(builder, 0x01u);
+    sms_vdp_write(builder, 0x00u);
+    sms_vdp_address(builder, (uint16_t)(0x3800u +
+                    (AYTHER_SMS_MARKER_ROW * 32u + AYTHER_SMS_MARKER_COL) * 2u),
+                    SMS_VRAM_WRITE);
+    sms_vdp_write(builder, 0x01u);
+    sms_vdp_write(builder, 0x00u);
+  }
+
+  /* Recien ahora se enciende la pantalla (y, si hay split, la interrupcion de
+     frame: IE0, bit 5). */
+  sms_vdp_register(builder, 1u, (uint8_t)(0x40u |
+    ((flags & AYTHER_SMS_SCENE_PALETTE_SPLIT) ? 0x20u : 0u)));
+  if (flags & AYTHER_SMS_SCENE_PALETTE_SPLIT)
+    emit_u8(builder, 0xFBu);        /* EI */
 
   /* Y a esperar para siempre: la escena es estatica a proposito. Un fixture
      que cambia con el tiempo obliga a elegir en que frame mirarlo. */
@@ -1103,7 +1179,7 @@ static void emit_reset_program_sms(struct rom_builder *builder)
   emit_u8(builder, 0xFEu);
 }
 
-size_t ayther_build_generated_rom_sms(uint8_t *rom, size_t capacity)
+static size_t build_sms_rom(uint8_t *rom, size_t capacity, unsigned int flags)
 {
   struct rom_builder builder;
 
@@ -1115,7 +1191,7 @@ size_t ayther_build_generated_rom_sms(uint8_t *rom, size_t capacity)
   builder.pc = 0;                   /* el Z80 arranca en 0x0000 */
   builder.failed = 0;
 
-  emit_reset_program_sms(&builder);
+  emit_reset_program_sms_scene(&builder, flags);
   if (builder.failed)
     return 0;
 
@@ -1131,6 +1207,17 @@ size_t ayther_build_generated_rom_sms(uint8_t *rom, size_t capacity)
   rom[0x7FFFu] = 0x4Cu;             /* region export, tamanio 32 KB   */
 
   return AYTHER_GENERATED_ROM_SIZE;
+}
+
+size_t ayther_build_generated_rom_sms(uint8_t *rom, size_t capacity)
+{
+  return build_sms_rom(rom, capacity, 0u);
+}
+
+size_t ayther_build_generated_rom_sms_scene(uint8_t *rom, size_t capacity,
+                                            unsigned int flags)
+{
+  return build_sms_rom(rom, capacity, flags);
 }
 
 size_t ayther_build_generated_rom_z80_vdp(uint8_t *rom, size_t capacity)

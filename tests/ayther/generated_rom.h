@@ -44,6 +44,29 @@ size_t ayther_build_generated_rom_sprites(uint8_t *rom, size_t capacity);
 #define AYTHER_SMS_SPRITE_X0  40u
 size_t ayther_build_generated_rom_sms(uint8_t *rom, size_t capacity);
 
+/* #40, ultimo criterio: la misma escena con los dos efectos raster que el
+   issue pedia, cada uno detras de un flag para poder afirmarlos por separado.
+
+   SCROLL_LOCK   reg 0 bit 6 (las dos filas de arriba no scrollean en
+                 horizontal) con hscroll = AYTHER_SMS_HSCROLL, y dos celdas
+                 marcadoras con el patron 1 en blanco: una en la fila 0, que el
+                 lock deja quieta, y otra en la fila MARKER_ROW, que se corre.
+   PALETTE_SPLIT interrupcion de linea en SPLIT_LINE que cambia la entrada 1
+                 de CRAM (el rojo del fondo) a SPLIT_COLOR, y la interrupcion
+                 de frame que la devuelve a rojo. Es un cambio de CRAM a mitad
+                 de pantalla: exactamente lo que el journal raster tiene que
+                 ver, y lo que una recomposicion desde el estado final no puede
+                 reproducir. */
+#define AYTHER_SMS_SCENE_SCROLL_LOCK    1u
+#define AYTHER_SMS_SCENE_PALETTE_SPLIT  2u
+#define AYTHER_SMS_HSCROLL      8u
+#define AYTHER_SMS_MARKER_COL   8u      /* celda: x = 64..71 sin scroll   */
+#define AYTHER_SMS_MARKER_ROW   4u      /* fila 4: y = 32..39             */
+#define AYTHER_SMS_SPLIT_LINE   96u
+#define AYTHER_SMS_SPLIT_COLOR  0x0Fu   /* --BBGGRR: amarillo             */
+size_t ayther_build_generated_rom_sms_scene(uint8_t *rom, size_t capacity,
+                                            unsigned int flags);
+
 /* Coordenadas de pantalla de los dos sprites de esa escena. */
 #define AYTHER_SH_SPRITE_X 64
 #define AYTHER_SH_SPRITE_Y 8

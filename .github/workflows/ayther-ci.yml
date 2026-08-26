@@ -380,6 +380,13 @@ jobs:
           make -C tests check-mode4
           CORE=../genesis_plus_gx_libretro.so
 
+      # #40: scroll lock y split de paleta en Mode 4. El core tiene que dibujar
+      # los dos y DECIR que el segundo es raster (0x10E, journal).
+      - name: Mode 4 raster effects are drawn and reported
+        run: >-
+          make -C tests check-mode4-raster
+          CORE=../genesis_plus_gx_libretro.so
+
       - name: Per-scanline state matches the ROM's own scroll table
         run: >-
           make -C tests check-line-state
@@ -653,6 +660,14 @@ jobs:
           CC=clang
           CORE=../genesis_plus_gx_libretro.dll
 
+      - name: Mode 4 raster effects are drawn and reported
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        shell: pwsh
+        run: >-
+          make -C tests check-mode4-raster
+          CC=clang
+          CORE=../genesis_plus_gx_libretro.dll
+
       - name: Compare extensions-off and compiled-idle profiles
         continue-on-error: true
         if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
@@ -800,6 +815,12 @@ jobs:
         if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
         run: >-
           make -C tests check-mode4
+          CORE=../genesis_plus_gx_libretro.dylib
+
+      - name: Mode 4 raster effects are drawn and reported
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -C tests check-mode4-raster
           CORE=../genesis_plus_gx_libretro.dylib
 
       - name: Journal, frame hashes and resolved palette

@@ -183,6 +183,7 @@ int main(int argc, char **argv)
     void (*p_init)(void)                          = load_symbol(lib, "retro_init");
     bool (*p_load)(const struct retro_game_info *)= load_symbol(lib, "retro_load_game");
     void (*p_run)(void)                           = load_symbol(lib, "retro_run");
+    void (*p_unload)(void)                        = load_symbol(lib, "retro_unload_game");
     ayther_get_interface_fn p_iface =
       (ayther_get_interface_fn)load_symbol(lib, "ayther_get_interface");
     if (!p_set_env || !p_init || !p_load || !p_run || !p_iface) {
@@ -266,6 +267,67 @@ int main(int argc, char **argv)
       if (!count) {
         printf("  FALLA: la escena tiene sprites y la captura no devolvio ninguno\n");
         fail = 1;
+      }
+
+      /* El issue pide un campo `mode` en `AytherSpr`. No lo lleva, y esto es
+         lo que ocupa su lugar.
+
+         `ayther_sprite_v1` viaja como ARRAY: agregarle un byte corre todas las
+         entradas siguientes y rompe el indexado de cualquier consumidor ya
+         compilado. Es la razon exacta por la que #39.C hizo SPRITE_OUTCOME una
+         region paralela en vez de un campo. Y una region paralela de modos
+         llevaria el mismo byte 64 veces para contestar algo que es constante
+         por frame y que `SYSTEM.vdp_mode` ya contesta -- el propio issue lo
+         dice en sus dependencias: fase 2 depende del descriptor de sistema
+         "para que el frontend sepa el modo sin decodificar registros".
+
+         Lo que si hay que probar es que la struct se describe a si misma en
+         Mode 4 con el mismo layout, sin campos que signifiquen otra cosa en
+         silencio. El fixture da el oraculo por coordenada: ocho de 8x8 en
+         y=96, x = 40 + i*24. */
+      if (!rom_path && count)
+      {
+        ayther_sprite_v1 spr[64];
+        ayther_region_info_v1 si;
+        unsigned n = (count > 64u) ? 64u : count, bad = 0;
+
+        memset(&si, 0, sizeof(si));
+        if (api->query_region(AYTHER_REGION_PARSED_SPRITES, &si, sizeof(si))
+              == AYTHER_STATUS_OK && si.element_size != sizeof(ayther_sprite_v1)) {
+          printf("  FALLA: la entrada mide %u bytes y el header dice %u; en "
+                 "Mode 4 el layout es el mismo\n",
+                 (unsigned)si.element_size, (unsigned)sizeof(ayther_sprite_v1));
+          fail = 1;
+        }
+        memset(spr, 0, sizeof(spr));
+        if (api->read_region(AYTHER_REGION_PARSED_SPRITES, 0, spr,
+                             n * sizeof(spr[0]), AYTHER_GENERATION_ANY, NULL)
+              != AYTHER_STATUS_OK) {
+          printf("  FALLA: la captura de sprites tendria que leerse en Mode 4\n");
+          fail = 1;
+        } else {
+          unsigned k;
+          for (k = 0; k < n; ++k) {
+            /* `w`/`h` van en CELDAS de 8x8, igual que en Mode 5; lo que
+               cambia es el rango: Mode 5 da 1..4 en cada eje y Mode 4 siempre
+               1 de ancho y 1 o 2 de alto. La escena usa 8x8, o sea 1x1.
+
+               `yr` es la Y CRUDA de la SAT, no la de pantalla: en Mode 4 el
+               hardware quiere la de pantalla menos uno, y el fixture la
+               escribe asi. Comparar contra 96 seria pedirle a la captura que
+               mienta sobre lo que leyo. */
+            if (spr[k].w != 1u || spr[k].h != 1u) ++bad;
+            if (spr[k].yr != AYTHER_SMS_SPRITE_Y - 1u) ++bad;
+            if (spr[k].xr != AYTHER_SMS_SPRITE_X0 + k * 24u) ++bad;
+          }
+          printf("captura: %u sprites de %ux%u celdas, el primero en la SAT "
+                 "en (%u,%u)\n", n, spr[0].w, spr[0].h, spr[0].xr, spr[0].yr);
+          if (bad) {
+            printf("  FALLA: %u campos no coinciden con la escena; el modo se "
+                   "lee de SYSTEM.vdp_mode, no de la entrada\n", bad);
+            fail = 1;
+          }
+        }
       }
       if (api->read_region(AYTHER_REGION_SPRITE_OUTCOME, 0, outcome,
                            sizeof(outcome), AYTHER_GENERATION_ANY, NULL)
@@ -370,6 +432,112 @@ int main(int argc, char **argv)
       }
     }
 
+    /* --- 5b. suprimir una celda revela el backdrop ---------------------- */
+    /*
+     * La region 0x104 oculta una CELDA de pantalla. En Mode 5 eso significa
+     * "pela el primer plano y mostra lo que hay detras": plano B, o el
+     * backdrop si B esta vacio, y lo resuelve el merge de A con B. En Mode 4
+     * hay UN plano de fondo y `render_bg_m4` no llama a `merge()`, asi que el
+     * peel no tenia donde engancharse: la region se rechazaba.
+     *
+     * Con un solo plano la operacion sigue teniendo un significado y solo uno:
+     * revelar el backdrop. El fixture lo hace comprobable por color -- fondo
+     * rojo, backdrop azul- sin reimplementar el renderer.
+     */
+    {
+      static uint16_t before[MAX_PX];
+      uint8_t cells[512];
+      unsigned total, outside;
+      const unsigned COL_A = 2u, COL_B = 20u, ROW = 1u;
+
+      memcpy(before, frame_px, sizeof(before));
+      memset(cells, 0, sizeof(cells));
+      #define MARK_CELL(r, c) do { unsigned b_ = (r) * 64u + (c);         cells[b_ >> 3] |= (uint8_t)(1u << (b_ & 7u)); } while (0)
+      MARK_CELL(ROW, COL_A);
+      MARK_CELL(ROW, COL_B);
+
+      if (api->write_control(AYTHER_REGION_TILE_SUPPRESS, 0, cells,
+                             sizeof(cells), AYTHER_GENERATION_ANY, NULL)
+            != AYTHER_STATUS_OK) {
+        printf("  FALLA: ocultar una celda en Mode 4 tendria que aceptarse\n");
+        fail = 1;
+      }
+      for (i = 0; i < 8; i++) p_run();
+
+      /* Solo esas dos celdas cambian. Se cuenta el total y se mira que nada
+         caiga fuera de la fila: el rectangulo de `diff_outside` es uno solo,
+         asi que se le pasa la fila entera y se comprueba el total aparte. */
+      diff_outside(before, 0u, ROW * 8u, frame_w, 8u, &total, &outside);
+      if (outside) {
+        printf("  FALLA: %u pixeles cambiaron fuera de la fila de celdas %u\n",
+               outside, ROW);
+        fail = 1;
+      }
+      if (total != 128u) {
+        printf("  FALLA: dos celdas de 8x8 son 128 pixeles, cambiaron %u\n",
+               total);
+        fail = 1;
+      }
+
+      /* Y lo que se revela es UN color, el mismo en las dos celdas y distinto
+         del fondo. Eso es el backdrop sin tener que decodificar RGB565. */
+      {
+        uint16_t rev = frame_px[(size_t)(ROW * 8u) * frame_w + COL_A * 8u];
+        uint16_t bg  = before[(size_t)(ROW * 8u) * frame_w + COL_A * 8u];
+        unsigned x, y, distintos = 0;
+        for (y = ROW * 8u; y < ROW * 8u + 8u; ++y) {
+          for (x = COL_A * 8u; x < COL_A * 8u + 8u; ++x)
+            if (frame_px[(size_t)y * frame_w + x] != rev) ++distintos;
+          for (x = COL_B * 8u; x < COL_B * 8u + 8u; ++x)
+            if (frame_px[(size_t)y * frame_w + x] != rev) ++distintos;
+        }
+        printf("celda oculta: %u pixeles, revelan %04x sobre un fondo %04x\n",
+               total, rev, bg);
+        if (distintos) {
+          printf("  FALLA: %u de los 128 pixeles revelados no son el mismo "
+                 "color\n", distintos);
+          fail = 1;
+        }
+        if (rev == bg) {
+          printf("  FALLA: ocultar la celda no cambio el color\n");
+          fail = 1;
+        }
+      }
+
+      /* La prueba de que se pela el FONDO y no el frame: la celda que el
+         sprite 0 tapa por completo. El sprite es 8x8 solido y cae justo en
+         una celda, y se dibuja DESPUES del peel, asi que ocultar esa celda no
+         tiene que cambiar un solo pixel. Si el peel corriera despues de los
+         sprites, o si borrara el frame en vez del fondo, aca se veria. */
+      memset(cells, 0, sizeof(cells));
+      api->write_control(AYTHER_REGION_TILE_SUPPRESS, 0, cells, sizeof(cells),
+                         AYTHER_GENERATION_ANY, NULL);
+      for (i = 0; i < 8; i++) p_run();
+      memcpy(before, frame_px, sizeof(before));
+      MARK_CELL(AYTHER_SMS_SPRITE_Y / 8u, AYTHER_SMS_SPRITE_X0 / 8u);
+      if (api->write_control(AYTHER_REGION_TILE_SUPPRESS, 0, cells,
+                             sizeof(cells), AYTHER_GENERATION_ANY, NULL)
+            != AYTHER_STATUS_OK) {
+        printf("  FALLA: ocultar la celda del sprite tendria que aceptarse\n");
+        fail = 1;
+      }
+      for (i = 0; i < 8; i++) p_run();
+      diff_outside(before, 0u, 0u, frame_w, frame_h, &total, &outside);
+      printf("celda tapada por el sprite 0: %u pixeles cambiados\n", total);
+      if (total) {
+        printf("  FALLA: el sprite tapa la celda entera; pelar el fondo "
+               "debajo no puede verse\n");
+        fail = 1;
+      }
+      #undef MARK_CELL
+
+      /* Limpiar para las secciones que siguen. */
+      memset(cells, 0, sizeof(cells));
+      api->write_control(AYTHER_REGION_TILE_SUPPRESS, 0, cells, sizeof(cells),
+                         AYTHER_GENERATION_ANY, NULL);
+      for (i = 0; i < 8; i++) p_run();
+    }
+
     /* --- 5. recomponer da el mismo frame -------------------------------- */
     {
       uint32_t w = 0, h = 0;
@@ -390,6 +558,132 @@ int main(int argc, char **argv)
         if (diff) {
           printf("  FALLA: la recomposicion tiene que dar el mismo frame\n");
           fail = 1;
+        }
+      }
+    }
+
+    /* --- 6. Game Gear: el frame emitido es 160x144 ---------------------- */
+    /*
+     * La Game Gear usa el MISMO VDP en Mode 4; lo que cambia es que el area
+     * visible se recorta a 160x144. El core lo hace con offsets NEGATIVOS
+     * (`viewport.x = -48`, `y = -24`), asi que `viewport.w/h` siguen diciendo
+     * 256x192 y el frame que sale por `video_refresh` mide 160x144.
+     *
+     * Esa diferencia es la pregunta del issue: si las regiones del fork
+     * describen el frame que el frontend recibe o el area interna del VDP. Un
+     * consumidor que indexe la atribucion con las coordenadas del frame
+     * emitido y reciba dimensiones internas lee la fila equivocada.
+     *
+     * El fixture sirve igual: son los mismos bytes, cargados con extension
+     * .gg. Es lo unico que el core mira para elegir el hardware.
+     */
+    {
+      struct retro_game_info gg;
+      ayther_region_info_v1 info;
+
+      p_unload();
+      memset(&gi_ext, 0, sizeof(gi_ext));
+      gi_ext.full_path = "ayther-sms-v1.gg"; gi_ext.dir = ".";
+      gi_ext.name = "gg"; gi_ext.ext = "gg";
+      gi_ext.data = rom; gi_ext.size = rom_size;
+      gi_ext.persistent_data = true;
+      memset(&gg, 0, sizeof(gg));
+      gg.path = "ayther-sms-v1.gg"; gg.data = rom; gg.size = rom_size;
+      if (!p_load(&gg)) {
+        printf("  FALLA: el mismo fixture no carga como Game Gear\n");
+        fail = 1;
+      } else {
+        api->set_subscriptions(AYTHER_SUB_RENDER_CONTROLS |
+                               AYTHER_SUB_SPRITE_CAPTURE |
+                               AYTHER_SUB_RECOMPOSITION |
+                               AYTHER_SUB_ATTRIBUTION |
+                               AYTHER_SUB_VDP_MEMORY);
+        for (i = 0; i < FRAMES; i++) p_run();
+
+        memset(&sys, 0, sizeof(sys));
+        api->read_region(AYTHER_REGION_SYSTEM, 0, &sys, sizeof(sys),
+                         AYTHER_GENERATION_ANY, NULL);
+        printf("\ngame gear: hw=%02x modo=%u descriptor=%ux%u frame emitido=%ux%u\n",
+               sys.system_hw, sys.vdp_mode, sys.viewport_w, sys.viewport_h,
+               frame_w, frame_h);
+        if (sys.system_hw != AYTHER_SYSTEM_HW_GG) {
+          printf("  FALLA: el mismo ROM con extension .gg tiene que ser Game Gear\n");
+          fail = 1;
+        }
+        if (frame_w != 160u || frame_h != 144u) {
+          printf("  FALLA: la Game Gear emite 160x144\n");
+          fail = 1;
+        }
+
+        /* El descriptor promete el frame emitido. Es la promesa que se
+           rompia: el core recorta con offsets negativos y los campos, que son
+           unsigned, publicaban 256x192 con un x envuelto a 65488. */
+        if (sys.viewport_w != frame_w || sys.viewport_h != frame_h) {
+          printf("  FALLA: el descriptor dice %ux%u y el frame es %ux%u\n",
+                 sys.viewport_w, sys.viewport_h, frame_w, frame_h);
+          fail = 1;
+        }
+        if (sys.viewport_x != 48u || sys.viewport_y != 24u) {
+          printf("  FALLA: el offset dentro del area interna es (48,24), "
+                 "no (%u,%u)\n", sys.viewport_x, sys.viewport_y);
+          fail = 1;
+        }
+
+        /* ATTRIBUTION dice "un byte por pixel del frame emitido". */
+        memset(&info, 0, sizeof(info));
+        if (api->query_region(AYTHER_REGION_ATTRIBUTION, &info, sizeof(info))
+              != AYTHER_STATUS_OK) {
+          printf("  FALLA: ATTRIBUTION tendria que existir en Game Gear\n");
+          fail = 1;
+        } else if (info.byte_size != (uint64_t)frame_w * frame_h) {
+          printf("  FALLA: atribucion de %u bytes para un frame de %ux%u\n",
+                 (unsigned)info.byte_size, frame_w, frame_h);
+          fail = 1;
+        } else {
+          printf("atribucion: %u bytes = %ux%u\n",
+                 (unsigned)info.byte_size, frame_w, frame_h);
+        }
+
+        /* Y la prueba de que los offsets del recorte son los correctos y no
+           dos numeros que dan el tamano justo: la recomposicion tiene que
+           coincidir pixel a pixel con el frame que recibio el frontend. Si el
+           recorte estuviera corrido, el tamano seguiria estando bien y esta
+           comparacion fallaria en cada pixel. */
+        {
+          uint32_t w = 0, h = 0;
+          int32_t st = api->recompose_frame(recomposed, MAX_PX, 0, &w, &h);
+          if (st != AYTHER_STATUS_OK) {
+            printf("  FALLA: recomponer en Game Gear devolvio %d\n", (int)st);
+            fail = 1;
+          } else if (w != frame_w || h != frame_h) {
+            printf("  FALLA: la recomposicion mide %ux%u y el frame %ux%u\n",
+                   w, h, frame_w, frame_h);
+            fail = 1;
+          } else {
+            unsigned diff = 0, k;
+            for (k = 0; k < w * h; ++k)
+              if (recomposed[k] != frame_px[k]) ++diff;
+            printf("recomposicion en GG: %ux%u, %u pixeles distintos de %u\n",
+                   w, h, diff, w * h);
+            if (diff) {
+              printf("  FALLA: la recomposicion de Game Gear no reproduce el "
+                     "frame emitido\n");
+              fail = 1;
+            }
+          }
+        }
+
+        /* La descomposicion por capas es de Mode 5 y punto: la Game Gear no
+           tiene plano B ni ventana. Lo que importa es que lo diga en vez de
+           devolver un tamano cualquiera, asi que se afirma el rechazo. */
+        {
+          int32_t st = api->recompose_multilayer(recomposed, NULL, NULL, NULL,
+                                                 NULL, MAX_PX, 0, NULL, NULL);
+          if (st == AYTHER_STATUS_OK) {
+            printf("  FALLA: descomponer en capas no existe en Mode 4; "
+                   "aceptarlo devuelve un plano B inventado\n");
+            fail = 1;
+          }
         }
       }
     }

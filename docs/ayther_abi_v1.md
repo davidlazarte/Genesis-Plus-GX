@@ -437,6 +437,30 @@ answer.
 `vdp_mode` is `0` on a Mega Drive cartridge until the program writes register 1:
 before that the VDP has not chosen, and answering "Mode 4" would be inventing.
 
+### The viewport is the *emitted* frame (#40)
+
+`viewport_w/h` are the dimensions of the frame the frontend receives through
+`video_refresh`: 256x224 on Mega Drive, 256x192 on Master System, **160x144 on
+Game Gear**. `ATTRIBUTION` describes that same rectangle, one byte per pixel,
+and `recompose_frame` returns that same size.
+
+The Game Gear is the case where this stops being a formality. The core crops it
+by giving `bitmap.viewport` *negative* offsets (`x = -48`, `y = -24`) and
+leaving `w/h` at the VDP's internal 256x192; the emitted width is
+`w + 2*x`. Copying `w/h` into the descriptor made all three regions report the
+internal area while advertising the emitted one, and because the fields are
+unsigned, `x = -48` wrapped to 65488 — so a consumer could not even recover the
+crop to correct for it. Attribution was worse than either consistent choice: it
+already added `viewport.y` to the row but neither subtracted `viewport.x` from
+the column nor shrank its declared height, so indexing it by emitted-frame
+coordinates read a shifted row *and* the wrong column.
+
+`viewport_x/y` are the offset at which the emitted frame starts inside the
+active area — `(48,24)` on Game Gear, `(0,0)` everywhere else. When a build
+delivers overscan the frame is *larger* than the active area rather than
+smaller; there is no offset to give, so they stay zero and `viewport_w/h`
+already include the borders.
+
 ## Control × video mode (#40)
 
 Not every control means something in every video mode. Until #40 the ones that
@@ -444,9 +468,9 @@ do not simply returned `AYTHER_STATUS_OK` and did nothing, which is the worst
 contract available: a frontend believes it hid a sprite and draws its HD
 replacement on top of the original.
 
-Phase 2 implemented most of what phase 1 could only report. The remaining
-`UNSUPPORTED_MODE` rows are the ones that still have no referent or no
-implementation — and saying so is still better than accepting and doing nothing.
+Phase 2 implemented what phase 1 could only report. The one `UNSUPPORTED_MODE`
+row left is the one with no referent at all — turning off a plane that does not
+exist — and saying so is still better than accepting and doing nothing.
 
 | Control | Mode 5 (MD) | Mode 4 (SMS/GG/PBC) |
 |---|---|---|
@@ -454,14 +478,14 @@ implementation — and saying so is still better than accepting and doing nothin
 | `LAYER_MASK` A bit | yes — plane A | yes — **reinterpreted as *the* background**, the only one Mode 4 has |
 | `LAYER_MASK` B/W bits | yes | **`UNSUPPORTED_MODE`** — those planes do not exist, the bits have no referent |
 | `SPRITE_SUPPRESS` (0x103) | yes | yes — same mask; the Mode 4 SAT has 64 entries and the mask holds 128 |
-| `TILE_SUPPRESS` / peel (0x104) | yes | **`UNSUPPORTED_MODE`** — `render_bg_m4` does not go through the merge where the peel lives |
+| `TILE_SUPPRESS` / peel (0x104) | yes — reveals plane B, or the backdrop where B is empty | yes — reveals the backdrop; with one background plane that is the only thing "peel a layer" can mean |
 | `PLANE_TILE_SUPPRESS` (0x105/0x106) | yes | yes — same key shape (pattern, palette); in Mode 4 the fields are 9 and 1 bits instead of 11 and 2 |
 | `LAYER_DIM` (0x108) | yes | yes — `remap_line` is shared |
 | Audio mute and gain (0x10D) | yes | yes |
 | `ATTRIBUTION` | yes | background layer only |
 | `SPRITE_OUTCOME` (#39.C) | six bits | `PARSED`, `DRAWN`, `DROP_LINE`, `SUPPRESSED` — Mode 4 has no x=0 mask and no pixel budget |
 | Recomposition | yes | yes — pixel-perfect, measured |
-| Sprite capture | yes | yes — same layout; in Mode 4 height is 8 or 16, width is always 8, and the palette is one of **two** of 16 |
+| Sprite capture | yes | yes — same layout, no `mode` field; `w`/`h` are in 8×8 **cells** (Mode 4: always 1 wide, 1 or 2 tall), and the palette is one of **two** of 16 |
 
 A rejected write also raises `AYTHER_RASTER_REASON_UNSUPPORTED_CONTROLS` in
 `0x10E`, so a frontend polling the fallback reasons sees it without having to
@@ -472,8 +496,33 @@ Master System cartridge: the system descriptor reports mode 4 at 256×192, hidin
 the background changes the frame, hiding plane B is rejected, 9 sprites are
 captured, suppressing a drawn slot changes the frame and reports `SUPPRESSED`
 rather than `DRAWN`, and recomposition returns **0 differing pixels out of
-49,152**. `tests/ci/validate_roms.sh` extends that to 300 consecutive frames,
+49,152**.
+
+The peel is checked by colour rather than by hash, which the fixture is built
+for: a hidden cell turns from the background red (`f800`) to the backdrop blue
+(`001f`), two cells change exactly 128 pixels and nothing outside them, and all
+128 revealed pixels are the *same* colour. Hiding the cell that sprite 0 covers
+completely changes **zero** pixels — which is what says the peel is applied to
+the background and before the sprite pass, not to the finished frame. `tests/ci/validate_roms.sh` extends that to 300 consecutive frames,
 all `clean_equal` with no fallback reason at all.
+
+### Why `AytherSpr` has no `mode` field
+
+The issue asks for one. It is not there, and the reason is the same one that
+made `SPRITE_OUTCOME` a parallel region in #39.C: `ayther_sprite_v1` travels as
+an **array**, so a new byte shifts every following entry and breaks indexing for
+any consumer already compiled against it. A parallel region of modes would then
+carry the same byte up to 64 times to answer something that is constant for the
+whole frame.
+
+`AYTHER_REGION_SYSTEM` already answers it — and the issue's own dependency
+section says so: phase 2 depends on the system descriptor "so the frontend knows
+the mode without decoding registers". What was actually missing was not a field
+but a contract: the struct documented none of its units. It does now, field by
+field, including the two that read wrong at a glance — `w`/`h` are in 8×8 cells,
+not pixels, and `yr`/`xr` are the raw SAT values, not screen coordinates (in
+Mode 4 the raw Y is screen Y *minus one*, which is what the hardware wants).
+`mode4_controls.c` asserts all of it against the fixture's known scene.
 
 That last part also fixed a lie: `ayther_recompose_mode_supported()` rejected
 everything that was not Mode 5, so the core was recomposing an SMS frame

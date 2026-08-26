@@ -337,10 +337,25 @@ static void ayther_fill_system(void)
    ayther_system_desc.shadow_highlight = (reg[12] & 0x08) ? 1 : 0;
    ayther_system_desc.lines_per_frame = (uint16_t)lines_per_frame;
 
-   ayther_system_desc.viewport_x = (uint16_t)bitmap.viewport.x;
-   ayther_system_desc.viewport_y = (uint16_t)bitmap.viewport.y;
-   ayther_system_desc.viewport_w = (uint16_t)bitmap.viewport.w;
-   ayther_system_desc.viewport_h = (uint16_t)bitmap.viewport.h;
+   /* #40: el descriptor promete el frame EMITIDO, y en Game Gear no coincide
+      con el area interna del VDP. El core recorta la GG con offsets NEGATIVOS
+      (`viewport.x = -48`, `y = -24`) dejando `viewport.w/h` en 256x192,
+      mientras el frontend recibe 160x144.
+
+      Copiar los campos tal cual rompia dos veces: el tamano mentia, y como
+      `viewport_x` es unsigned el -48 se envolvia a 65488, asi que el consumidor
+      ni siquiera podia deducir el recorte. Se publica lo que promete el
+      contrato: w/h del frame emitido, y x/y como el offset POSITIVO donde ese
+      frame empieza dentro del area interna, que es el dato que hace falta para
+      volver a mapear. En Mega Drive los offsets son 0 y nada cambia. */
+   ayther_system_desc.viewport_x = (uint16_t)((bitmap.viewport.x < 0)
+                                              ? -bitmap.viewport.x : 0);
+   ayther_system_desc.viewport_y = (uint16_t)((bitmap.viewport.y < 0)
+                                              ? -bitmap.viewport.y : 0);
+   ayther_system_desc.viewport_w = (uint16_t)(bitmap.viewport.w +
+                                              2 * bitmap.viewport.x);
+   ayther_system_desc.viewport_h = (uint16_t)(bitmap.viewport.h +
+                                              2 * bitmap.viewport.y);
 
    ayther_system_desc.master_clock = system_clock;
    ayther_system_desc.cpu_clock = ((system_hw & SYSTEM_PBC) == SYSTEM_MD)
@@ -4700,18 +4715,16 @@ static int32_t AYTHER_CALL ayther_write_control_v1(uint32_t region_id,
    {
       /* #40 fase 2: lo que YA funciona en Mode 4 deja de rechazarse. La lista
          de arriba era correcta en fase 1 -- contestar UNSUPPORTED_MODE es mejor
-         que aceptar y no hacer nada-, pero hoy `parse_satb_m4` suprime por slot
-         y `render_bg_m4` suprime por (patron, paleta) y respeta la capa de
-         fondo. Seguir rechazandolos seria el error simetrico del que fase 1
-         arreglo: negar algo que si se puede cumplir. */
+         que aceptar y no hacer nada-, pero hoy `parse_satb_m4` suprime por slot,
+         `render_bg_m4` suprime por (patron, paleta) y respeta la capa de fondo,
+         y la supresion por celda (0x104) revela el backdrop desde el hook de
+         linea. Seguir rechazandolos seria el error simetrico del que fase 1
+         arreglo: negar algo que si se puede cumplir.
+
+         Lo que queda rechazado es lo que de verdad no tiene referente: apagar
+         un plano que no existe. */
       switch (region_id)
       {
-         case AYTHER_REGION_TILE_SUPPRESS:
-            /* La supresion por CELDA de pantalla (0x104) sigue sin existir en
-               Mode 4: `render_bg_m4` no pasa por el merge donde vive el peel.
-               Se dice, en vez de aceptarla y no hacer nada. */
-            ayther_raster_dirty |= AYTHER_RASTER_REASON_UNSUPPORTED_CONTROLS;
-            return AYTHER_STATUS_UNSUPPORTED_MODE;
          case AYTHER_REGION_LAYER_MASK:
             /* En Mode 4 hay UN plano de fondo: el bit de "Plano A" se
                reinterpreta como ese fondo y los de B y Window no significan

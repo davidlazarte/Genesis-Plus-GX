@@ -33,6 +33,16 @@ else
 DL_LIBS := -ldl
 endif
 
+# libFuzzer usa `log()` en su heuristica de energia. Con ASan estatico el
+# runtime arrastraba libm de arriba; con `-shared-libsan` ya no, y el link
+# muere con "undefined reference to symbol 'log@@GLIBC_2.29'". Es la mitad que
+# faltaba del cambio a runtime dinamico, no una dependencia nueva.
+ifeq ($(OS),Windows_NT)
+FUZZ_LIBS :=
+else
+FUZZ_LIBS := -lm
+endif
+
 # El ROM sintetico es la base de casi todos los targets: la entrada del fuzzer
 # es una MUTACION sobre algo valido, no bytes al azar desde cero. Empezar del
 # vacio gasta el presupuesto en llegar a "es un cartucho".
@@ -106,7 +116,7 @@ $(BUILD_DIR)/fuzz_$(1)$(EXE_EXT): fuzz_$(1).c $$(SRC_$(1)) $$(DEP_$(1)) | $(BUIL
 	$$(FUZZ_CC) -O1 -g -Wall -Wextra $$(CPPFLAGS) $$(INC_$(1)) \
 		-fsanitize=fuzzer,address,undefined -shared-libsan \
 		-fno-omit-frame-pointer \
-		-o $$@ fuzz_$(1).c $$(SRC_$(1)) $$(DL_LIBS)
+		-o $$@ fuzz_$(1).c $$(SRC_$(1)) $$(DL_LIBS) $$(FUZZ_LIBS)
 
 fuzz-$(1): $$(BUILD_DIR)/fuzz_$(1)$$(EXE_EXT)
 	AYTHER_FUZZ_CORE="$$(CORE)" $$(BUILD_DIR)/fuzz_$(1)$$(EXE_EXT) \

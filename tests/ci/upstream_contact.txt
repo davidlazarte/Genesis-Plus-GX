@@ -1,33 +1,305 @@
-# Puntos de contacto con upstream (#68): hunks nuestros por archivo de
-# upstream, medidos contra el merge-base con upstream/master.
+# Puntos de contacto con upstream (#68, #71): un hunk nuestro por linea,
+# en archivos DE upstream, medidos contra el merge-base con upstream/master.
+# archivo<TAB>funcion<TAB>primera linea de codigo del hunk.
 # Regenerar con: bash tests/ci/check_upstream_contact.sh --regen
-# Subir un numero es legitimo si se dice por que en el mismo PR.
-3 .gitignore
-5 Makefile.libretro
-1 README.md
-1 builds/README.md
-9 core/cd_hw/pcm.c
-2 core/debug/cpuhook.h
-3 core/genesis.c
-1 core/input_hw/gamepad.c
-1 core/input_hw/gamepad.h
-1 core/loadrom.c
-1 core/loadrom.h
-1 core/shared.h
-25 core/sound/psg.c
-1 core/sound/psg.h
-9 core/sound/sound.c
-2 core/sound/sound.h
-13 core/sound/ym2612.c
-3 core/sound/ym3438.c
-1 core/sound/ym3438.h
-4 core/state.c
-1 core/state.h
-3 core/system.c
-45 core/vdp_ctrl.c
-5 core/vdp_ctrl.h
-127 core/vdp_render.c
-2 core/vdp_render.h
-3 libretro/Makefile.common
-25 libretro/libretro.c
-2 libretro/link.T
+# Agregar un punto de contacto es legitimo si se dice por que en el mismo PR.
+.gitignore	(sin funcion)	.idea/
+.gitignore	genesis_plus_gx_libretro.*	# AYTHER test and benchmark outputs
+.gitignore	sdl/build_sdl2	# built core (BYOC) — anchored to repo root so it does not match docs/
+Makefile.libretro	HOOK_CPU = 0	AYTHER_EXTENSIONS = 1
+Makefile.libretro	clean:	# #43: `clean` solo borra los objetos del core. Los arboles de artefactos viven
+Makefile.libretro	else	# #43: advertencias del compilador, con dos niveles a proposito.
+Makefile.libretro	else	# AYTHER fork delta: built with llvm-mingw (lld), which does not accept GNU
+Makefile.libretro	endif	# AYTHER fork delta: genesis_plus_gx type-puns heavily and relies on wrapping
+README.md	(sin funcion)	# ⚡ AYTHER Genesis Core Fork
+builds/README.md	Notes:	---
+core/cd_hw/pcm.c	extern int8 reset_do_not_clear_buffers;	#include "audio_probe.h"
+core/cd_hw/pcm.c	void pcm_run(unsigned int length)	int l_delta = ((data * pcm.chan[j].env * (pcm.chan[j].pan & 0x0F)) >> 5);
+core/cd_hw/pcm.c	void pcm_run(unsigned int length)	l += l_delta;
+core/cd_hw/pcm.c	void pcm_write(unsigned int address, unsigned char data, unsigned int cycles)	audio_probe_pcm_pitch(pcm.index, pcm.chan[pcm.index].fd.w);
+core/cd_hw/pcm.c	void pcm_write(unsigned int address, unsigned char data, unsigned int cycles)	audio_probe_pcm_pitch(pcm.index, pcm.chan[pcm.index].fd.w);
+core/cd_hw/pcm.c	void pcm_write(unsigned int address, unsigned char data, unsigned int cycles)	audio_probe_pcm_volume(pcm.index, data, pcm.chan[pcm.index].pan);
+core/cd_hw/pcm.c	void pcm_write(unsigned int address, unsigned char data, unsigned int cycles)	audio_probe_pcm_volume(pcm.index, pcm.chan[pcm.index].env, data);
+core/cd_hw/pcm.c	void pcm_write(unsigned int address, unsigned char data, unsigned int cycles)	int i;
+core/cd_hw/pcm.c	void pcm_write(unsigned int address, unsigned char data, unsigned int cycles)	unsigned char old_status = pcm.status;
+core/debug/cpuhook.h	typedef enum {	*
+core/debug/cpuhook.h	typedef enum {	extern void (*cpu_hook)(hook_type_t type, int width, unsigned int address, unsigned int value);
+core/genesis.c	extern uint8 reset_do_not_clear_buffers;	static uint32 gen_reset_rng = 0x9E3779B9u;
+core/genesis.c	void gen_reset(int hard_reset)	gen_reset_rng = 0x9E3779B9u;
+core/genesis.c	void gen_reset(int hard_reset)	m68k.cycles = gen_reset_random() %
+core/input_hw/gamepad.c	void mastertap_2_write(unsigned char data, unsigned char mask)	int gamepad_context_save(unsigned char *state)
+core/input_hw/gamepad.h	(sin funcion)	extern int gamepad_context_save(unsigned char *state);
+core/loadrom.c	void getrominfo(char *romheader)	rominfo.crc32 = crc32(0, cart.rom, cart.romsize);
+core/loadrom.h	typedef struct	unsigned int crc32; /* ROM Checksum (crc32) */
+core/shared.h	(sin funcion)	#include "audio_probe.h"
+core/sound/psg.c	(sin funcion)	#include "ayther/ayther_dual_path.h"
+core/sound/psg.c	int psg_context_load(uint8 *state)	(comentario)
+core/sound/psg.c	int psg_context_load(uint8 *state)	for (i=0; i<4; i++) psg_ayther_muted[i] = 0;
+core/sound/psg.c	int psg_context_load(uint8 *state)	if ((psg.noiseShiftValue & 1)
+core/sound/psg.c	int psg_context_load(uint8 *state)	if ((psg.polarity[i] > 0)
+core/sound/psg.c	static struct	static uint8 psg_ayther_muted[4] = {0};
+core/sound/psg.c	static struct	unsigned int preamp; /* last preamp value (for gain refresh) */
+core/sound/psg.c	static void psg_update(unsigned int clocks)	(comentario)
+core/sound/psg.c	static void psg_update(unsigned int clocks)	(comentario)
+core/sound/psg.c	static void psg_update(unsigned int clocks)	(void)ayther_audio_controls;
+core/sound/psg.c	static void psg_update(unsigned int clocks)	AYTHER_DUAL_PATH_STATIC(psg_update, psg_update,
+core/sound/psg.c	static void psg_update(unsigned int clocks)	blip_add_delta(snd.blips[0], timestamp, polarity*eo0, polarity*eo1);
+core/sound/psg.c	static void psg_update(unsigned int clocks)	blip_add_delta(snd.blips[0], timestamp, shiftOutput*eo0, shiftOutput*eo1);
+core/sound/psg.c	static void psg_update(unsigned int clocks)	blip_add_delta_fast(snd.blips[0], timestamp, polarity*eo0, polarity*eo1);
+core/sound/psg.c	static void psg_update(unsigned int clocks)	blip_add_delta_fast(snd.blips[0], timestamp, shiftOutput*eo0, shiftOutput*eo1);
+core/sound/psg.c	static void psg_update(unsigned int clocks)	int aeth_mute = ayther_audio_controls &&
+core/sound/psg.c	void psg_config(unsigned int clocks, unsigned int preamp, unsigned int panning)	if (AYTHER_SUBSCRIBED(AYTHER_SUB_RENDER_CONTROLS))
+core/sound/psg.c	void psg_config(unsigned int clocks, unsigned int preamp, unsigned int panning)	psg.preamp = preamp;
+core/sound/psg.c	void psg_config(unsigned int clocks, unsigned int preamp, unsigned int panning)	void psg_refresh_gain(void)
+core/sound/psg.c	void psg_end_frame(unsigned int clocks)	AYTHER_HOT_INLINE void psg_update_impl(unsigned int clocks,
+core/sound/psg.c	void psg_reset(void)	psg.preamp = 0;
+core/sound/psg.c	void psg_write(unsigned int clocks, unsigned int data)	(comentario)
+core/sound/psg.c	void psg_write(unsigned int clocks, unsigned int data)	audio_probe_psg_raw(clocks, data);
+core/sound/psg.c	void psg_write(unsigned int clocks, unsigned int data)	if ((psg.noiseShiftValue & 1) && !AYTHER_PSG_MUTED(3))
+core/sound/psg.c	void psg_write(unsigned int clocks, unsigned int data)	if ((psg.polarity[i] > 0) && !AYTHER_PSG_MUTED(i))
+core/sound/psg.h	extern void psg_end_frame(unsigned int clocks);	extern void PSG_GetVoice(int ch, ap_voice_t *out);
+core/sound/sound.c	int sound_update(unsigned int cycles)	audio_probe_frame(cycles);
+core/sound/sound.c	int8 audio_hard_disable = 0;	uint32 ayther_audio_mute = 0;
+core/sound/sound.c	static int ym3438_cycles;	static int ayther_fm_addr_latch;
+core/sound/sound.c	static void YM2612_Write(unsigned int cycles, unsigned int a, unsigned int v)	audio_probe_set_time(cycles);
+core/sound/sound.c	static void YM2612_Write(unsigned int cycles, unsigned int a, unsigned int v)	if (a & 1)
+core/sound/sound.c	static void YM3438_Update(int *buffer, int length)	int ch;
+core/sound/sound.c	static void YM3438_Write(unsigned int cycles, unsigned int a, unsigned int v)	audio_probe_set_time(cycles);
+core/sound/sound.c	static void YM3438_Write(unsigned int cycles, unsigned int a, unsigned int v)	if (a & 1)
+core/sound/sound.c	void sound_reset(void)	audio_probe_reset();
+core/sound/sound.h	(sin funcion)	#include "../ayther/ayther_api.h"
+core/sound/sound.h	extern void restore_sound_buffer();	#define AYTHER_AUDIO_CHIP_FM 0 /* YM2612 (FM) */
+core/sound/ym2612.c	(sin funcion)	#include "ayther/ayther_dual_path.h"
+core/sound/ym2612.c	INLINE void OPNWriteMode(int r, int v)	audio_probe_fm_key(c, v);
+core/sound/ym2612.c	int YM2612LoadContext(unsigned char *state)	for (c=0; c<6; c++)
+core/sound/ym2612.c	int YM2612SaveContext(unsigned char *state)	YM2612 saved = ym2612;
+core/sound/ym2612.c	unsigned int YM2612Read(void)	AYTHER_HOT_INLINE void ym2612_update_impl(int *buffer, int length,
+core/sound/ym2612.c	void YM2612Update(int *buffer, int length)	(comentario)
+core/sound/ym2612.c	void YM2612Update(int *buffer, int length)	(void)ayther_audio_controls;
+core/sound/ym2612.c	void YM2612Update(int *buffer, int length)	AYTHER_DUAL_PATH(YM2612Update, ym2612_update,
+core/sound/ym2612.c	void YM2612Update(int *buffer, int length)	if (ayther_audio_controls &&
+core/sound/ym2612.c	void YM2612Update(int *buffer, int length)	if (fm_gain_any)
+core/sound/ym2612.c	void YM2612Update(int *buffer, int length)	int fm_gain[6] = {100, 100, 100, 100, 100, 100};
+core/sound/ym2612.c	void YM2612Write(unsigned int a, unsigned int v)	audio_probe_fm_raw(addr, v);
+core/sound/ym2612.c	void YM2612Write(unsigned int a, unsigned int v)	if ((unsigned int)(v & 0x80) != (unsigned int)ym2612.dacen)
+core/sound/ym3438.c	(sin funcion)	#include "types.h"
+core/sound/ym3438.c	static void OPN2_ChOutput(ym3438_t *chip)	if (AYTHER_FM_MUTED(5))
+core/sound/ym3438.c	static void OPN2_ChOutput(ym3438_t *chip)	if (AYTHER_FM_MUTED(channel))
+core/sound/ym3438.h	void OPN2_SetTestPin(ym3438_t *chip, Bit32u value);	void OPN2_AytherSetGain(Bit32u channel, Bit32s gain);
+core/state.c	(sin funcion)	#include "gamepad.h"
+core/state.c	int state_load(unsigned char *state)	if (version[15] >= 0x37)
+core/state.c	int state_save(unsigned char *state)	Z80_Regs z80_state = Z80;
+core/state.c	int state_save(unsigned char *state)	bufferptr += gamepad_context_save(&state[bufferptr]);
+core/state.h	(sin funcion)	#define STATE_VERSION "GENPLUS-GX 1.7.7"
+core/system.c	void system_frame_gen(int do_skip)	vdp_ayther_begin_frame();
+core/system.c	void system_frame_scd(int do_skip)	vdp_ayther_begin_frame();
+core/system.c	void system_frame_sms(int do_skip)	vdp_ayther_begin_frame();
+core/vdp_ctrl.c	int vdp_context_load(uint8 *state)	memset((char *)ayther_vram_dirty, 0xFF, sizeof(ayther_vram_dirty));
+core/vdp_ctrl.c	int vdp_context_load(uint8 *state)	vdp_ayther_begin_frame();
+core/vdp_ctrl.c	static const int fifo_timing_h40[] =	#define FIFO_TIMING_SLOTS_H32 ((int)(sizeof(fifo_timing_h32) / sizeof(fifo_timing_h32[0])))
+core/vdp_ctrl.c	static int *fifo_timing;        /* FIFO slots timing table */	static int fifo_timing_slots; /* entries in the table fifo_timing points to (#63) */
+core/vdp_ctrl.c	static int hblank_end_cycle;    /* HBLANK flag clear cycle */	static unsigned int ayther_raster_line_at(unsigned int cycles)
+core/vdp_ctrl.c	static void vdp_68k_data_w_m4(unsigned int data)	ayther_raster_mark(AYTHER_RASTER_REASON_VRAM, (uint16_t)index,
+core/vdp_ctrl.c	static void vdp_68k_data_w_m4(unsigned int data)	ayther_raster_mark_visible(AYTHER_RASTER_REASON_CRAM, (uint16_t)index,
+core/vdp_ctrl.c	static void vdp_68k_data_w_m4(unsigned int data)	while ((slot + fifo_byte_access) < (fifo_timing_slots - 1) && (cycles >= fifo_timing[slot])) slot++;
+core/vdp_ctrl.c	static void vdp_68k_data_w_m5(unsigned int data)	vdp_bus_w(data, 0, m68k.cycles);
+core/vdp_ctrl.c	static void vdp_68k_data_w_m5(unsigned int data)	while ((slot + fifo_byte_access) < (fifo_timing_slots - 1) && (cycles >= fifo_timing[slot])) slot++;
+core/vdp_ctrl.c	static void vdp_bus_w(unsigned int data)	ayther_raster_mark_visible(AYTHER_RASTER_REASON_CRAM, index, data, 1,
+core/vdp_ctrl.c	static void vdp_bus_w(unsigned int data)	ayther_raster_mark_vram(index, data, 1, from_dma, cycles);
+core/vdp_ctrl.c	static void vdp_bus_w(unsigned int data)	uint16 *p = (uint16 *)&vsram[addr & 0x7E];
+core/vdp_ctrl.c	static void vdp_dma_68k_ext(unsigned int length)	vdp_bus_w(data, 1, mcycles_vdp);
+core/vdp_ctrl.c	static void vdp_dma_68k_io(unsigned int length)	vdp_bus_w(data, 1, mcycles_vdp);
+core/vdp_ctrl.c	static void vdp_dma_68k_ram(unsigned int length)	vdp_bus_w(data, 1, mcycles_vdp);
+core/vdp_ctrl.c	static void vdp_dma_copy(unsigned int length)	ayther_raster_mark_vram(addr, data,
+core/vdp_ctrl.c	static void vdp_dma_fill(unsigned int length)	*p = data;
+core/vdp_ctrl.c	static void vdp_dma_fill(unsigned int length)	ayther_raster_mark_visible(AYTHER_RASTER_REASON_CRAM, index, data, 1,
+core/vdp_ctrl.c	static void vdp_dma_fill(unsigned int length)	ayther_raster_mark_vram(addr, data,
+core/vdp_ctrl.c	static void vdp_dma_fill(unsigned int length)	uint16 *p = (uint16 *)&vsram[addr & 0x7E];
+core/vdp_ctrl.c	static void vdp_dma_fill(unsigned int length);	const uint8 hscroll_mask_table[] = { 0x00, 0x07, 0xF8, 0xFF };
+core/vdp_ctrl.c	static void vdp_reg_w(unsigned int r, unsigned int d, unsigned int cycles)	fifo_timing_slots = FIFO_TIMING_SLOTS_H32;
+core/vdp_ctrl.c	static void vdp_reg_w(unsigned int r, unsigned int d, unsigned int cycles)	fifo_timing_slots = FIFO_TIMING_SLOTS_H40;
+core/vdp_ctrl.c	static void vdp_reg_w(unsigned int r, unsigned int d, unsigned int cycles)	if (AYTHER_SUBSCRIBED(AYTHER_SUB_RASTER_TRACKING) &&
+core/vdp_ctrl.c	static void vdp_reg_w(unsigned int r, unsigned int d, unsigned int cycles)	static void vdp_bus_w(unsigned int data, int from_dma, unsigned int cycles)
+core/vdp_ctrl.c	static void vdp_set_all_vram(const uint8 *src)	AYTHER_MARK_VRAM_DIRTY(name, 0xFF);
+core/vdp_ctrl.c	static void vdp_set_all_vram(const uint8 *src);	AYTHER_MARK_VRAM_DIRTY(name, 1 << ((addr >> 2) & 7)); \
+core/vdp_ctrl.c	static void vdp_set_all_vram(const uint8 *src);	uint8 ayther_vram_dirty[0x800];
+core/vdp_ctrl.c	static void vdp_z80_data_w_gg(unsigned int data)	ayther_raster_mark(AYTHER_RASTER_REASON_VRAM, (uint16_t)index,
+core/vdp_ctrl.c	static void vdp_z80_data_w_gg(unsigned int data)	ayther_raster_mark_visible(AYTHER_RASTER_REASON_CRAM, (uint16_t)index,
+core/vdp_ctrl.c	static void vdp_z80_data_w_m4(unsigned int data)	ayther_raster_mark(AYTHER_RASTER_REASON_VRAM, (uint16_t)index,
+core/vdp_ctrl.c	static void vdp_z80_data_w_m4(unsigned int data)	ayther_raster_mark_visible(AYTHER_RASTER_REASON_CRAM, (uint16_t)index,
+core/vdp_ctrl.c	static void vdp_z80_data_w_m5(unsigned int data)	WRITE_BYTE(vsram, index, data);
+core/vdp_ctrl.c	static void vdp_z80_data_w_m5(unsigned int data)	ayther_raster_mark_visible(AYTHER_RASTER_REASON_CRAM, index, data, 1,
+core/vdp_ctrl.c	static void vdp_z80_data_w_m5(unsigned int data)	ayther_raster_mark_vram(index, data, 1, 0, Z80.cycles);
+core/vdp_ctrl.c	static void vdp_z80_data_w_m5(unsigned int data)	int index = (addr & 0x7F) ^ 1;
+core/vdp_ctrl.c	static void vdp_z80_data_w_ms(unsigned int data)	ayther_raster_mark(AYTHER_RASTER_REASON_VRAM, (uint16_t)index,
+core/vdp_ctrl.c	static void vdp_z80_data_w_ms(unsigned int data)	ayther_raster_mark_visible(AYTHER_RASTER_REASON_CRAM, (uint16_t)index,
+core/vdp_ctrl.c	static void vdp_z80_data_w_sg(unsigned int data);	static void vdp_bus_w(unsigned int data, int from_dma, unsigned int cycles);
+core/vdp_ctrl.c	uint32 fifo_cycles[4];            /* VDP FIFO read-out cycles */	uint32 ayther_raster_dirty = 0;
+core/vdp_ctrl.c	void vdp_init(void)	uint64_t ayther_core_frame_generation = 0;
+core/vdp_ctrl.c	void vdp_reset(void)	fifo_timing_slots = FIFO_TIMING_SLOTS_H32;
+core/vdp_ctrl.c	void vdp_reset(void)	memset((char *)ayther_vram_dirty, 0xFF, sizeof(ayther_vram_dirty));
+core/vdp_ctrl.c	void vdp_reset(void)	vdp_ayther_begin_frame();
+core/vdp_ctrl.h	(sin funcion)	#include "ayther_raster.h"
+core/vdp_ctrl.h	(sin funcion)	(comentario)
+core/vdp_ctrl.h	extern uint8 hscroll_mask;	extern uint32 ayther_raster_dirty;
+core/vdp_ctrl.h	extern uint8 reg[0x20];	extern uint8 ALIGNED_(4) sat[0x400];
+core/vdp_ctrl.h	extern void vdp_reset(void);	extern void vdp_ayther_begin_frame(void);
+core/vdp_render.c	INLINE void WRITE_LONG(void *address, uint32 data)	#include "ayther/ayther_draw_sprite_tile.h"
+core/vdp_render.c	INLINE void WRITE_LONG(void *address, uint32 data)	struct clip_t clip[2];
+core/vdp_render.c	INLINE void merge(uint8 *srca, uint8 *srcb, uint8 *dst, uint8 *table, int width)	if (ayther_obj_pass)
+core/vdp_render.c	extern sms_ntsc_t *sms_ntsc;	#include "vdp_render_internal.h"
+core/vdp_render.c	static PIXEL_OUT_T pixel_lut_m4[0x40];	uint8 linebuf[2][0x200];
+core/vdp_render.c	static const uint32 tms_palette[16] =	#include "ayther/ayther_metrics.h"
+core/vdp_render.c	static object_info_t obj_info[2][MAX_SPRITES_PER_LINE];	uint8 object_count[2];
+core/vdp_render.c	static uint32 make_lut_bgobj_m4(uint32 bx, uint32 sx)	#include "ayther/ayther_merge_hooks.h"
+core/vdp_render.c	static uint8 linebuf[2][0x200];	uint8 spr_ovr;
+core/vdp_render.c	static uint8 lut[LUT_MAX][LUT_SIZE];	PIXEL_OUT_T pixel[0x100];
+core/vdp_render.c	static uint8 spr_ovr;	object_info_t obj_info[2][AYTHER_OBJ_INFO_SLOTS];
+core/vdp_render.c	uint16 spr_col;	#include "ayther/ayther_render_state.h"
+core/vdp_render.c	void blank_line(int line, int offset, int width)	if (AYTHER_LAYER_DIM_ACTIVE)
+core/vdp_render.c	void color_update_m5(int index, unsigned int data)	data &= 0x1FF;
+core/vdp_render.c	void parse_satb_m4(int line)	#include "ayther/ayther_satb_fast.h"
+core/vdp_render.c	void parse_satb_m4(int line)	const int ayther_capture_active =
+core/vdp_render.c	void parse_satb_m4(int line)	if (AYTHER_SPR_OUT_ACTIVE)
+core/vdp_render.c	void parse_satb_m4(int line)	if (AYTHER_SPR_SUPPRESSED_ACTIVE(ayther_suppression_active, i))
+core/vdp_render.c	void parse_satb_m4(int line)	object_info->sat_idx = (uint16)i;
+core/vdp_render.c	void parse_satb_m5(int line)	(comentario)
+core/vdp_render.c	void parse_satb_m5(int line)	if (!AYTHER_SUBSCRIBED(AYTHER_SUB_SPRITE_CAPTURE) &&
+core/vdp_render.c	void parse_satb_m5(int line)	if (AYTHER_RC_NOLIMIT_ACTIVE) max = 80; /* AYTHER (#270): recomposición sin límite */
+core/vdp_render.c	void parse_satb_m5(int line)	if (AYTHER_SPR_OUT_ACTIVE)
+core/vdp_render.c	void parse_satb_m5(int line)	if (AYTHER_SPR_SUPPRESSED_ACTIVE(
+core/vdp_render.c	void parse_satb_m5(int line)	int total0 = total; /* AYTHER: para chain_pos = total0 - total */
+core/vdp_render.c	void parse_satb_m5(int line)	object_info->sat_idx = (uint16)(link >> 2);
+core/vdp_render.c	void parse_satb_m5_im2(int line)	(comentario)
+core/vdp_render.c	void parse_satb_m5_im2(int line)	if (!AYTHER_SUBSCRIBED(AYTHER_SUB_SPRITE_CAPTURE) &&
+core/vdp_render.c	void parse_satb_m5_im2(int line)	if (AYTHER_RC_NOLIMIT_ACTIVE) max = 80; /* AYTHER (#270): recomposición sin límite */
+core/vdp_render.c	void parse_satb_m5_im2(int line)	if (AYTHER_SPR_OUT_ACTIVE)
+core/vdp_render.c	void parse_satb_m5_im2(int line)	if (AYTHER_SPR_SUPPRESSED_ACTIVE(
+core/vdp_render.c	void parse_satb_m5_im2(int line)	int total0 = total; /* AYTHER: para chain_pos = total0 - total */
+core/vdp_render.c	void parse_satb_m5_im2(int line)	object_info->sat_idx = (uint16)(link >> 2);
+core/vdp_render.c	void remap_line(int line)	(comentario)
+core/vdp_render.c	void remap_line(int line)	else if (AYTHER_LAYER_DIM_ACTIVE)
+core/vdp_render.c	void render_bg_m4(int line)	#include "ayther/ayther_draw_column.h"
+core/vdp_render.c	void render_bg_m4(int line)	AYTHER_HOT_INLINE void render_bg_m5_impl(int line, int ayther_observed)
+core/vdp_render.c	void render_bg_m4(int line)	const int ayther_hide_bg = AYTHER_HIDE_A;
+core/vdp_render.c	void render_bg_m4(int line)	if (ayther_hide_bg ||
+core/vdp_render.c	void render_bg_m5(int line)	AYTHER_COLUMN_PLANE(psupW);
+core/vdp_render.c	void render_bg_m5(int line)	AYTHER_DUAL_PATH(render_bg_m5, render_bg_m5, AYTHER_OBSERVED_ACTIVE, (int line), line)
+core/vdp_render.c	void render_bg_m5(int line)	if (!hide_a) /* AYTHER: gate Plano A (el rango de Window se fija igual abajo) */
+core/vdp_render.c	void render_bg_m5(int line)	if (ayther_observed && AYTHER_LINE_CELLS_ACTIVE)
+core/vdp_render.c	void render_bg_m5(int line)	if (ayther_observed && AYTHER_LINE_CELLS_ACTIVE)
+core/vdp_render.c	void render_bg_m5(int line)	if (ayther_observed && AYTHER_LINE_CELLS_ACTIVE)
+core/vdp_render.c	void render_bg_m5(int line)	if (ayther_observed && AYTHER_LINE_CELLS_ACTIVE)
+core/vdp_render.c	void render_bg_m5(int line)	if (ayther_observed && AYTHER_LINE_STATE_ACTIVE)
+core/vdp_render.c	void render_bg_m5(int line)	if (ayther_observed)
+core/vdp_render.c	void render_bg_m5(int line)	if (ayther_observed) ayther_cells_close();
+core/vdp_render.c	void render_bg_m5(int line)	if (ayther_observed) ayther_cells_close();
+core/vdp_render.c	void render_bg_m5(int line)	if (hide_b)
+core/vdp_render.c	void render_bg_m5_im2(int line)	AYTHER_COLUMN_PLANE(psupA);
+core/vdp_render.c	void render_bg_m5_im2(int line)	AYTHER_COLUMN_PLANE(psupB);
+core/vdp_render.c	void render_bg_m5_im2(int line)	AYTHER_COLUMN_PLANE(psupW);
+core/vdp_render.c	void render_bg_m5_im2(int line)	const uint8 *psupA = AYTHER_PSUP(0);
+core/vdp_render.c	void render_bg_m5_im2(int line)	if (!hide_a) /* AYTHER: gate Plano A */
+core/vdp_render.c	void render_bg_m5_im2(int line)	if (hide_b)
+core/vdp_render.c	void render_bg_m5_im2(int line)	} /* AYTHER: fin gate Plano A */
+core/vdp_render.c	void render_bg_m5_im2_vs(int line)	AYTHER_COLUMN_PLANE(psupA);
+core/vdp_render.c	void render_bg_m5_im2_vs(int line)	AYTHER_COLUMN_PLANE(psupB);
+core/vdp_render.c	void render_bg_m5_im2_vs(int line)	AYTHER_COLUMN_PLANE(psupW);
+core/vdp_render.c	void render_bg_m5_im2_vs(int line)	const uint8 *psupA = AYTHER_PSUP(0);
+core/vdp_render.c	void render_bg_m5_im2_vs(int line)	if (!hide_a) /* AYTHER: gate Plano A */
+core/vdp_render.c	void render_bg_m5_im2_vs(int line)	if (hide_b)
+core/vdp_render.c	void render_bg_m5_im2_vs(int line)	} /* AYTHER: fin gate Plano A */
+core/vdp_render.c	void render_bg_m5_vs(int line)	AYTHER_COLUMN_PLANE(psupA);
+core/vdp_render.c	void render_bg_m5_vs(int line)	AYTHER_COLUMN_PLANE(psupB);
+core/vdp_render.c	void render_bg_m5_vs(int line)	AYTHER_COLUMN_PLANE(psupW);
+core/vdp_render.c	void render_bg_m5_vs(int line)	AYTHER_DUAL_PATH(render_bg_m5_vs, render_bg_m5_vs, AYTHER_OBSERVED_ACTIVE, (int line), line)
+core/vdp_render.c	void render_bg_m5_vs(int line)	const uint8 *psupA = ayther_observed ? AYTHER_PSUP(0) : (const uint8 *)0;
+core/vdp_render.c	void render_bg_m5_vs(int line)	if (!hide_a) /* AYTHER: gate Plano A */
+core/vdp_render.c	void render_bg_m5_vs(int line)	if (ayther_observed && AYTHER_LINE_CELLS_ACTIVE)
+core/vdp_render.c	void render_bg_m5_vs(int line)	if (ayther_observed)
+core/vdp_render.c	void render_bg_m5_vs(int line)	if (hide_b)
+core/vdp_render.c	void render_bg_m5_vs(int line)	} /* AYTHER: fin gate Plano A */
+core/vdp_render.c	void render_bg_m5_vs_enhanced(int line)	const uint8 *psupA = AYTHER_PSUP(0);
+core/vdp_render.c	void render_bg_m5_vs_enhanced(int line)	if (!hide_a) /* AYTHER: gate Plano A */
+core/vdp_render.c	void render_bg_m5_vs_enhanced(int line)	if (hide_a || hide_w)
+core/vdp_render.c	void render_bg_m5_vs_enhanced(int line)	if (hide_b && !AYTHER_LINE_CELLS_ACTIVE)
+core/vdp_render.c	void render_bg_m5_vs_enhanced(int line)	if (hide_b)
+core/vdp_render.c	void render_bg_m5_vs_enhanced(int line)	if (w && !hide_w) /* AYTHER: gate Window */
+core/vdp_render.c	void render_bg_m5_vs_enhanced(int line)	} /* AYTHER: fin gate Plano A */
+core/vdp_render.c	void render_line(int line)	(comentario)
+core/vdp_render.c	void render_line(int line)	AYTHER_DUAL_PATH(render_line, render_line, AYTHER_OBSERVED_ACTIVE, (int line), line)
+core/vdp_render.c	void render_line(int line)	ayther_line_before_bg(line, ayther_observed, ayther_attrib_capture_pending);
+core/vdp_render.c	void render_line(int line)	ayther_line_render_obj(line, ayther_observed,
+core/vdp_render.c	void render_line(int line)	const int ayther_dim_active = ayther_observed && ayther_layer_dim;
+core/vdp_render.c	void render_line(int line)	if (ayther_dim_active)
+core/vdp_render.c	void render_obj_m4(int line)	AYTHER_HOT_INLINE void render_obj_m5_impl(int line, int ayther_observed)
+core/vdp_render.c	void render_obj_m4(int line)	AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_PARSED |
+core/vdp_render.c	void render_obj_m4(int line)	if (!AYTHER_SHOW_OBJ)
+core/vdp_render.c	void render_obj_m5(int line)	(comentario)
+core/vdp_render.c	void render_obj_m5(int line)	AYTHER_DUAL_PATH(render_obj_m5, render_obj_m5, ayther_obj_pass, (int line), line)
+core/vdp_render.c	void render_obj_m5(int line)	AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_DRAWN);
+core/vdp_render.c	void render_obj_m5(int line)	AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_PARSED);
+core/vdp_render.c	void render_obj_m5(int line)	else if (spr_ovr && !rc_nomask) /* AYTHER (#270): nomask la anula */
+core/vdp_render.c	void render_obj_m5(int line)	for (column = 0; column < width; column++, lb+=8, spx+=8)
+core/vdp_render.c	void render_obj_m5(int line)	if (AYTHER_SPR_OUT_ACTIVE)
+core/vdp_render.c	void render_obj_m5(int line)	if (masked)
+core/vdp_render.c	void render_obj_m5(int line)	int max_pixels = AYTHER_RC_NOLIMIT_ACTIVE ? 0x7FFF /* AYTHER (#270): sin presupuesto */
+core/vdp_render.c	void render_obj_m5(int line)	spx = &ayther_sprite_px[0x20 + xpos];
+core/vdp_render.c	void render_obj_m5(int line)	uint8 *spx = 0;
+core/vdp_render.c	void render_obj_m5_im2(int line)	(comentario)
+core/vdp_render.c	void render_obj_m5_im2(int line)	AYTHER_DUAL_PATH(render_obj_m5_im2, render_obj_m5_im2, ayther_obj_pass, (int line), line)
+core/vdp_render.c	void render_obj_m5_im2(int line)	AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_DRAWN);
+core/vdp_render.c	void render_obj_m5_im2(int line)	AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_PARSED);
+core/vdp_render.c	void render_obj_m5_im2(int line)	else if (spr_ovr && !rc_nomask) /* AYTHER (#270): nomask la anula */
+core/vdp_render.c	void render_obj_m5_im2(int line)	for(column = 0; column < width; column ++, lb+=8, spx+=8)
+core/vdp_render.c	void render_obj_m5_im2(int line)	if (AYTHER_SPR_OUT_ACTIVE)
+core/vdp_render.c	void render_obj_m5_im2(int line)	if (masked)
+core/vdp_render.c	void render_obj_m5_im2(int line)	int max_pixels = AYTHER_RC_NOLIMIT_ACTIVE ? 0x7FFF /* AYTHER (#270): sin presupuesto */
+core/vdp_render.c	void render_obj_m5_im2(int line)	spx = &ayther_sprite_px[0x20 + xpos];
+core/vdp_render.c	void render_obj_m5_im2(int line)	uint8 *spx = 0;
+core/vdp_render.c	void render_obj_m5_im2_ste(int line)	AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_DRAWN);
+core/vdp_render.c	void render_obj_m5_im2_ste(int line)	AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_PARSED);
+core/vdp_render.c	void render_obj_m5_im2_ste(int line)	else if (spr_ovr && !rc_nomask) /* AYTHER (#270): nomask la anula */
+core/vdp_render.c	void render_obj_m5_im2_ste(int line)	if (AYTHER_SPR_OUT_ACTIVE)
+core/vdp_render.c	void render_obj_m5_im2_ste(int line)	if (masked)
+core/vdp_render.c	void render_obj_m5_im2_ste(int line)	int max_pixels = AYTHER_RC_NOLIMIT_ACTIVE ? 0x7FFF /* AYTHER (#270): sin presupuesto */
+core/vdp_render.c	void render_obj_m5_ste(int line)	AYTHER_HOT_INLINE void render_obj_m5_im2_impl(int line, int ayther_observed)
+core/vdp_render.c	void render_obj_m5_ste(int line)	AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_DRAWN);
+core/vdp_render.c	void render_obj_m5_ste(int line)	AYTHER_SPR_OUT_MARK(object_info->sat_idx, AYTHER_SPR_OUT_PARSED);
+core/vdp_render.c	void render_obj_m5_ste(int line)	else if (spr_ovr && !rc_nomask) /* AYTHER (#270): nomask la anula */
+core/vdp_render.c	void render_obj_m5_ste(int line)	if (AYTHER_SPR_OUT_ACTIVE)
+core/vdp_render.c	void render_obj_m5_ste(int line)	if (masked)
+core/vdp_render.c	void render_obj_m5_ste(int line)	int max_pixels = AYTHER_RC_NOLIMIT_ACTIVE ? 0x7FFF /* AYTHER (#270): sin presupuesto */
+core/vdp_render.c	void render_reset(void)	AYTHER_HOT_INLINE void render_line_impl(int line, int ayther_observed)
+core/vdp_render.h	(sin funcion)	#include "ayther/ayther_api.h"
+core/vdp_render.h	extern uint16 spr_col;	#define AYTHER_LAYER_A 0x01 /* Plano A (Scroll A) */
+libretro/Makefile.common	SOURCES_C += $(foreach dir,$(GENPLUS_SRC_DIR),$(wildcard $(dir)/*.c))	# AYTHER (#43.2): ayther_core.c YA se compila suelto. Antes se filtraba de aca
+libretro/Makefile.common	ifeq ($(HOOK_CPU), 1)	(comentario)
+libretro/Makefile.common	ifeq ($(HOOK_CPU), 1)	NEED_DEBUG_DIR := 1
+libretro/libretro.c	(sin funcion)	#define AYTHER_CORE_EXPORTS 1
+libretro/libretro.c	(sin funcion)	#define GIT_VERSION ""
+libretro/libretro.c	(sin funcion)	#include "ayther/ayther_api.h"
+libretro/libretro.c	(sin funcion)	#include <limits.h>
+libretro/libretro.c	(sin funcion)	#include <string.h>
+libretro/libretro.c	STATIC_ASSERT(z80_overflow,	STATIC_ASSERT(ayther_sprite_v1_size, sizeof(ayther_sprite_v1) == 10);
+libretro/libretro.c	bool retro_load_game(const struct retro_game_info *info)	ayther_reset_session(true);
+libretro/libretro.c	bool retro_serialize(void *data, size_t size)	ayther_state_tag_write(data);
+libretro/libretro.c	bool retro_unserialize(const void *data, size_t size)	ayther_invalidate_snapshot();
+libretro/libretro.c	bool retro_unserialize(const void *data, size_t size)	if (!ayther_state_tag_ok(data))
+libretro/libretro.c	error:	ayther_reset_session(false);
+libretro/libretro.c	extern void sound_update_fm_function_pointers(void);	void retro_run(void)
+libretro/libretro.c	size_t retro_get_memory_size(unsigned id)	case RETRO_MEMORY_VIDEO_RAM:
+libretro/libretro.c	size_t retro_serialize_size(void) { return STATE_SIZE; }	#define AYTHER_STATE_TAG_MAGIC UINT32_C(0x53535941) /* "AYSS" */
+libretro/libretro.c	static bool is_running = 0;	static bool ayther_content_loaded = false;
+libretro/libretro.c	static char *save_dir         = NULL;	static void ayther_clear_frame_capture(void)
+libretro/libretro.c	unsigned retro_get_region(void) { return vdp_pal ? RETRO_REGION_PAL : RETRO_REGI	typedef struct ayther_region_mapping
+libretro/libretro.c	void *retro_get_memory_data(unsigned id)	case RETRO_MEMORY_VIDEO_RAM:
+libretro/libretro.c	void retro_deinit(void)	is_running = false;
+libretro/libretro.c	void retro_get_system_info(struct retro_system_info *info)	(comentario)
+libretro/libretro.c	void retro_init(void)	ayther_reset_session(false);
+libretro/libretro.c	void retro_reset(void)	ayther_invalidate_snapshot();
+libretro/libretro.c	void retro_run(void)	ayther_begin_frame();
+libretro/libretro.c	void retro_run(void)	ayther_end_frame(soundbuffer, (unsigned)soundbuffer_size);
+libretro/libretro.c	void retro_unload_game(void)	is_running = false;
+libretro/link.T	(sin funcion)	(comentario)
+libretro/link.T	(sin funcion)	global: retro_*; ayther_get_interface;

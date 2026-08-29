@@ -2305,9 +2305,18 @@ int YM2612LoadContext(unsigned char *state)
      ams es un desplazamiento de lfo_ams_depth_shift (0..8), lfo_cnt va de 0 a
      127 y LFO_AM/LFO_PM se derivan de el. Lo encontro el fuzzing de
      unserialize (#62): un pms podrido indexaba lfo_pm_table[32768] en
-     3388997632. */
+     3388997632.
+
+     ALGO es el mismo caso (#79, #80): indexa op_mask[8][4] y elige el case
+     del switch de setup_connection, y lo acota OPNWriteReg con `v&7` al
+     escribir 0xb0-0xb2. Un ALGO fuera de 0..7 no cae en NINGUN case, con lo
+     cual setup_connection deja los cinco punteros de conexion del canal tal
+     como vinieron del blob -- NULL, que es justo lo que escribe
+     YM2612SaveContext-- y chan_calc los usa igual: primero lee op_mask[236]
+     y despues escribe *CH->mem_connect sobre NULL. */
   for (c=0; c<6; c++)
   {
+    ym2612.CH[c].ALGO &= 7;
     ym2612.CH[c].pms &= 0xE0;
     if (ym2612.CH[c].ams > 8) ym2612.CH[c].ams = 8;
   }

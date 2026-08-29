@@ -57,6 +57,18 @@ tests/fuzz/.build/replay_recompose \
   archivo produce `index 3388997632 out of bounds for type 'INT32[32768]'` y un
   SEGV a continuación.
 
+- **`unserialize/algo-corrupto-deja-los-connect-en-null-79`** y **`-80`** —
+  mismo camino, otro campo del mismo blob: `ALGO`. Indexa `op_mask[8][4]` y
+  elige el `case` de `setup_connection`, y quien lo escribe lo acota con
+  `v&7` (`OPNWriteReg`, `0xb0-0xb2`). Con un `ALGO` fuera de `0..7` el switch
+  no toma ningún case y los cinco punteros de conexión del canal quedan como
+  vinieron del blob —`NULL`, que es lo que escribe `YM2612SaveContext`—, y
+  `chan_calc` los usa igual. Con el core instrumentado y sin el saneado en la
+  carga, los dos archivos producen `index 236 out of bounds for type
+  'UINT32 [8][4]'`, `store to null pointer` y un SEGV en `chan_calc`. Son dos
+  archivos porque son dos hallazgos del job nocturno (#79 y #80) con la misma
+  causa: distintas listas de mutación que terminan en el mismo campo.
+
 - **`write_control` (#63) — sin archivo, a propósito.** El caso que dejó el
   fuzzer (`crash-269aa8d4…`) no reproduce solo: el Z80 arrastra estado entre
   entradas —corre un frame por entrada y nunca se resetea—, y el desborde

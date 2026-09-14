@@ -97,6 +97,23 @@ tests/fuzz/.build/replay_recompose \
   `kcode`, `FB`) y recomputa los pares `eg_sh_*`/`eg_sel_*` con la fórmula
   de quien los escribe.
 
+- **`unserialize/pc-corrupto-indexa-z80-readmap`** (#82) — el mismo patrón, pero
+  en el Z80. `state.c` copia el blob crudo sobre `Z80_Regs`, y los `PAIR` llevan
+  un invariante que declara el propio tipo en [`z80/osd_cpu.h`](../../../core/z80/osd_cpu.h):
+  *“the upper bytes h2 and h3 normally contain zero (16 bit CPU cores) thus
+  PAIR.d can be used to pass arguments to the memory system”*. El núcleo lo
+  cumple porque **nada** escribe `.d` entero —todas las escrituras van por
+  `.w.l` o `.b.*`—, y un savestate corrupto no pasa por ahí. Este archivo deja
+  `pc.d = 0x00510039`, con lo cual `cpu_readop` indexa `z80_readmap[64]` en
+  5184.
+
+  Como el YM2612 de #83-#88, no explota donde se carga: `z80_reset` escribe
+  `PC = 0x0000`, que es `.w.l`, así que la mitad alta sobrevive al reset. Y
+  `EXX`/`EX AF,AF'` copian `PAIR` enteros, con lo cual una mitad alta podrida
+  en un registro sombra migra al principal. Con el core instrumentado y sin el
+  saneado produce `index 5184 out of bounds for type 'unsigned char *[64]'` y
+  un `SEGV on unknown address 0x39` a continuación, en `ROP`.
+
 - **`write_control` (#63) — sin archivo, a propósito.** El caso que dejó el
   fuzzer (`crash-269aa8d4…`) no reproduce solo: el Z80 arrastra estado entre
   entradas —corre un frame por entrada y nunca se resetea—, y el desborde

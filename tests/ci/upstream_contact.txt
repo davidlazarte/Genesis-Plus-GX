@@ -87,6 +87,7 @@ core/sound/ym3438.c	static void OPN2_ChOutput(ym3438_t *chip)	if (AYTHER_FM_MUTE
 core/sound/ym3438.c	static void OPN2_ChOutput(ym3438_t *chip)	if (AYTHER_FM_MUTED(channel))
 core/sound/ym3438.h	void OPN2_SetTestPin(ym3438_t *chip, Bit32u value);	void OPN2_AytherSetGain(Bit32u channel, Bit32s gain);
 core/state.c	(sin funcion)	#include "gamepad.h"
+core/state.c	int state_load(unsigned char *state)	PAIR *pairs[] = {
 core/state.c	int state_load(unsigned char *state)	if (version[15] >= 0x37)
 core/state.c	int state_save(unsigned char *state)	Z80_Regs z80_state = Z80;
 core/state.c	int state_save(unsigned char *state)	bufferptr += gamepad_context_save(&state[bufferptr]);

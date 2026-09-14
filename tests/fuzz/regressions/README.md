@@ -69,6 +69,34 @@ tests/fuzz/.build/replay_recompose \
   archivos porque son dos hallazgos del job nocturno (#79 y #80) con la misma
   causa: distintas listas de mutación que terminan en el mismo campo.
 
+- **`unserialize/ksr-corrupto-indexa-eg-rate-shift-83`** a **`-88`** — la
+  misma familia, del lado de la envolvente. `ksr` (`kcode >> KSR`, 0..31)
+  entra crudo del blob y se suma a la tasa para indexar `eg_rate_shift` y
+  `eg_rate_select[128]` en la primera escritura de `0x50-0x8f` (`set_dr`,
+  `set_sl_rr`). El `ksr` podrido no lo limpia el reset —`reset_channels` no
+  lo toca—, así que explota recién en la carga siguiente: el `system_reset`
+  de `state_load` llama a `YM2612ResetChip`, que reescribe `0x30-0xb2` con el
+  `ksr` que quedó. Con el core instrumentado y sin el saneado en la carga, los
+  seis producen `index 148..289 out of bounds for type 'UINT8 [128]'`, y cuatro
+  de ellos un `global-buffer-overflow` de ASan en `set_sl_rr`. Son seis
+  archivos porque son seis hallazgos del job nocturno (#83 a #88) con la
+  misma causa: cada uno pudre el `ksr` de un slot distinto.
+
+- **`unserialize/eg-sel-corrupto-indexa-eg-inc`** — fabricado a mano, porque
+  los jobs del 2026-09-07 y del 2026-09-11 reportaron sin dejar archivo: UBSan
+  imprime y sigue, y el fuzzer no guarda un caso que no crashea. Son dos
+  mutaciones sobre `CH[0].SLOT[0]`, que en el estado base del ROM sintético
+  está en ataque: `eg_sh_ar = 0` (para que entre en cada paso de la
+  envolvente) y `eg_sel_ar = 205`, el índice que reportó el CI. Los offsets
+  (140716 y 140717) son 16 bytes de versión + RAM/IO + bloque VDP +
+  `config.ym3438` + `offsetof` dentro de `YM2612`; se verificaron sobre un
+  estado volcado, donde a esa altura aparece la firma de un chip reseteado.
+  Con el core instrumentado y sin el saneado, produce `index 210 out of bounds
+  for type 'UINT8 [152]'` en `advance_eg_channels`. El saneado ahora acota
+  las entradas de la envolvente (`ar`/`d1r`/`d2r`/`rr`, `ksr`, `KSR`,
+  `kcode`, `FB`) y recomputa los pares `eg_sh_*`/`eg_sel_*` con la fórmula
+  de quien los escribe.
+
 - **`write_control` (#63) — sin archivo, a propósito.** El caso que dejó el
   fuzzer (`crash-269aa8d4…`) no reproduce solo: el Z80 arrastra estado entre
   entradas —corre un frame por entrada y nunca se resetea—, y el desborde

@@ -1157,6 +1157,13 @@ size_t ayther_build_generated_rom_sh(uint8_t *rom, size_t capacity)
 #define SMS_VDP_DATA    0xBEu
 #define SMS_VDP_CONTROL 0xBFu
 
+/* Puertos del YM2413 en el bus del FM externo. La region del fixture es
+   export, con lo cual el core decodifica por `!(port & 4)` y estos tres
+   llegan al chip. (#75) */
+#define SMS_FM_ADDRESS  0xF0u
+#define SMS_FM_DATA     0xF1u
+#define SMS_FM_CONTROL  0xF2u
+
 /* Codigos de direccion: bits altos del segundo byte del par. */
 #define SMS_VRAM_WRITE  0x40u
 #define SMS_CRAM_WRITE  0xC0u
@@ -1261,6 +1268,17 @@ static void sms_emit_irq_handler(struct rom_builder *builder)
   sms_pad_to(builder, SMS_MAIN);
 }
 
+/* Escribir un registro del YM2413: primero la direccion por 0xF0, despues el
+   dato por 0xF1. Es el bus del "FM board externo" -el core lo toma asi para
+   todo lo que no sea region japonesa, que es la del fixture-, y cada OUT son
+   cuatro bytes, asi que la escena entera son ~100 bytes de programa. */
+static void sms_ym2413_write(struct rom_builder *builder, uint8_t reg,
+                             uint8_t value)
+{
+  z80_out_imm(builder, SMS_FM_ADDRESS, reg);
+  z80_out_imm(builder, SMS_FM_DATA, value);
+}
+
 static void emit_reset_program_sms_scene(struct rom_builder *builder,
                                          unsigned int flags)
 {
@@ -1350,6 +1368,31 @@ static void emit_reset_program_sms_scene(struct rom_builder *builder,
                     SMS_VRAM_WRITE);
     sms_vdp_write(builder, 0x01u);
     sms_vdp_write(builder, 0x00u);
+  }
+
+  if (flags & AYTHER_SMS_SCENE_FM)
+  {
+    /* Salida del FM encendida. Sin esto el mezclador multiplica por
+       `opll_status`, que arranca en cero, y toda la escena suena a silencio:
+       el contexto tendria estado pero no efecto observable. */
+    z80_out_imm(builder, SMS_FM_CONTROL, 0x03u);   /* PSG + FM */
+
+    /* Tres canales en key-on, cada uno con instrumento, volumen, fnum y block
+       distintos. Distintos a proposito: el contexto del OPLL guarda pg_phase y
+       eg_level POR SLOT, y tres canales iguales harian que un slot corrido no
+       se distinga del de al lado. */
+    for (i = 0; i < 3u; ++i)
+    {
+      /* 0x30+ch: instrumento en el nibble alto, atenuacion en el bajo. */
+      sms_ym2413_write(builder, (uint8_t)(0x30u + i),
+                       (uint8_t)(((i + 1u) << 4) | i));
+      /* 0x10+ch: los 8 bits bajos del fnum. */
+      sms_ym2413_write(builder, (uint8_t)(0x10u + i),
+                       (uint8_t)(0x40u + i * 0x30u));
+      /* 0x20+ch: key-on (bit 4), block (bits 3..1), bit alto del fnum. */
+      sms_ym2413_write(builder, (uint8_t)(0x20u + i),
+                       (uint8_t)(0x10u | ((i + 2u) << 1) | 0x01u));
+    }
   }
 
   /* Recien ahora se enciende la pantalla (y, si hay split, la interrupcion de

@@ -59,6 +59,12 @@ size_t ayther_build_generated_rom_sms(uint8_t *rom, size_t capacity);
                  reproducir. */
 #define AYTHER_SMS_SCENE_SCROLL_LOCK    1u
 #define AYTHER_SMS_SCENE_PALETTE_SPLIT  2u
+/* #75: escribe el YM2413 por el bus del FM externo (0xF0 direccion,
+   0xF1 dato, 0xF2 control) y deja tres canales en key-on con block y
+   fnum distintos. Es lo que le da algo que perder al contexto del OPLL:
+   sin esto el chip queda en reset y un savestate suyo no distingue una
+   carga sana de una podrida. */
+#define AYTHER_SMS_SCENE_FM             4u
 #define AYTHER_SMS_HSCROLL      8u
 #define AYTHER_SMS_MARKER_COL   8u      /* celda: x = 64..71 sin scroll   */
 #define AYTHER_SMS_MARKER_ROW   4u      /* fila 4: y = 32..39             */

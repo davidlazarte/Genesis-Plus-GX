@@ -86,6 +86,21 @@ INC_generated_rom  := $(INCLUDES)
 # audio_ring no necesita el core, asi que tampoco necesita CORE=.
 NEEDS_CORE_audio_ring := 0
 
+# Escenas. (#75)
+#
+# El ROM sintetico de Mega Drive solo ejercita el YM2612 de MAME, con lo cual
+# `sound_context_load` nunca entraba por la rama de Nuked OPN2 ni por la de
+# Nuked YM2413 -- structs enteros que tambien vienen crudos del blob. Cada
+# escena es un proceso: cambiarla implica load_game, y hacerlo por entrada
+# convertiria al fuzzer en un medidor de load_game.
+#
+# El fuzzer corre UNA (la que diga SCENE=, un job por escena en el nocturno);
+# el replay las corre TODAS, porque ahi lo que importa es que un caso
+# arreglado no vuelva, y un caso es una lista de mutaciones que vale en
+# cualquier escena. Sale barato y cubre de mas.
+SCENES_unserialize := md md-nuked sms-fm
+SCENE ?= md
+
 TARGETS := write_control unserialize recompose generated_rom audio_ring
 
 # Sanitizers tambien en el build de replay: reproducir un crash sin ASan es
@@ -103,7 +118,8 @@ REPLAY_SAN ?= -fsanitize=address,undefined -fno-omit-frame-pointer
 endif
 
 .PHONY: all fuzz-all replay-all check clean $(addprefix fuzz-,$(TARGETS)) \
-	$(addprefix replay-,$(TARGETS))
+	$(addprefix replay-,$(TARGETS)) \
+	$(foreach t,$(TARGETS),$(addprefix replay-$(t)-,$(or $(SCENES_$(t)),md)))
 
 all: replay-all
 
@@ -130,7 +146,8 @@ $(BUILD_DIR)/fuzz_$(1)$(EXE_EXT): fuzz_$(1).c $$(SRC_$(1)) $$(DEP_$(1)) | $(BUIL
 		-o $$@ fuzz_$(1).c $$(SRC_$(1)) $$(DL_LIBS) $$(FUZZ_LIBS)
 
 fuzz-$(1): $$(BUILD_DIR)/fuzz_$(1)$$(EXE_EXT)
-	$$(ASAN_PRELOAD) AYTHER_FUZZ_CORE="$$(CORE)" $$(BUILD_DIR)/fuzz_$(1)$$(EXE_EXT) \
+	$$(ASAN_PRELOAD) AYTHER_FUZZ_CORE="$$(CORE)" AYTHER_FUZZ_SCENE="$$(SCENE)" \
+		$$(BUILD_DIR)/fuzz_$(1)$$(EXE_EXT) \
 		corpus/$(1) -max_total_time=$$(FUZZ_SECONDS) -print_final_stats=1
 endef
 $(foreach t,$(TARGETS),$(eval $(call FUZZ_RULE,$(t))))
@@ -144,11 +161,21 @@ $(BUILD_DIR)/replay_$(1)$(EXE_EXT): fuzz_$(1).c fuzz_replay.c $$(SRC_$(1)) $$(DE
 		-o $$@ fuzz_$(1).c fuzz_replay.c $$(SRC_$(1)) \
 		$$(LDFLAGS) $$(REPLAY_SAN) $$(DL_LIBS)
 
-replay-$(1): $$(BUILD_DIR)/replay_$(1)$$(EXE_EXT)
-	@echo "== $(1) =="
-	$$(BUILD_DIR)/replay_$(1)$$(EXE_EXT) "$$(CORE)" corpus/$(1) regressions/$(1)
+replay-$(1): $$(addprefix replay-$(1)-,$$(or $$(SCENES_$(1)),md))
 endef
 $(foreach t,$(TARGETS),$(eval $(call REPLAY_RULE,$(t))))
+
+# Una regla por (target, escena), en vez de un `for` en la receta: las recetas
+# de este repo tienen que valer en sh Y en cmd (ver mk/shell.mk), y un loop de
+# shell solo vale en el primero. Por lo mismo la escena viaja por ARGUMENTO y
+# no por entorno -- `VAR=x cmd` tambien es sintaxis de sh-: el driver la pasa a
+# AYTHER_FUZZ_SCENE, igual que ya hace con la ruta del core.
+define REPLAY_SCENE_RULE
+replay-$(1)-$(2): $$(BUILD_DIR)/replay_$(1)$$(EXE_EXT)
+	@echo "== $(1) [escena $(2)] =="
+	$$(BUILD_DIR)/replay_$(1)$$(EXE_EXT) --scene $(2) "$$(CORE)" corpus/$(1) regressions/$(1)
+endef
+$(foreach t,$(TARGETS),$(foreach sc,$(or $(SCENES_$(t)),md),$(eval $(call REPLAY_SCENE_RULE,$(t),$(sc)))))
 
 fuzz-all: $(addprefix fuzz-,$(TARGETS))
 replay-all: $(addprefix replay-,$(TARGETS))

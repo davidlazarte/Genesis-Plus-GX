@@ -38,6 +38,34 @@ tests/fuzz/.build/replay_recompose \
   "$(pwd)/genesis_plus_gx_libretro.so" tests/fuzz/regressions/recompose
 ```
 
+## Escenas (#75)
+
+El target `unserialize` corre en tres escenas, y la escena decide **qué chip de
+FM** entra en `sound_context_load`:
+
+| escena | consola | rama de la carga |
+|---|---|---|
+| `md` (la de siempre) | Mega Drive | `YM2612LoadContext` (MAME) |
+| `md-nuked` | Mega Drive | `config.ym3438` → struct de Nuked OPN2 |
+| `sms-fm` | Master System | `config.opll` → struct de Nuked YM2413 |
+
+Hasta #75 solo existía la primera, así que las otras dos ramas —structs enteros
+que también entran crudos del blob— **nunca se ejercitaban**. Ahí es donde
+apuntan los dos issues abiertos de upstream sobre cargar un savestate de Master
+System con Nuked (libretro/Genesis-Plus-GX#403 y #290).
+
+El fuzzer corre una escena por proceso (`SCENE=`, un job por escena en el
+nocturno): cambiarla implica `load_game`, y hacerlo por entrada convertiría al
+fuzzer en un medidor de `load_game`. El replay las corre **todas** sobre los
+mismos archivos, que sale barato y cubre de más: un caso es una lista de
+mutaciones, y vale en cualquier escena.
+
+```sh
+# una escena puntual, a mano
+tests/fuzz/.build/replay_unserialize --scene sms-fm \
+  "$(pwd)/genesis_plus_gx_libretro.so" tests/fuzz/regressions/unserialize
+```
+
 ## Los casos
 
 - **`recompose/cram-fuera-de-rango-en-pixel-lut`** — escribe bytes crudos en
@@ -96,6 +124,26 @@ tests/fuzz/.build/replay_recompose \
   las entradas de la envolvente (`ar`/`d1r`/`d2r`/`rr`, `ksr`, `KSR`,
   `kcode`, `FB`) y recomputa los pares `eg_sh_*`/`eg_sel_*` con la fórmula
   de quien los escribe.
+
+- **`unserialize/opll-cycles-corrupto-indexa-opll-accm`** y
+  **`unserialize/ym3438-cycles-corrupto-indexa-ym3438-accm`** (#75) — el mismo
+  patrón que el YM2612, en los dos cores de Nuked. `sound_context_load` carga
+  `opll_cycles` y `ym3438_cycles` crudos del blob, y los dos son **índices**:
+  `OPLL2413_Update` hace `opll_accm[opll_cycles]` y `YM3438_Update` hace
+  `ym3438_accm[ym3438_cycles]`, en ambos casos **antes** del `% 18` / `% 24`
+  que los acota. Lo mismo vale para el `chip->cycles` de adentro de cada
+  struct, que indexa `ch_offset[18]`, `pg_phase[18]`, `eg_state[18]` y
+  `eg_level[18]`.
+
+  Están fabricados a mano, con los offsets medidos sobre un estado volcado
+  (75651 para `opll_cycles`, 142008 para `ym3438_cycles`): una sola mutación
+  que ensucia el byte más alto del `int`. Sin el saneado producen
+  `index 2130706444 out of bounds for type 'int [18][2]'` y un `SEGV` en
+  `OPLL_Clock` / `OPN2_Clock`.
+
+  **Cada uno solo reproduce en su escena.** Bajo `md` los dos pasan en silencio,
+  porque esa escena no entra por ninguna de las dos ramas: eso *es* el punto
+  ciego que #75 vino a tapar, y es por qué el replay corre las tres.
 
 - **`write_control` (#63) — sin archivo, a propósito.** El caso que dejó el
   fuzzer (`crash-269aa8d4…`) no reproduce solo: el Z80 arrastra estado entre

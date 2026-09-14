@@ -65,6 +65,52 @@ static fuzz_core fuzz_g;
 static uint8_t fuzz_rom[AYTHER_GENERATED_ROM_SIZE];
 static struct retro_game_info_ext fuzz_gi_ext;
 
+/* Escenas. (#75)
+ *
+ * El target se compila UNA vez y elige la escena por entorno, no por entrada:
+ * cambiar de escena implica unload_game/load_game, y hacer eso por entrada
+ * convertiria al fuzzer en un medidor de la velocidad de load_game. Una escena
+ * por proceso, y el job nocturno lanza un proceso por escena.
+ *
+ * Por que hacen falta las tres: el ROM sintetico de Mega Drive solo ejercita el
+ * YM2612 de MAME. Con eso, `sound_context_load` nunca entra por la rama de
+ * `config.ym3438` (Nuked OPN2) ni por la de `config.opll` (Nuked YM2413), que
+ * son structs enteros que tambien entran crudos del blob. Upstream tiene dos
+ * issues abiertos justo ahi -libretro/Genesis-Plus-GX#403 y #290-, y nuestro
+ * fuzzing no los podia ni rozar. */
+typedef enum fuzz_scene
+{
+  FUZZ_SCENE_MD = 0,      /* Mega Drive, YM2612 de MAME (el de siempre)   */
+  FUZZ_SCENE_MD_NUKED,    /* Mega Drive, Nuked OPN2  (config.ym3438 = 1)  */
+  FUZZ_SCENE_SMS_FM       /* Master System, Nuked YM2413 (config.opll = 1)*/
+} fuzz_scene;
+
+static fuzz_scene fuzz_scene_id;
+
+static const char *fuzz_scene_name(fuzz_scene s)
+{
+  switch (s) {
+    case FUZZ_SCENE_MD_NUKED: return "md-nuked";
+    case FUZZ_SCENE_SMS_FM:   return "sms-fm";
+    default:                  return "md";
+  }
+}
+
+/* La escena viaja por el entorno, igual que la ruta del core: libFuzzer es
+   dueno de argv. Un nombre que no existe es un error, no un default silencioso:
+   un typo en el workflow dejaria una escena sin fuzzear y el job seguiria en
+   verde, que es exactamente el modo de falla que este target existe para
+   evitar. */
+static fuzz_scene fuzz_scene_from_env(void)
+{
+  const char *v = getenv("AYTHER_FUZZ_SCENE");
+  if (!v || !*v || !strcmp(v, "md")) return FUZZ_SCENE_MD;
+  if (!strcmp(v, "md-nuked"))        return FUZZ_SCENE_MD_NUKED;
+  if (!strcmp(v, "sms-fm"))          return FUZZ_SCENE_SMS_FM;
+  fprintf(stderr, "AYTHER_FUZZ_SCENE=%s no existe (md, md-nuked, sms-fm)\n", v);
+  exit(2);
+}
+
 static bool fuzz_env_cb(unsigned cmd, void *data)
 {
   switch (cmd) {
@@ -92,6 +138,24 @@ static bool fuzz_env_cb(unsigned cmd, void *data)
     case RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME:
     case RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS:
     case RETRO_ENVIRONMENT_SET_VARIABLES: return true;
+    /* Las unicas variables que contesta el harness son las que eligen el core
+       de FM. Todo lo demas queda en el default del core: una escena de fuzzing
+       tiene que diferenciarse de la de al lado en UNA cosa, si no el hallazgo
+       no dice de que rama salio. */
+    case RETRO_ENVIRONMENT_GET_VARIABLE:
+    {
+      struct retro_variable *var = (struct retro_variable *)data;
+      if (!var || !var->key) return false;
+      var->value = NULL;
+      if (!strcmp(var->key, "genesis_plus_gx_ym2612"))
+        var->value = (fuzz_scene_id == FUZZ_SCENE_MD_NUKED) ? "nuked (ym2612)"
+                                                            : "mame (ym2612)";
+      else if (!strcmp(var->key, "genesis_plus_gx_ym2413"))
+        var->value = (fuzz_scene_id == FUZZ_SCENE_SMS_FM) ? "enabled" : "disabled";
+      else if (!strcmp(var->key, "genesis_plus_gx_ym2413_core"))
+        var->value = (fuzz_scene_id == FUZZ_SCENE_SMS_FM) ? "nuked" : "mame";
+      return var->value != NULL;
+    }
     default: return false;
   }
 }
@@ -116,6 +180,8 @@ static const char *fuzz_core_path(void)
 static fuzz_core *fuzz_core_get(void)
 {
   const char *path;
+  const char *name, *ext;
+  size_t built;
   struct retro_game_info gi;
 
   if (fuzz_g.lib) return &fuzz_g;
@@ -155,6 +221,10 @@ static fuzz_core *fuzz_core_get(void)
     fuzz_g.api = iface ? iface(0) : NULL;
   }
 
+  /* La escena se resuelve ANTES de set_environment: el core pide las variables
+     durante load_game, y el callback ya tiene que saber que contestar. */
+  fuzz_scene_id = fuzz_scene_from_env();
+
   fuzz_g.set_environment(fuzz_env_cb);
   fuzz_g.set_video_refresh(fuzz_vid_cb);
   fuzz_g.set_audio_sample_batch(fuzz_aud_cb);
@@ -162,21 +232,35 @@ static fuzz_core *fuzz_core_get(void)
   fuzz_g.set_input_state(fuzz_input_cb);
   fuzz_g.init();
 
-  if (!ayther_build_generated_rom(fuzz_rom, sizeof(fuzz_rom))) {
-    fprintf(stderr, "no se pudo construir el ROM sintetico\n");
+  /* La extension es lo que hace que el core elija Master System o Mega Drive,
+     asi que va pegada al generador y no puede quedar desincronizada. */
+  if (fuzz_scene_id == FUZZ_SCENE_SMS_FM) {
+    built = ayther_build_generated_rom_sms_scene(fuzz_rom, sizeof(fuzz_rom),
+                                                AYTHER_SMS_SCENE_FM);
+    name = "ayther-fuzz.sms"; ext = "sms";
+  } else {
+    built = ayther_build_generated_rom(fuzz_rom, sizeof(fuzz_rom));
+    name = "ayther-fuzz.md"; ext = "md";
+  }
+  if (!built) {
+    fprintf(stderr, "no se pudo construir el ROM sintetico (%s)\n",
+            fuzz_scene_name(fuzz_scene_id));
     exit(2);
   }
+
   memset(&fuzz_gi_ext, 0, sizeof(fuzz_gi_ext));
-  fuzz_gi_ext.full_path = "ayther-fuzz.md"; fuzz_gi_ext.dir = ".";
-  fuzz_gi_ext.name = "ayther-fuzz"; fuzz_gi_ext.ext = "md";
+  fuzz_gi_ext.full_path = name; fuzz_gi_ext.dir = ".";
+  fuzz_gi_ext.name = "ayther-fuzz"; fuzz_gi_ext.ext = ext;
   fuzz_gi_ext.data = fuzz_rom; fuzz_gi_ext.size = sizeof(fuzz_rom);
   fuzz_gi_ext.persistent_data = true;
   memset(&gi, 0, sizeof(gi));
-  gi.path = "ayther-fuzz.md"; gi.data = fuzz_rom; gi.size = sizeof(fuzz_rom);
+  gi.path = name; gi.data = fuzz_rom; gi.size = sizeof(fuzz_rom);
   if (!fuzz_g.load_game(&gi)) {
-    fprintf(stderr, "load_game fallo con el ROM sintetico\n");
+    fprintf(stderr, "load_game fallo con el ROM sintetico (%s)\n",
+            fuzz_scene_name(fuzz_scene_id));
     exit(2);
   }
+  fprintf(stderr, "escena: %s\n", fuzz_scene_name(fuzz_scene_id));
   return &fuzz_g;
 }
 

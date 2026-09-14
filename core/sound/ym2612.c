@@ -2313,12 +2313,71 @@ int YM2612LoadContext(unsigned char *state)
      cual setup_connection deja los cinco punteros de conexion del canal tal
      como vinieron del blob -- NULL, que es justo lo que escribe
      YM2612SaveContext-- y chan_calc los usa igual: primero lee op_mask[236]
-     y despues escribe *CH->mem_connect sobre NULL. */
+     y despues escribe *CH->mem_connect sobre NULL.
+
+     La envolvente es la misma familia, y es la que mas campos tiene (#83 a
+     #87, y los hallazgos sin archivo del 2026-09-07 y 2026-09-11). Cada slot
+     lleva cuatro pares (eg_sh_*, eg_sel_*): eg_sel indexa eg_inc[19*8] y
+     eg_sh es una cantidad de shift, y los deriva quien escribe la tasa
+     -set_ar_ksr, set_dr, set_sr, set_sl_rr, refresh_fc_eg_slot- de
+     (tasa + ksr) via eg_rate_shift/eg_rate_select[128]. Del blob entran los
+     cuatro pares Y sus entradas: ar/d1r/d2r/rr (0 o 34..94), ksr (kcode>>KSR,
+     0..31), KSR (0..3) y kcode (0..31), que ademas indexa dt_tab[8][32].
+     Un eg_sel podrido indexa eg_inc[205] en advance_eg_channels; un ksr
+     podrido indexa eg_rate_shift[289] en la primera escritura de 0x50-0x8f.
+     FB va en la misma bolsa: chan_calc lo usa como shift y OPNWriteReg lo
+     escribe como SIN_BITS - (0..7).
+
+     Se acotan las entradas con la regla de quien las escribe y se recomputan
+     los cuatro pares con la misma formula. Para un estado legitimo no cambia
+     nada: cada escritor de ar/d1r/d2r/rr y de ksr los recomputa en el acto,
+     asi que los pares ya eran exactamente esto. */
   for (c=0; c<6; c++)
   {
-    ym2612.CH[c].ALGO &= 7;
-    ym2612.CH[c].pms &= 0xE0;
-    if (ym2612.CH[c].ams > 8) ym2612.CH[c].ams = 8;
+    FM_CH *CH = &ym2612.CH[c];
+
+    CH->ALGO &= 7;
+    CH->pms &= 0xE0;
+    if (CH->ams > 8) CH->ams = 8;
+    if (CH->FB > SIN_BITS) CH->FB = SIN_BITS;
+    CH->kcode &= 31;
+
+    for (s=0; s<4; s++)
+    {
+      FM_SLOT *SLOT = &CH->SLOT[s];
+
+      SLOT->KSR &= 3;
+      SLOT->ksr &= 31;
+      if (SLOT->ar  > (32+62)) SLOT->ar  = 32+62;
+      if (SLOT->d1r > (32+62)) SLOT->d1r = 32+62;
+      if (SLOT->d2r > (32+62)) SLOT->d2r = 32+62;
+      if (SLOT->rr  > (32+62)) SLOT->rr  = 32+62;
+
+      if ((SLOT->ar + SLOT->ksr) < (32+62))
+      {
+        SLOT->eg_sh_ar  = eg_rate_shift [SLOT->ar  + SLOT->ksr];
+        SLOT->eg_sel_ar = eg_rate_select[SLOT->ar  + SLOT->ksr];
+      }
+      else
+      {
+        /* verified by Nemesis on real hardware (Attack phase is blocked) */
+        SLOT->eg_sh_ar  = 0;
+        SLOT->eg_sel_ar = 18*RATE_STEPS;
+      }
+
+      SLOT->eg_sh_d1r = eg_rate_shift [SLOT->d1r + SLOT->ksr];
+      SLOT->eg_sel_d1r= eg_rate_select[SLOT->d1r + SLOT->ksr];
+
+      SLOT->eg_sh_d2r = eg_rate_shift [SLOT->d2r + SLOT->ksr];
+      SLOT->eg_sel_d2r= eg_rate_select[SLOT->d2r + SLOT->ksr];
+
+      SLOT->eg_sh_rr  = eg_rate_shift [SLOT->rr  + SLOT->ksr];
+      SLOT->eg_sel_rr = eg_rate_select[SLOT->rr  + SLOT->ksr];
+    }
+  }
+  for (c=0; c<3; c++)
+  {
+    ym2612.OPN.SL3.kcode[c] &= 31;
   }
   ym2612.OPN.lfo_cnt &= 127;
   ym2612.OPN.LFO_AM = (ym2612.OPN.lfo_cnt < 64) ? ((ym2612.OPN.lfo_cnt ^ 63) << 1)

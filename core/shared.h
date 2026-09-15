@@ -35,6 +35,7 @@
 #include "opll.h"
 #endif
 #include "sram.h"
+#include "eeprom_i2c.h"
 #include "ggenie.h"
 #include "areplay.h"
 #include "svp.h"

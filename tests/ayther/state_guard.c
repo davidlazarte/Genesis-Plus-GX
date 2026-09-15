@@ -17,6 +17,8 @@
  *   2. layout de otra arch      -> se RECHAZA (antes: corrupcion silenciosa)
  *   3. estado viejo sin tag     -> se acepta (compatibilidad hacia atras)
  *   4. estado sin bloque de audio -> se acepta, sin continuidad (#93)
+ *   5. estado 1.7.7             -> se acepta, salteando el bloque de la
+ *                                  EEPROM I2C (#76)
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -163,6 +165,16 @@ int main(int argc, char **argv)
         se ubica igual, por posicion desde el final. */
   memset(buf + n - 16 - 1024, 0, 1024);
   printf("4. estado sin bloque de audio    -> %s\n",
+         p_unserialize(buf,n) ? "ACEPTADO (correcto, compat)" : (fail=1,"RECHAZADO (MAL)"));
+
+  /* 5. #76: el estado del bus de la EEPROM I2C va detras de
+        `version[15] >= 0x38`, o sea que los savestates pasaron a ser 1.7.8.
+        Uno de 1.7.7 no trae ese bloque y tiene que cargar igual, salteandolo:
+        si no, subir la version rompe todos los savestates que ya existen, que
+        es justamente la objecion por la que este arreglo no se propuso aguas
+        arriba. El byte 15 es el ultimo de "GENPLUS-GX 1.7.8". */
+  buf[15] = '7';
+  printf("5. estado 1.7.7 sin bloque de EEPROM -> %s\n",
          p_unserialize(buf,n) ? "ACEPTADO (correcto, compat)" : (fail=1,"RECHAZADO (MAL)"));
 
   printf("\n%s\n", fail ? "FALLO" : "TODO OK");

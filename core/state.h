@@ -40,7 +40,16 @@
 #define _STATE_H_
 
 #define STATE_SIZE    0xfd000
-#define STATE_VERSION "GENPLUS-GX 1.7.7"
+/* 1.7.8 agrega, al final y detras del gate de version, el estado del bus de
+   la EEPROM I2C. Sin el, guardar mientras hay una transaccion en curso deja
+   la transaccion colgada al cargar: es libretro/Genesis-Plus-GX#404. (#76)
+
+   Los estados 1.7.7 siguen cargando: el bloque va detras de
+   `version[15] >= 0x38` y DESPUES de todo lo que ya se leia. Y un binario
+   viejo puede leer los nuestros, que es la objecion que freno el arreglo
+   aguas arriba: su chequeo es `version[15] < 0x35`, que 0x38 pasa, y los
+   bytes de mas quedan al final, donde no los lee nadie. */
+#define STATE_VERSION "GENPLUS-GX 1.7.8"
 
 #define load_param(param, size) \
   memcpy(param, &state[bufferptr], size); \

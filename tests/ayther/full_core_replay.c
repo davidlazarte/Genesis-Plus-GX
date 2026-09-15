@@ -40,6 +40,8 @@ typedef void *library_t;
    buffer (AYTHER_STATE_TAG_BYTES en libretro/libretro.c). Difiere entre
    plataformas a proposito, asi que queda fuera del hash del estado. */
 #define AYTHER_TAG_BYTES ((size_t)16)
+/* Espejo de AYTHER_AUDIO_CONT_BYTES en libretro/libretro.c (#93). */
+#define AYTHER_AUDIO_CONT_BYTES ((size_t)1024)
 #define FNV_PRIME UINT64_C(1099511628211)
 #define FIXTURE_CONFIGURATION \
   "region=auto;overscan=disabled;aspect=auto;sprite_limit=hardware;" \
@@ -1043,11 +1045,13 @@ static int check_savestate_roundtrip(const struct core_api *api,
      savestates del mismo estado no son iguales byte a byte. Vale la pena verlo
      escrito en vez de descubrirlo comparando archivos. */
   {
-    /* Espejo de AYTHER_STATE_TAG_BYTES en libretro/libretro.c. */
-    const size_t ayther_tag_bytes = AYTHER_TAG_BYTES;
+    /* Espejo de AYTHER_STATE_TAG_BYTES y AYTHER_AUDIO_CONT_BYTES en
+       libretro/libretro.c: los dos bloques del fork viven a offset FIJO al
+       final del buffer, y los dos hay que saltearlos por la misma razon. */
+    const size_t ayther_tail_bytes = AYTHER_TAG_BYTES + AYTHER_AUDIO_CONT_BYTES;
     size_t written_a = 0, written_b = 0, at;
     const size_t scan_limit =
-      (state_size > ayther_tag_bytes) ? (state_size - ayther_tag_bytes) : state_size;
+      (state_size > ayther_tail_bytes) ? (state_size - ayther_tail_bytes) : state_size;
     memset(first, 0x00, state_size);
     memset(second, 0xFF, state_size);
     if (api->serialize(first, state_size) && api->serialize(second, state_size))
@@ -1057,7 +1061,11 @@ static int check_savestate_roundtrip(const struct core_api *api,
          libretro/libretro.c). Sin esto la metrica es inutil: busca el ultimo
          byte tocado, y el tag esta al final, asi que reportaba 100% escrito
          para cualquier estado -tapando exactamente lo que este chequeo
-         existe para ver, que es cuanto de lo declarado se usa de verdad-. */
+         existe para ver, que es cuanto de lo declarado se usa de verdad-.
+
+         La continuidad de audio (#93) cayo en la MISMA trampa: vive pegada al
+         tag, tambien a offset fijo, y volvio a llevar la cuenta al 100%. Se
+         saltea igual. */
       for (at = scan_limit; at > 0; --at)
         if (first[at - 1] != 0x00) { written_a = at; break; }
       for (at = scan_limit; at > 0; --at)

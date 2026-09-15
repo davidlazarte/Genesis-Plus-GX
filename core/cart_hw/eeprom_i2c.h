@@ -41,5 +41,7 @@
 
 /* Function prototypes */
 extern void eeprom_i2c_init(void);
+extern int eeprom_i2c_context_save(uint8 *state);
+extern int eeprom_i2c_context_load(uint8 *state);
 
 #endif

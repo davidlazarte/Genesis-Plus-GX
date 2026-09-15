@@ -13,6 +13,8 @@ Makefile.libretro	else	# AYTHER fork delta: built with llvm-mingw (lld), which d
 Makefile.libretro	endif	# AYTHER fork delta: genesis_plus_gx type-puns heavily and relies on wrapping
 README.md	(sin funcion)	# ⚡ AYTHER Genesis Core Fork
 builds/README.md	Notes:	---
+core/cart_hw/eeprom_i2c.c	void eeprom_i2c_init(void)	int eeprom_i2c_context_save(uint8 *state)
+core/cart_hw/eeprom_i2c.h	extern void eeprom_i2c_init(void);	extern int eeprom_i2c_context_save(uint8 *state);
 core/cd_hw/pcm.c	extern int8 reset_do_not_clear_buffers;	#include "audio_probe.h"
 core/cd_hw/pcm.c	void pcm_run(unsigned int length)	int l_delta = ((data * pcm.chan[j].env * (pcm.chan[j].pan & 0x0F)) >> 5);
 core/cd_hw/pcm.c	void pcm_run(unsigned int length)	l += l_delta;
@@ -100,7 +102,7 @@ core/state.c	int state_load(unsigned char *state)	PAIR *pairs[] = {
 core/state.c	int state_load(unsigned char *state)	if (version[15] >= 0x37)
 core/state.c	int state_save(unsigned char *state)	Z80_Regs z80_state = Z80;
 core/state.c	int state_save(unsigned char *state)	bufferptr += gamepad_context_save(&state[bufferptr]);
-core/state.h	(sin funcion)	#define STATE_VERSION "GENPLUS-GX 1.7.7"
+core/state.h	(sin funcion)	#define STATE_VERSION "GENPLUS-GX 1.7.8"
 core/system.c	void audio_set_equalizer(void)	static void audio_context_eq(EQSTATE *e, double h[11], int store)
 core/system.c	void system_frame_gen(int do_skip)	vdp_ayther_begin_frame();
 core/system.c	void system_frame_scd(int do_skip)	vdp_ayther_begin_frame();

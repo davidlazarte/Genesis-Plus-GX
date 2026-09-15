@@ -236,7 +236,10 @@ static void emit_fm_voice(struct rom_builder *builder, uint8_t channel,
   emit_ym_write(builder, 0x28u, (uint8_t)(0xf0u | channel)); /* key-on 4 ops  */
 }
 
-static void emit_reset_program(struct rom_builder *builder)
+/* El cuerpo comun de los programas de reset de Mega Drive: VDP, datos del
+   fixture, un tono y la pantalla encendida. Lo que cambia entre variantes va
+   DESPUES, antes del bucle de espera. */
+static void emit_reset_common(struct rom_builder *builder)
 {
   unsigned int index;
 
@@ -278,9 +281,21 @@ static void emit_reset_program(struct rom_builder *builder)
   emit_vdp_register(builder, 0, 0x14u);
   emit_vdp_register(builder, 1, 0x74u);
 
+}
+
+/* Esperar para siempre con las interrupciones abiertas: el trabajo por frame lo
+   hace el handler vertical. */
+static void emit_wait_forever(struct rom_builder *builder)
+{
   emit_u16(builder, 0x4e72u); /* stop #$2300 */
   emit_u16(builder, 0x2300u);
   emit_u16(builder, 0x60fau); /* bra.s back to stop */
+}
+
+static void emit_reset_program(struct rom_builder *builder)
+{
+  emit_reset_common(builder);
+  emit_wait_forever(builder);
 }
 
 
@@ -316,6 +331,150 @@ static void emit_reset_program_fm(struct rom_builder *builder)
   emit_u16(builder, 0x4e72u); /* stop #$2300 */
   emit_u16(builder, 0x2300u);
   emit_u16(builder, 0x60fau);
+}
+
+/* --- EEPROM I2C serie (#76) -------------------------------------------------
+ *
+ * El cartucho la declara por CABECERA y no por la base de CRCs del core: con
+ * "RA" en 0x1b0 y 0xe8 en 0x1b2, eeprom_i2c_init cae en su rama de respaldo
+ * -- "for games not present in database, check if ROM header indicates serial
+ * EEPROM is used"- y arma el mapper SEGA, que expone el bus en $200000-$3fffff
+ * con SCL en D1 y SDA en D0.
+ *
+ * Lo que este fixture quiere provocar es el caso de
+ * libretro/Genesis-Plus-GX#404: que en el momento de guardar el estado haya una
+ * transaccion I2C EN CURSO. Por eso el START y la direccion van UNA sola vez,
+ * en el reset, y el handler vertical se limita a dar dos pulsos de reloj por
+ * frame: la maquina de estados del bus queda viva y avanzando entre frames, que
+ * es justo lo que un savestate tiene que llevarse y hoy no lleva.
+ *
+ * Se lee en el mismo handler y el valor va a la tabla de scroll horizontal, no
+ * a CRAM: el bit que devuelve el bus es el 0, y en CRAM el bit 0 no se usa
+ * -- el formato es xxxxBBB0GGG0RRR0-, asi que un cambio ahi seria invisible y
+ * el test pasaria sin afirmar nada. En la tabla de scroll cada bit corre la
+ * pantalla. */
+/* La escritura va a una direccion IMPAR y la lectura a una par, y no es un
+   detalle de estilo: `mapper_i2c_generic_write8` solo hace algo si
+   `address & 0x01` -- es la linea /LWR del cartucho, el byte bajo de la
+   palabra-, asi que escribir en $200000 no llega al chip. La lectura se hace
+   por palabra, que entra por `read16` y no mira la paridad. */
+#define EEPROM_PORT_W  0x00200001u
+#define EEPROM_PORT_R  0x00200000u
+/* Plano A, linea 1: el plano A es el que tiene los tiles del fixture, asi que
+   correrle el scroll se ve. El plano B esta vacio y no serviria. */
+#define EEPROM_HSCROLL 0xf004u
+
+static void i2c_bus(struct rom_builder *builder, unsigned int sda,
+                    unsigned int scl)
+{
+  emit_move_byte_immediate_absolute(builder,
+    (uint8_t)((sda & 1u) | ((scl & 1u) << 1)), EEPROM_PORT_W);
+}
+
+/* START: SDA de 1 a 0 mientras SCL esta alto. */
+static void i2c_start(struct rom_builder *builder)
+{
+  i2c_bus(builder, 1u, 1u);
+  i2c_bus(builder, 0u, 1u);
+}
+
+/* Un pulso: el dato se toma en el flanco de subida de SCL. */
+static void i2c_clock(struct rom_builder *builder, unsigned int bit)
+{
+  i2c_bus(builder, bit, 0u);
+  i2c_bus(builder, bit, 1u);
+}
+
+/* STOP: SDA de 0 a 1 mientras SCL esta alto. */
+static void i2c_stop(struct rom_builder *builder)
+{
+  i2c_bus(builder, 0u, 1u);
+  i2c_bus(builder, 1u, 1u);
+}
+
+/* Escribir un byte. Hace falta ANTES de leer: una EEPROM en blanco devuelve
+   todos los bits iguales, y entonces la posicion de la maquina de estados no se
+   nota en lo leido -- el test pasaria sin afirmar nada. */
+static void emit_i2c_write_byte(struct rom_builder *builder, unsigned int addr,
+                                unsigned int value)
+{
+  unsigned int bit;
+
+  i2c_start(builder);
+  for (bit = 0; bit < 7u; ++bit)
+    i2c_clock(builder, (addr >> (6u - bit)) & 1u);
+  i2c_clock(builder, 0u);     /* R/W = 0: escritura */
+  i2c_clock(builder, 1u);     /* hueco del ACK */
+  for (bit = 0; bit < 8u; ++bit)
+    i2c_clock(builder, (value >> (7u - bit)) & 1u);
+  i2c_clock(builder, 1u);     /* hueco del ACK */
+  i2c_stop(builder);
+}
+
+/* Diecisiete bytes y no uno: la lectura del handler avanza dos pulsos por
+   frame, o sea un byte cada cuatro frames y medio, y la ventana que mide el
+   test empieza recien en el frame 30. Con un solo byte escrito el resto de la
+   lectura caeria sobre una EEPROM en blanco -- todos los bits en uno-- y lo
+   leido volveria a ser constante justo donde hay que mirar. Los valores
+   alternan para que cada pulso cambie la salida. */
+static void emit_i2c_fill(struct rom_builder *builder)
+{
+  unsigned int i;
+  for (i = 0; i < 17u; ++i)
+    emit_i2c_write_byte(builder, i, (i & 1u) ? 0x5au : 0xa5u);
+}
+
+/* START + los 7 bits de direccion (cero) + el bit de lectura + el ACK. Deja al
+   chip entregando datos, que es un estado que no termina solo: la lectura
+   secuencial del X24C01 sigue mientras haya reloj. */
+static void emit_i2c_begin_read(struct rom_builder *builder)
+{
+  unsigned int bit;
+
+  i2c_start(builder);
+  for (bit = 0; bit < 7u; ++bit)
+    i2c_clock(builder, 0u);
+  i2c_clock(builder, 1u);   /* R/W = 1: lectura */
+  i2c_clock(builder, 1u);   /* hueco del ACK, con SDA liberado */
+}
+
+static void emit_reset_program_eeprom(struct rom_builder *builder)
+{
+  emit_reset_common(builder);
+  emit_i2c_fill(builder);
+  emit_i2c_begin_read(builder);
+  emit_wait_forever(builder);
+}
+
+/* El handler vertical de la escena de EEPROM: dos pulsos por frame y el valor
+   leido a la tabla de scroll. Dos y no veinte a proposito -- con veinte la
+   transaccion terminaria dentro del mismo frame y en el borde no quedaria nada
+   a medias, que es exactamente lo que hay que poner a prueba. */
+static uint32_t emit_vertical_handler_eeprom(struct rom_builder *builder)
+{
+  uint32_t address = (uint32_t)builder->pc;
+
+  emit_move_word_absolute_d0(builder, VDP_CONTROL); /* acknowledge */
+  emit_move_word_immediate_absolute(builder, 0u, RAM_LINE);
+  emit_addq_word_absolute(builder, RAM_FRAME);
+
+  /* SDA BAJO en cada pulso, y esto es lo que hace que la lectura no termine:
+     en el noveno pulso el chip mira SDA y, si esta alto, lo toma como NACK y se
+     va a WAIT_STOP -- ahi la transaccion muere y en el borde de frame no queda
+     nada vivo que un savestate pueda perder. Con SDA bajo es un ACK y la
+     lectura secuencial sigue, byte tras byte, para siempre. Que el maestro
+     tenga SDA bajo no tapa el dato: `eeprom_i2c_out` sale de `sram` y de los
+     contadores, no de la linea. */
+  i2c_clock(builder, 0u);
+  i2c_clock(builder, 0u);
+
+  emit_move_word_absolute_d0(builder, EEPROM_PORT_R);
+  emit_move_long_immediate_absolute(builder, vram_write_command(EEPROM_HSCROLL),
+                                    VDP_CONTROL);
+  emit_move_word_d0_absolute(builder, VDP_DATA);
+
+  emit_u16(builder, 0x4e73u); /* rte */
+  return address;
 }
 
 static uint32_t emit_raster_handler(struct rom_builder *builder);
@@ -1064,6 +1223,20 @@ static void write_header(uint8_t *rom)
   put_u32(rom + 0x1acu, 0x00ffffffu);
 }
 
+/* La declaracion de memoria externa vive en 0x1b0. "RA" prende sram.detected
+   en sram_init, y el 0xe8 de 0x1b2 es lo que hace que eeprom_i2c_init la tome
+   por EEPROM serie en vez de por SRAM paralela. El rango de un solo byte
+   ademas satisface el otro camino de esa condicion, `(end - start) < 2`. */
+static void write_eeprom_header(uint8_t *rom)
+{
+  rom[0x1b0u] = 0x52u;   /* 'R' */
+  rom[0x1b1u] = 0x41u;   /* 'A' */
+  rom[0x1b2u] = 0xe8u;   /* EEPROM serie */
+  rom[0x1b3u] = 0x20u;
+  put_u32(rom + 0x1b4u, 0x00200000u);
+  put_u32(rom + 0x1b8u, 0x00200001u);
+}
+
 static void write_checksum(uint8_t *rom)
 {
   uint32_t checksum = 0;
@@ -1076,8 +1249,10 @@ static void write_checksum(uint8_t *rom)
 /* El armado es identico para los dos ROMs; lo unico que cambia es el programa
    de reset. Parametrizarlo evita que las dos copias se separen con el tiempo,
    que es como el fixture original termino con un key-on sin operadores. */
-static size_t build_rom(uint8_t *rom, size_t capacity,
-                        void (*emit_reset)(struct rom_builder *))
+static size_t build_rom_ex(uint8_t *rom, size_t capacity,
+                           void (*emit_reset)(struct rom_builder *),
+                           uint32_t (*emit_vertical)(struct rom_builder *),
+                           int eeprom_header)
 {
   struct rom_builder builder;
   uint32_t horizontal_handler;
@@ -1090,13 +1265,15 @@ static size_t build_rom(uint8_t *rom, size_t capacity,
 
   memset(rom, 0, AYTHER_GENERATED_ROM_SIZE);
   write_header(rom);
+  if (eeprom_header)
+    write_eeprom_header(rom);
   builder.rom = rom;
   builder.pc = RESET_PC;
   builder.failed = 0;
 
   emit_reset(&builder);
   horizontal_handler = emit_horizontal_handler(&builder);
-  vertical_handler = emit_vertical_handler(&builder);
+  vertical_handler = emit_vertical(&builder);
   default_handler = (uint32_t)builder.pc;
   emit_u16(&builder, 0x4e73u); /* rte */
   if (builder.failed)
@@ -1112,9 +1289,21 @@ static size_t build_rom(uint8_t *rom, size_t capacity,
   return AYTHER_GENERATED_ROM_SIZE;
 }
 
+static size_t build_rom(uint8_t *rom, size_t capacity,
+                        void (*emit_reset)(struct rom_builder *))
+{
+  return build_rom_ex(rom, capacity, emit_reset, emit_vertical_handler, 0);
+}
+
 size_t ayther_build_generated_rom(uint8_t *rom, size_t capacity)
 {
   return build_rom(rom, capacity, emit_reset_program);
+}
+
+size_t ayther_build_generated_rom_eeprom(uint8_t *rom, size_t capacity)
+{
+  return build_rom_ex(rom, capacity, emit_reset_program_eeprom,
+                      emit_vertical_handler_eeprom, 1);
 }
 
 size_t ayther_build_generated_rom_fm(uint8_t *rom, size_t capacity)

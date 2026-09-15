@@ -73,14 +73,16 @@ struct fixture
   const char *ext;      /* lo que decide la consola en loadrom.c */
   int         fm;       /* YM2413 de Nuked encendido */
   int         sms_rom;  /* el ROM sintetico de Master System */
+  int         eeprom;   /* cartucho de MD con EEPROM I2C serie */
   unsigned    flags;    /* escena, si sms_rom */
 };
 
 static const struct fixture FIXTURES[] = {
-  { "md",     "md",  0, 0, 0 },
-  { "sms",    "sms", 0, 1, 0 },
-  { "sms-fm", "sms", 1, 1, AYTHER_SMS_SCENE_FM },
-  { "gg",     "gg",  0, 1, 0 },
+  { "md",     "md",  0, 0, 0, 0 },
+  { "sms",    "sms", 0, 1, 0, 0 },
+  { "sms-fm", "sms", 1, 1, 0, AYTHER_SMS_SCENE_FM },
+  { "gg",     "gg",  0, 1, 0, 0 },
+  { "eeprom", "md",  0, 0, 1, 0 },
 };
 #define N_FIXTURES ((int)(sizeof(FIXTURES) / sizeof(FIXTURES[0])))
 
@@ -253,7 +255,8 @@ static int run_fixture(library_t lib, const struct fixture *fx)
 
   if (fx->sms_rom
         ? !ayther_build_generated_rom_sms_scene(rom, ROM_SIZE, fx->flags)
-        : !ayther_build_generated_rom(rom, ROM_SIZE)) {
+        : (fx->eeprom ? !ayther_build_generated_rom_eeprom(rom, ROM_SIZE)
+                      : !ayther_build_generated_rom(rom, ROM_SIZE))) {
     fprintf(stderr, "%s: no se pudo construir el fixture\n", fx->name);
     free(rom); return 1;
   }

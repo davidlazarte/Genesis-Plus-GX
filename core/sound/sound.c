@@ -725,6 +725,16 @@ int sound_context_load(uint8 *state)
       load_param(&ym3438_accm, sizeof(ym3438_accm));
       load_param(&ym3438_sample, sizeof(ym3438_sample));
       load_param(&ym3438_cycles, sizeof(ym3438_cycles));
+
+      /* Los dos contadores de slot entran crudos del blob y los dos son
+         indices, no adornos: ym3438_cycles indexa ym3438_accm[24][2] en
+         YM3438_Update y chip->cycles indexa los arreglos de 24 del propio
+         Nuked. Los dos se usan ANTES del modulo -el `% 24` viene despues
+         de leer-, asi que un valor podrido lee fuera en el primer paso.
+         Se acotan con la regla de quien los escribe, que es ese mismo
+         modulo; para un estado legitimo no cambia nada. (#75) */
+      ym3438_cycles = (int)((unsigned int)ym3438_cycles % 24u);
+      ym3438.cycles %= 24;
     }
     else
     {
@@ -746,6 +756,20 @@ int sound_context_load(uint8 *state)
       load_param(&opll_sample, sizeof(opll_sample));
       load_param(&opll_cycles, sizeof(opll_cycles));
       load_param(&opll_status, sizeof(opll_status));
+
+      /* Lo mismo del lado del OPLL, con 18 en vez de 24: opll_cycles
+         indexa opll_accm[18][2] en OPLL2413_Update y chip->cycles indexa
+         ch_offset[18], pg_phase[18], eg_state[18] y eg_level[18] dentro
+         de OPLL_Clock. Es la forma exacta del #62 en el otro chip, y es
+         a donde apuntan los dos issues de upstream sobre cargar un
+         savestate de Master System con Nuked (libretro #403 y #290).
+
+         opll_status va en la misma bolsa: quien lo escribe es
+         OPLL2413_Write con `v & 1`, y el mezclador lo usa como factor
+         (`opll_sample * 16 * opll_status`). (#75) */
+      opll_cycles = (int)((unsigned int)opll_cycles % 18u);
+      opll.cycles %= 18;
+      opll_status &= 1;
     }
     else
 #endif

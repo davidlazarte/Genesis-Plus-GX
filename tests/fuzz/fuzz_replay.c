@@ -11,7 +11,12 @@
  *
  * Cada archivo que se le pasa es UNA entrada, tal cual la vera libFuzzer.
  *
- * Uso: fuzz_replay <core> <archivo-o-directorio>...
+ * Uso: fuzz_replay [--scene <nombre>] <core> <archivo-o-directorio>...
+ *
+ * La escena (#75) elige que consola y que core de FM levanta el harness.
+ * Va por argumento y no por entorno porque las recetas de este repo tienen
+ * que valer en sh y en cmd, y `VAR=x cmd` solo vale en el primero; el driver
+ * la traduce a AYTHER_FUZZ_SCENE, que es lo que lee fuzz_common.h.
  */
 
 #include <stdio.h>
@@ -92,27 +97,42 @@ static int is_dir(const char *p)
 #endif
 }
 
+/* Poner una variable de entorno, que es como viajan la ruta del core y la
+   escena: libFuzzer es dueno de argv y no deja pasar argumentos propios,
+   asi que los dos caminos -- fuzzer y replay-- leen lo mismo. */
+static void fuzz_setenv(const char *key, const char *value)
+{
+#if defined(_WIN32)
+  char var[1200];
+  snprintf(var, sizeof(var), "%s=%s", key, value);
+  _putenv(var);
+#else
+  setenv(key, value, 1);
+#endif
+}
+
 int main(int argc, char **argv)
 {
   int i, total = 0;
 
+  /* --scene <nombre>, opcional y siempre primero. */
+  if ((argc > 2) && !strcmp(argv[1], "--scene")) {
+    fuzz_setenv("AYTHER_FUZZ_SCENE", argv[2]);
+    argv += 2;
+    argc -= 2;
+  }
+
   if (argc < 3) {
-    fprintf(stderr, "uso: %s <core> <archivo-o-directorio>...\n", argv[0]);
+    fprintf(stderr,
+            "uso: %s [--scene <nombre>] <core> <archivo-o-directorio>...\n",
+            argv[0]);
     return 2;
   }
 
   /* El target lo lee de aca: libFuzzer es dueno de argv y no deja pasar
      argumentos propios, asi que la ruta del core viaja por el entorno en los
      dos caminos. Uno solo de verdad, no dos que se parecen. */
-#if defined(_WIN32)
-  {
-    char var[1200];
-    snprintf(var, sizeof(var), "AYTHER_FUZZ_CORE=%s", argv[1]);
-    _putenv(var);
-  }
-#else
-  setenv("AYTHER_FUZZ_CORE", argv[1], 1);
-#endif
+  fuzz_setenv("AYTHER_FUZZ_CORE", argv[1]);
 
   for (i = 2; i < argc; ++i)
     total += is_dir(argv[i]) ? run_dir(argv[i]) : run_file(argv[i]);

@@ -32,12 +32,25 @@ concurrency:
 
 jobs:
   fuzz:
-    name: ${{ matrix.target }}
+    name: ${{ matrix.id }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
+      # `unserialize` va una vez por ESCENA, y cada una es un job propio en vez
+      # de tres tandas dentro del mismo: asi las tres cobran los 600 s enteros
+      # en paralelo, en vez de repartirse el presupuesto de una. `id` es lo que
+      # las distingue en el nombre del job, en el log y en el artefacto; sin
+      # eso, tres jobs subirian el mismo `ayther-fuzz-unserialize` y solo
+      # quedaria uno. (#75)
       matrix:
-        target: [write_control, unserialize, recompose, generated_rom, audio_ring]
+        include:
+          - {id: write_control,        target: write_control,  scene: md}
+          - {id: unserialize,          target: unserialize,    scene: md}
+          - {id: unserialize-md-nuked, target: unserialize,    scene: md-nuked}
+          - {id: unserialize-sms-fm,   target: unserialize,    scene: sms-fm}
+          - {id: recompose,            target: recompose,      scene: md}
+          - {id: generated_rom,        target: generated_rom,  scene: md}
+          - {id: audio_ring,           target: audio_ring,     scene: md}
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -56,7 +69,7 @@ jobs:
           CC="clang -fsanitize=address,undefined -shared-libsan -fno-omit-frame-pointer -g"
           -j2
 
-      - name: Fuzz ${{ matrix.target }}
+      - name: Fuzz ${{ matrix.id }}
         env:
           FUZZ_SECONDS: ${{ github.event.inputs.seconds || '600' }}
         run: |
@@ -73,7 +86,8 @@ jobs:
           make fuzz-${{ matrix.target }} \
             CORE="$(cd ../.. && pwd)/genesis_plus_gx_libretro.so" \
             FUZZ_SECONDS="$FUZZ_SECONDS" \
-            2>&1 | tee artifacts/${{ matrix.target }}.log
+            SCENE="${{ matrix.scene }}" \
+            2>&1 | tee artifacts/${{ matrix.id }}.log
           echo "FUZZ_STATUS=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
 
       # El mismo filtro que usa el job de sanitizers, y a proposito el mismo
@@ -82,7 +96,7 @@ jobs:
       # paso de arriba.
       - name: Reject UB not listed in known_ub.txt
         if: always()
-        run: bash tests/ci/filter_known_ub.sh "tests/fuzz/artifacts/${{ matrix.target }}.log"
+        run: bash tests/ci/filter_known_ub.sh "tests/fuzz/artifacts/${{ matrix.id }}.log"
 
       # libFuzzer deja el caso que rompio como `crash-<sha1>` en el cwd. Ese
       # archivo ES la reproduccion: se sube tal cual para poder meterlo en
@@ -100,7 +114,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: ayther-fuzz-${{ matrix.target }}
+          name: ayther-fuzz-${{ matrix.id }}
           path: |
             tests/fuzz/artifacts/
             tests/fuzz/corpus/${{ matrix.target }}/
@@ -114,7 +128,7 @@ jobs:
         if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
-          TARGET: ${{ matrix.target }}
+          TARGET: ${{ matrix.id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail

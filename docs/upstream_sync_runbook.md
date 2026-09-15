@@ -3,21 +3,60 @@
 Cómo sincronizar este fork con upstream sin romper AYTHER y sin pelearse con el
 historial.
 
-## 0. Cuál es upstream
+## 0. Cuál es upstream: son dos, y no dicen lo mismo
 
 ```
-https://github.com/libretro/Genesis-Plus-GX.git
+upstream  https://github.com/libretro/Genesis-Plus-GX.git   (el que usamos)
+ekeeke    https://github.com/ekeeke/Genesis-Plus-GX.git     (la fuente)
 ```
-
-**No es `ekeeke/Genesis-Plus-GX`.** Este runbook decía eso y estaba mal: el
-remoto real es el de libretro, que es el que trae el soporte libretro que
-nosotros usamos. `libretro/master` ya integra lo de ekeeke, así que sincronizar
-contra libretro nos deja al día con los dos.
 
 ```bash
 git remote add upstream https://github.com/libretro/Genesis-Plus-GX.git
+git remote add ekeeke   https://github.com/ekeeke/Genesis-Plus-GX.git
 git fetch upstream
+git fetch --no-tags ekeeke master
 ```
+
+**`ekeeke` es la fuente y `libretro` el espejo.** Nuestro árbol está basado en
+libretro — de ahí viene el puerto libretro que usamos, y libretro tiene cientos
+de commits propios que ekeeke no tiene — así que el merge de un sync normal va
+contra `upstream/master`. Pero el emulador lo escribe ekeeke, y **libretro a
+veces se retrasa meses en espejarlo**.
+
+Este runbook llegó a decir que *«`libretro/master` ya integra lo de ekeeke, así
+que sincronizar contra libretro nos deja al día con los dos»*. Eso era falso y
+no había forma de que se notara: el 2026-09-15 libretro estaba **18 commits
+detrás**, y entre ellos había arreglos de UB en CPU/CD/TMSS, una regresión de
+lecturas VRAM en Mode 4 y validación de savestates — justo la clase de cosa que
+este fork persigue (#74).
+
+**La medición es un paso del sync, no una curiosidad.** Se corre siempre:
+
+```bash
+git fetch upstream master
+git fetch --no-tags ekeeke master
+git rev-list --count upstream/master..ekeeke/master   # 18 el 2026-09-15
+```
+
+* **Da 0** → sync normal contra `upstream/master` y listo.
+* **Da más que 0** → decidir, y dejarlo escrito en el PR: esperar al espejo, o
+  adelantar los commits mergeando también `ekeeke/master`. Adelantarlos tiene
+  dos costos conocidos, los dos manejables y los dos documentados abajo (§4):
+  suma entradas a `tests/ci/upstream_contact.txt` que no son parches nuestros,
+  y trae commits que no son ancestros de `upstream/master`.
+
+Un aviso medido, para no repetir el susto: `libretro/libretro.c` da **conflicto
+de archivo completo** al mergear ekeeke. No es ruido de fin de línea — el
+ancestro común con ekeeke es viejo (`c7ecd07f`) y desde ahí los dos puertos
+reescribieron el archivo entero; los dos árboles difieren hoy en 712 archivos.
+Se resuelve quedándose con el nuestro y aplicando a mano el hunk que el commit
+de upstream le hace. El resto del merge no arrastra esa divergencia: en #74
+tocó 27 archivos y no dio de alta ni de baja ninguno.
+
+Y algo que **no** hay que traer: lo que vive sólo en ramas de libretro
+(`widescreen`, `revert-354-master`) y no está en `ekeeke/master` — por ejemplo
+`47761b9b`, los refresh delays del bus 68k — no es un sync, es importar una
+feature no publicada.
 
 ## 1. Políticas
 
@@ -271,6 +310,16 @@ make -B -f Makefile.libretro platform=win AYTHER_EXTENSIONS=0 SOUND_PROBE=0 -j8
 #    lista de dónde quedamos parados después
 bash tests/ci/check_upstream_contact.sh --regen
 ```
+
+Si el sync trajo commits adelantados de `ekeeke` (§0), el paso 6 va a **sumar**
+entradas a `tests/ci/upstream_contact.txt`: el gate mide contra el merge-base con
+`upstream/master`, que sigue siendo libretro, así que los cambios de ekeeke
+cuentan como hunks nuestros aunque no lo sean. Hay que decirlo en el commit, con
+esas palabras, porque el diff de ese archivo no lo distingue solo. Se van a ir
+solas cuando libretro alcance a ekeeke — el gate sólo **informa** las entradas
+que desaparecen, no falla por ellas. No se retargetea el gate a `ekeeke/master`:
+libretro tiene cientos de commits que ekeeke no tiene, y medir contra ekeeke
+convertiría todo el puerto libretro en «hunks nuestros».
 
 Si falla el determinismo (`audio_probe_trace`) o el replay full-core, **evaluar
 la regresión antes de tocar el golden**. Ajustarlo sólo si el cambio de upstream

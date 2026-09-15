@@ -39,6 +39,19 @@
  * Que este impreso y no asertado es deliberado: el numero queda a la vista de
  * quien lea la salida, en vez de desaparecer.
  *
+ * UNA ADVERTENCIA SOBRE PLATAFORMAS. El defecto que destapo este test -- un
+ * puntero a una tabla estatica del core, serializado y desreferenciado despues-
+ * se ve en Linux y NO necesariamente en Windows: ahi la base de una DLL se
+ * aleatoriza una vez por ARRANQUE y es la misma para todos los procesos, asi
+ * que el puntero viejo suele seguir siendo valido y la carga anda. Medido: un
+ * DLL sin el arreglo pasa este test con los mismos hashes que uno con el
+ * arreglo. Por eso la prueba negativa esta tomada en Linux, y por eso el issue
+ * de upstream le aparece a unos y a otros no.
+ *
+ * El test igual corre en los tres sistemas: la afirmacion -- el proceso nuevo
+ * tiene que dar lo mismo que el mismo proceso-- vale en todos, y hay estado
+ * dependiente del proceso que si se veria en Windows.
+ *
  * Uso:
  *   state_cross_process <core> <dir-de-trabajo>
  *       el driver: se relanza tres veces y compara.
@@ -403,14 +416,30 @@ done:
   return rc;
 }
 
-/* Comillas alrededor de cada ruta: BUILD_DIR y CORE pueden tener espacios, y
-   en Windows casi siempre los tienen. */
+/* Cada ruta va entre comillas: BUILD_DIR y CORE pueden tener espacios, y en
+   Windows casi siempre los tienen.
+ *
+ * Y en Windows va ADEMAS un par de comillas alrededor de TODO. No es
+ * paranoia: `system()` llama a `cmd /c <cadena>`, y cmd, cuando la cadena
+ * empieza con comilla, saca la PRIMERA y la ULTIMA y se queda con el medio.
+ * Con cinco argumentos entrecomillados eso deja una linea partida al medio y
+ * cmd termina intentando ejecutar el ultimo argumento:
+ *
+ *     ".build" no se reconoce como un comando interno o externo
+ *
+ * El par de mas es lo que cmd espera comerse. Documentado en `cmd /?`, y es
+ * por lo que fallaba el job de Windows y no los otros dos. */
 static int spawn(const char *self, const char *mode, const char *core,
                  const char *state_path, const char *hash_path)
 {
   char cmd[4096];
-  int n = snprintf(cmd, sizeof(cmd), "\"%s\" %s \"%s\" \"%s\" \"%s\"",
-                   self, mode, core, state_path, hash_path);
+#if defined(_WIN32)
+  const char *wrap = "\"";
+#else
+  const char *wrap = "";
+#endif
+  int n = snprintf(cmd, sizeof(cmd), "%s\"%s\" %s \"%s\" \"%s\" \"%s\"%s",
+                   wrap, self, mode, core, state_path, hash_path, wrap);
   if (n < 0 || (size_t)n >= sizeof(cmd)) {
     fprintf(stderr, "la linea de comando no entra\n");
     return 0;

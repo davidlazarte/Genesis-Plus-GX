@@ -10,6 +10,10 @@
  *      escalon permanente y nada lo reporta.
  *   4. el log AUDIO_WRITES lo produce el core, asi que trae eventos con
  *      extensions=1 aunque probe=0.
+ *   5. un savestate tomado con mute no se lleva el mute puesto: el estado
+ *      emulado es identico, y cargarlo sin suscripcion no deja un escalon
+ *      audible. Desde #93 el savestate lleva ademas la cola de continuidad
+ *      de audio, que si depende del mute; ver el comentario de la funcion.
  *
  * Los tests de mute y gain se auto-validan: corren la MISMA comprobacion sobre
  * los dos cores. Que ym2612 responda es la prueba de que el fixture genera
@@ -365,16 +369,38 @@ static int check_psg_no_dc(const char *dll)
 }
 
 /* --- 4. un savestate tomado con mute no se lleva el mute puesto ---------- */
+
+/* Cola que el fork escribe al final del savestate: el bloque de continuidad de
+   audio (#93) y el tag de layout (#45). Las constantes son las de libretro.c;
+   state_guard.c ubica el tag de la misma forma, por posicion desde el final. */
+#define AYTHER_STATE_TAIL_BYTES (1024u + 16u)
+
 static int check_savestate_neutral(const char *dll)
 {
-  /* El mute no toca el estado del chip, asi que el estado serializado con un
-     canal muteado tiene que ser BYTE A BYTE el mismo que sin mutear, y cargarlo
-     en una sesion sin suscripcion tiene que sonar como stock. Si el mute se
-     colara al estado, el residual viajaria dentro del savestate y aparecerian
-     sesiones silenciadas sin que nadie pidiera silencio. */
+  /* Dos afirmaciones distintas, y conviene no mezclarlas.
+   *
+   * El ESTADO EMULADO no lo toca el mute: el estado serializado con un canal
+   * muteado tiene que ser byte a byte el mismo que sin mutear. Eso sigue en pie
+   * y es lo que evita que aparezcan sesiones silenciadas sin que nadie pidiera
+   * silencio.
+   *
+   * La COLA DE CONTINUIDAD (#93) es otra cosa: son las ultimas muestras de
+   * SALIDA -- el integrador del blip, el filtro-, y esas si dependen del mute,
+   * porque el mute por canal se aplica ANTES de la mezcla (no hay otra forma de
+   * silenciar UN canal) y la cola es de DESPUES. Que difiera es inherente al
+   * hecho de guardar continuidad, no un defecto, asi que se saltea al comparar.
+   *
+   * Lo que #29 vino a evitar sigue cubierto, y por su nombre: un ESCALON
+   * PERMANENTE Y AUDIBLE. Se mide, en vez de exigir hashes iguales: cargar el
+   * estado muteado sin suscripcion tiene que quedar por debajo de 1 LSB de DC
+   * y del 0.01% de energia contra el estado limpio. Medido hoy: 0.02 LSB y
+   * 8e-8. Para dimensionarlo, el escalon que motivo el issue -- el del PSG, mas
+   * arriba en este mismo archivo-- son 32769 LSB. */
   run_opts muted = opts_for(NULL), clean = opts_for(NULL);
   run_result rm, rc, pm, pc;
   run_opts play_m, play_c;
+  size_t cmp_len;
+  double dc_delta, energy_delta;
   int bad = 0;
 
   muted.mute_mask = MUTE_PSG_CH1; muted.save_at = 20;
@@ -382,14 +408,16 @@ static int check_savestate_neutral(const char *dll)
   if (run_once(dll, &muted, &rm) != 1 || run_once(dll, &clean, &rc) != 1) return 1;
   if (!rm.state || !rc.state) { printf("savestate: no se serializo\n"); return 1; }
 
-  if (rm.state_size != rc.state_size ||
-      memcmp(rm.state, rc.state, rm.state_size) != 0) {
-    printf("savestate: el mute se filtro al estado (%llu B)  FALLA\n",
-           (unsigned long long)rm.state_size);
+  cmp_len = (rm.state_size > AYTHER_STATE_TAIL_BYTES)
+              ? (rm.state_size - AYTHER_STATE_TAIL_BYTES) : 0;
+  if (rm.state_size != rc.state_size || cmp_len == 0 ||
+      memcmp(rm.state, rc.state, cmp_len) != 0) {
+    printf("savestate: el mute se filtro al estado emulado (%llu B)  FALLA\n",
+           (unsigned long long)cmp_len);
     bad = 1;
   } else {
-    printf("savestate: identico con y sin mute (%llu B)  OK\n",
-           (unsigned long long)rm.state_size);
+    printf("savestate: estado emulado identico con y sin mute (%llu B)  OK\n",
+           (unsigned long long)cmp_len);
   }
 
   play_m = opts_for(NULL); play_c = opts_for(NULL);
@@ -400,11 +428,28 @@ static int check_savestate_neutral(const char *dll)
   if (run_once(dll, &play_m, &pm) != 1 || run_once(dll, &play_c, &pc) != 1) {
     free(rm.state); free(rc.state); return 1;
   }
-  if (pm.hash != pc.hash) {
-    printf("savestate: cargado sin suscripcion NO suena como stock  FALLA\n");
+
+  if (pm.samples == 0 || pc.samples == 0 || pc.energy == 0) {
+    printf("savestate: la reproduccion no dejo muestras  FALLA\n");
+    free(rm.state); free(rc.state);
+    return 1;
+  }
+  dc_delta = (double)pm.dc / (double)pm.samples
+           - (double)pc.dc / (double)pc.samples;
+  if (dc_delta < 0) dc_delta = -dc_delta;
+  energy_delta = (double)((pm.energy > pc.energy) ? (pm.energy - pc.energy)
+                                                  : (pc.energy - pm.energy))
+               / (double)pc.energy;
+
+  if (dc_delta >= 1.0 || energy_delta >= 1e-4) {
+    printf("savestate: cargado sin suscripcion deja un escalon "
+           "(DC %.3f LSB, energia %.6f%%)  FALLA\n",
+           dc_delta, energy_delta * 100.0);
     bad = 1;
   } else {
-    printf("savestate: cargado sin suscripcion suena como stock  OK\n");
+    printf("savestate: cargado sin suscripcion no deja escalon audible "
+           "(DC %.3f LSB, energia %.6f%%)  OK\n",
+           dc_delta, energy_delta * 100.0);
   }
   free(rm.state); free(rc.state);
   return bad;

@@ -821,6 +821,35 @@ int sound_context_load(uint8 *state)
 #include "scd.h"
 #include "cdd.h"
 
+/* fm_last es estatico de este modulo y lo necesita audio_context_save, que
+   vive en system.c junto a los blips: la continuidad del audio entre frames
+   esta repartida entre los dos archivos y el savestate la guarda junta. Dos
+   accesores en vez de exportar la variable, para que siga habiendo un solo
+   lugar que la escriba. (#93) */
+void sound_get_fm_last(int out[2])
+{
+  out[0] = fm_last[0];
+  out[1] = fm_last[1];
+}
+
+void sound_set_fm_last(const int in[2])
+{
+  fm_last[0] = in[0];
+  fm_last[1] = in[1];
+}
+
+void sound_get_cd_last(int16 out[2])
+{
+  out[0] = cdd.audio[0];
+  out[1] = cdd.audio[1];
+}
+
+void sound_set_cd_last(const int16 in[2])
+{
+  cdd.audio[0] = in[0];
+  cdd.audio[1] = in[1];
+}
+
 void save_sound_buffer()
 {
   int i;

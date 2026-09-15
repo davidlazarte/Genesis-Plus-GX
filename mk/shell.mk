@@ -46,6 +46,16 @@ endef
 endif
 
 ifeq ($(findstring sh,$(notdir $(SHELL))),sh)
+define copy_file
+	@cp -f "$1" "$2"
+endef
+else
+define copy_file
+	@copy /Y "$(subst /,\,$1)" "$(subst /,\,$2)" >NUL
+endef
+endif
+
+ifeq ($(findstring sh,$(notdir $(SHELL))),sh)
 define make_dir
 	@mkdir -p "$1"
 endef

@@ -3688,6 +3688,38 @@ size_t retro_serialize_size(void) { return STATE_SIZE; }
  * escribimos queda tageado. */
 #define AYTHER_STATE_TAG_MAGIC  UINT32_C(0x53535941)  /* "AYSS" */
 #define AYTHER_STATE_TAG_BYTES  16
+
+/* Continuidad del audio a traves de un savestate. (#93)
+
+   Un savestate restaura los CHIPS, pero la salida de audio no sale de los
+   chips directamente: pasa por un blip_buf, que trabaja por diferencias y
+   lleva un integrador, y despues por el filtro, que arrastra su ultima
+   muestra. Nada de eso estaba en el blob y state_load lo pone en cero, asi
+   que el estado cargaba bien y los frames siguientes no sonaban como si
+   nunca se hubiera guardado: el audio roto de libretro/Genesis-Plus-GX#290.
+
+   Va a un OFFSET FIJO, pegado al tag, y no dentro de state_save, por dos
+   razones concretas:
+
+     - no mueve un solo byte de lo que ya se escribia, asi que no hace falta
+       subir STATE_VERSION y los estados viejos y nuevos se leen en los dos
+       sentidos: el magic propio dice si el bloque esta o no;
+     - queda en un rango CONOCIDO, y eso es lo que le permite a
+       check-audio-controls comparar dos estados salteandolo. Hace falta
+       porque el mute por canal del fork se aplica ANTES de la mezcla -- no
+       hay otra forma de silenciar un canal-- y esta cola es de DESPUES: dos
+       estados que solo difieren en el mute difieren tambien aca, y eso es
+       inherente, no un defecto.
+
+   1 KiB alcanza de sobra: cuatro estados de blip (~140 B cada uno) mas
+   fm_last, el ultimo par del CD, el filtro y la historia de los dos EQ. La
+   escritura verifica que entre y no escribe nada si no entrara.
+
+   Hay lugar: STATE_SIZE es 0xfd000 y el volcado usa ~14%. */
+#define AYTHER_AUDIO_CONT_MAGIC  UINT32_C(0x434e4941)  /* "AINC" */
+#define AYTHER_AUDIO_CONT_BYTES  1024
+#define AYTHER_AUDIO_CONT_OFFSET (STATE_SIZE - AYTHER_STATE_TAG_BYTES \
+                                  - AYTHER_AUDIO_CONT_BYTES)
 #define AYTHER_STATE_TAG_OFFSET (STATE_SIZE - AYTHER_STATE_TAG_BYTES)
 
 /* Huella del layout de ESTE binario. sizeof(void*) es la causa raiz; los
@@ -3740,6 +3772,40 @@ static bool ayther_state_tag_ok(const void *data)
    return layout == ayther_state_layout_id();
 }
 
+static void ayther_audio_continuity_write(void *data)
+{
+   unsigned char *p = (unsigned char *)data + AYTHER_AUDIO_CONT_OFFSET;
+   uint32_t magic = AYTHER_AUDIO_CONT_MAGIC;
+   int written;
+
+   memset(p, 0, AYTHER_AUDIO_CONT_BYTES);
+   written = audio_context_save(p + sizeof(magic));
+   if ((written < 0) ||
+       ((size_t)written > (AYTHER_AUDIO_CONT_BYTES - sizeof(magic))))
+   {
+      /* No entra: se deja el bloque en cero y SIN magic, que es como se ve
+         un estado viejo. Mejor perder la continuidad del audio que pisar el
+         tag de layout, que es lo unico que evita una carga corrida. */
+      memset(p, 0, AYTHER_AUDIO_CONT_BYTES);
+      return;
+   }
+   memcpy(p, &magic, sizeof(magic));
+}
+
+/* Sin magic no hay bloque -- estado viejo, o de un build sin esto-- y se
+   sigue como antes: los buffers quedan como los dejo el reset. */
+static void ayther_audio_continuity_read(const void *data)
+{
+   const unsigned char *p = (const unsigned char *)data + AYTHER_AUDIO_CONT_OFFSET;
+   uint32_t magic = 0;
+
+   memcpy(&magic, p, sizeof(magic));
+   if (magic != AYTHER_AUDIO_CONT_MAGIC)
+      return;
+
+   audio_context_load((uint8_t *)(uintptr_t)(p + sizeof(magic)));
+}
+
 extern int8 fast_savestates;
 
 bool get_fast_savestates(void)
@@ -3765,6 +3831,7 @@ bool retro_serialize(void *data, size_t size)
 
    state_save(data);
    ayther_state_tag_write(data);
+   ayther_audio_continuity_write(data);
    if (fast_savestates) save_sound_buffer();
 
    return TRUE;
@@ -3784,7 +3851,11 @@ bool retro_unserialize(const void *data, size_t size)
    if (!state_load((uint8_t*)data))
       return FALSE;
 
+   /* Con fast_savestates -- runahead-- la continuidad ya viaja por la memoria
+      del proceso y esa copia es la de mas confianza: se prefiere. Sin el, que
+      es el caso de un savestate de archivo o de otra sesion, sale del blob. */
    if (fast_savestates) restore_sound_buffer();
+   else                 ayther_audio_continuity_read(data);
 
 #ifdef HAVE_OVERCLOCK
    update_overclock();

@@ -11,6 +11,8 @@
 /** First parameter of most functions is blip_t*, or const blip_t* if nothing
 is changed. */
 typedef struct blip_t blip_t;
+#include <stddef.h>
+
 typedef struct blip_buffer_state_t blip_buffer_state_t;
 
 /** Creates new buffer that can hold at most sample_count samples. Sets rates
@@ -92,6 +94,11 @@ blip_buffer_state_t* blip_new_buffer_state();
 
 /** Frees blip_buffer_state. No effect if NULL is passed. */
 void blip_delete_buffer_state(blip_buffer_state_t *state);
+
+/** Size in bytes of one saved buffer state. The type is opaque, so a caller
+    that wants to put the state somewhere else -- a savestate, say -- cannot
+    ask sizeof for it. */
+size_t blip_buffer_state_size( void );
 
 /* Deprecated */
 typedef blip_t blip_buffer_t;

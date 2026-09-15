@@ -77,11 +77,13 @@ jobs:
         run: |
           set -uo pipefail
           export LD_LIBRARY_PATH="$(clang -print-runtime-dir):${LD_LIBRARY_PATH:-}"
-          # halt_on_error=0 a proposito, igual que en run_sanitizers.sh: el
-          # UB aceptado de known_ub.txt -- los stores desalineados del
-          # renderer upstream- mataba al fuzzer en el primer caso y se comia
-          # los 60 s. Que UB corta el job lo decide el filtro de abajo, no
-          # un flag.
+          # halt_on_error=0 a proposito, igual que en run_sanitizers.sh: que
+          # UB corta el job lo decide el filtro de abajo, no un flag, y asi
+          # una corrida deja el inventario completo en vez del primer caso.
+          # El motivo original era otro: los stores desalineados del renderer
+          # upstream estaban en known_ub.txt y mataban al fuzzer en el primer
+          # caso, comiendose los 60 s. Eso se arreglo en #101 y la lista quedo
+          # vacia; el flag se queda por la razon de arriba, que es la buena.
           export UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=0:report_error_type=1"
           mkdir -p tests/fuzz/artifacts
           cd tests/fuzz

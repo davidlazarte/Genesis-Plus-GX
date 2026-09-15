@@ -12,6 +12,7 @@ Makefile.libretro	HOOK_CPU = 0	AYTHER_EXTENSIONS = 1
 Makefile.libretro	clean:	# #43: `clean` solo borra los objetos del core. Los arboles de artefactos viven
 Makefile.libretro	else	# #43: advertencias del compilador, con dos niveles a proposito.
 Makefile.libretro	else	# AYTHER fork delta: built with llvm-mingw (lld), which does not accept GNU
+Makefile.libretro	endif	# AYTHER fork delta (#101): ALIGN_LONG en TODAS nuestras plataformas.
 Makefile.libretro	endif	# AYTHER fork delta: genesis_plus_gx type-puns heavily and relies on wrapping
 README.md	(sin funcion)	# ⚡ AYTHER Genesis Core Fork
 builds/README.md	Notes:	---

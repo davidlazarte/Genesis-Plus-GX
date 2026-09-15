@@ -583,10 +583,10 @@ jobs:
           CFLAGS="-O1 -g -Wall -Wextra -fsanitize=undefined -shared-libsan -fno-omit-frame-pointer"
           LDFLAGS="-fsanitize=undefined -shared-libsan"
 
-      # El veredicto lo da tests/ci/run_sanitizers.sh contra known_ub.txt: es
-      # una puerta dura sobre UB NUEVO, con el conocido listado por sitio exacto
-      # y con dueno. Apagar -fsanitize=alignment para tapar el conocido taparia
-      # tambien los futuros.
+      # El veredicto lo da tests/ci/run_sanitizers.sh contra known_ub.txt.
+      # Desde #101 esa lista esta VACIA, asi que el gate ya no dice "sin UB
+      # nuevo" sino SIN UB: cualquier reporte pone el job en rojo. Apagar
+      # -fsanitize=alignment para tapar algo taparia tambien lo que venga.
       - name: Run the full-core replay under UBSan
         run: |
           # El runtime compartido vive en el directorio de clang, que no esta en
@@ -629,6 +629,63 @@ jobs:
   # Es deterministico -- reproduce un corpus fijo-- asi que correrlo por PR es
   # estrictamente mejor que por cron. El nocturno se queda con los jobs de
   # BUSQUEDA, que son los que de verdad necesitan tiempo de reloj.
+  # #101: UBSan en arm64, que es lo que nunca se habia corrido.
+  #
+  # Las tres excepciones de known_ub.txt decian "hoy no rompe ninguna plataforma
+  # soportada" y su condicion de salida era "cuando macOS arm64 entre al matrix".
+  # arm64 entro en ed2441d3 -- y nadie volvio a mirar--, pero ademas la frase
+  # estaba medida SOLO en x86-64: los tres jobs que corren sanitizers son
+  # ubuntu-latest. Justo la plataforma donde un acceso desalineado no molesta.
+  #
+  # Este job es el que hace verdadera la frase. Corre el mismo run_sanitizers.sh
+  # que la version de Linux, con el mismo golden unico (#45), contra el core de
+  # arm64.
+  #
+  # UBSan y no ASan, por lo mismo que el job de Linux: el core es una biblioteca
+  # compartida y el runtime de ASan se espera en el ejecutable que la carga.
+  # UBSan se linkea adentro con -shared-libsan y alcanza de sobra para lo que se
+  # quiere medir aca, que es alineacion.
+  macos-sanitize:
+    name: Full core under UBSan (macOS arm64)
+    runs-on: macos-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Build the core with UBSan
+        run: >-
+          make -B -f Makefile.libretro platform=osx
+          SOUND_PROBE=1
+          CC="clang -fsanitize=undefined -shared-libsan -fno-omit-frame-pointer -g"
+          -j3
+
+      # El harness tambien, por la misma razon que en Linux: es quien hace
+      # dlopen del core, asi el runtime ya esta cargado cuando entra la libreria.
+      - name: Build the replay harness with UBSan
+        run: >-
+          make -C tests full-core-replay CC=clang
+          CFLAGS="-O1 -g -Wall -Wextra -fsanitize=undefined -shared-libsan -fno-omit-frame-pointer"
+          LDFLAGS="-fsanitize=undefined -shared-libsan"
+
+      - name: Run the full-core replay under UBSan
+        run: |
+          set -euo pipefail
+          # En Darwin el loader usa DYLD_LIBRARY_PATH, no LD_LIBRARY_PATH, y el
+          # runtime compartido vive en el directorio de clang.
+          export DYLD_LIBRARY_PATH="$(clang -print-runtime-dir):${DYLD_LIBRARY_PATH:-}"
+          bash tests/ci/run_sanitizers.sh "$(pwd)/genesis_plus_gx_libretro.dylib"
+
+      - name: Upload sanitizer diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ayther-macos-sanitize
+          path: tests/artifacts/
+          if-no-files-found: ignore
+          retention-days: 14
+
   fuzz-regressions:
     name: Fuzz corpus and regressions under ASan
     runs-on: ubuntu-latest

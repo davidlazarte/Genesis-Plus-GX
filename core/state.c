@@ -238,6 +238,20 @@ int state_load(unsigned char *state)
     bufferptr += gamepad_context_load(&state[bufferptr]);
   }
 
+  /* AYTHER: estado del bus de la EEPROM I2C — en estados 1.7.8+ solamente.
+     Va al final y despues del gamepad: el orden es el de las versiones que
+     los agregaron, y asi un estado viejo se lee entero sin contar bytes.
+
+     Solo si el cartucho la tiene. Escribirlo siempre gastaria diez bytes en
+     cada savestate de cada juego que no la usa, y sobre todo haria que el
+     tamano del bloque dependiera de algo que no esta en el propio bloque.
+     `sram.type` ya lo decidio md_cart_init, que corre antes que esto. (#76) */
+  if ((version[15] >= 0x38) && ((system_hw & SYSTEM_PBC) == SYSTEM_MD) &&
+      (sram.type == EEPROM_I2C))
+  {
+    bufferptr += eeprom_i2c_context_load(&state[bufferptr]);
+  }
+
 #ifdef SOUND_PROBE
   /* tell the probe consumer to resync after a state load */
   audio_probe_signal(AP_EV_STATE_LOAD);
@@ -346,6 +360,13 @@ int state_save(unsigned char *state)
 
   /* AYTHER: input hardware latch state (see gamepad.c) */
   bufferptr += gamepad_context_save(&state[bufferptr]);
+
+  /* AYTHER: estado del bus de la EEPROM I2C. Mismo orden y misma condicion
+     que en la carga. (#76) */
+  if (((system_hw & SYSTEM_PBC) == SYSTEM_MD) && (sram.type == EEPROM_I2C))
+  {
+    bufferptr += eeprom_i2c_context_save(&state[bufferptr]);
+  }
 
   /* return total size */
   return bufferptr;

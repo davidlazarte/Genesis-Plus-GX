@@ -329,6 +329,15 @@ jobs:
           CC=clang
           CORE=../genesis_plus_gx_libretro.so
 
+      # #76: el savestate tiene que estar COMPLETO. Guardar, correr, recargar,
+      # correr lo mismo y comparar; sin golden, el oraculo es la corrida de al
+      # lado. Sobre Mega Drive, Master System, SMS con FM Nuked y Game Gear.
+      - name: Savestate roundtrip is complete on every system
+        run: >-
+          make -C tests check-state-roundtrip
+          CC=clang
+          CORE=../genesis_plus_gx_libretro.so
+
       # #30: dos lecturas del mismo frame tienen que dar lo mismo.
       - name: Frame delta survives a second reader
         run: >-
@@ -684,6 +693,17 @@ jobs:
           CC=clang
           CORE=../genesis_plus_gx_libretro.dll
 
+      # #76: el savestate tiene que estar COMPLETO. Guardar, correr, recargar,
+      # correr lo mismo y comparar; sin golden, el oraculo es la corrida de al
+      # lado. Sobre Mega Drive, Master System, SMS con FM Nuked y Game Gear.
+      - name: Savestate roundtrip is complete on every system
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        shell: pwsh
+        run: >-
+          make -C tests check-state-roundtrip
+          CC=clang
+          CORE=../genesis_plus_gx_libretro.dll
+
       - name: Frame delta survives a second reader
         if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
         shell: pwsh
@@ -854,6 +874,15 @@ jobs:
         if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
         run: >-
           make -C tests check-state-cross-process
+          CORE=../genesis_plus_gx_libretro.dylib
+
+      # #76: el savestate tiene que estar COMPLETO. Guardar, correr, recargar,
+      # correr lo mismo y comparar; sin golden, el oraculo es la corrida de al
+      # lado. Sobre Mega Drive, Master System, SMS con FM Nuked y Game Gear.
+      - name: Savestate roundtrip is complete on every system
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -C tests check-state-roundtrip
           CORE=../genesis_plus_gx_libretro.dylib
 
       - name: Frame delta survives a second reader

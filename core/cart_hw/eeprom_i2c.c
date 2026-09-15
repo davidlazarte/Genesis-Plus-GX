@@ -241,6 +241,83 @@ void eeprom_i2c_init(void)
 
 
 /********************************************************************/
+/* I2C EEPROM state (savestate)                                     */
+/********************************************************************/
+
+/* El bus I2C lleva estado ENTRE frames -- una transaccion puede estar a mitad
+   de un byte cuando termina el frame-- y no viajaba en el savestate. Guardar
+   en ese momento y volver a cargar dejaba la transaccion colgada: es el
+   cuelgue de libretro/Genesis-Plus-GX#404 al guardar en la posada de Wonder
+   Boy in Monster World. (#76)
+
+   Va campo por campo y no con un volcado del struct, por dos razones. La
+   primera es que el struct tiene, mezclados con el estado, cosas que son
+   CONFIGURACION de este proceso: `spec` sale de la base de datos o de la
+   cabecera del ROM, y los tres `*_bit` los fija el mapper. Dejar que un blob
+   los pise seria el mismo error que serializar un puntero. La segunda es que
+   asi el bloque no depende del layout del compilador.
+
+   Lo que se guarda es el bus y nada mas: las dos lineas y sus valores
+   previos (el estado se decide por FLANCO, asi que sin los previos la
+   primera transicion despues de cargar se lee mal), el contador de pulsos,
+   el tipo de operacion, las direcciones y el byte a medio armar. */
+int eeprom_i2c_context_save(uint8 *state)
+{
+  int bufferptr = 0;
+  uint8 op_state = (uint8)eeprom_i2c.state;
+
+  save_param(&eeprom_i2c.sda, sizeof(eeprom_i2c.sda));
+  save_param(&eeprom_i2c.scl, sizeof(eeprom_i2c.scl));
+  save_param(&eeprom_i2c.old_sda, sizeof(eeprom_i2c.old_sda));
+  save_param(&eeprom_i2c.old_scl, sizeof(eeprom_i2c.old_scl));
+  save_param(&eeprom_i2c.cycles, sizeof(eeprom_i2c.cycles));
+  save_param(&eeprom_i2c.rw, sizeof(eeprom_i2c.rw));
+  save_param(&eeprom_i2c.device_address, sizeof(eeprom_i2c.device_address));
+  save_param(&eeprom_i2c.word_address, sizeof(eeprom_i2c.word_address));
+  save_param(&eeprom_i2c.buffer, sizeof(eeprom_i2c.buffer));
+  save_param(&op_state, sizeof(op_state));
+
+  return bufferptr;
+}
+
+int eeprom_i2c_context_load(uint8 *state)
+{
+  int bufferptr = 0;
+  uint8 op_state = 0;
+
+  load_param(&eeprom_i2c.sda, sizeof(eeprom_i2c.sda));
+  load_param(&eeprom_i2c.scl, sizeof(eeprom_i2c.scl));
+  load_param(&eeprom_i2c.old_sda, sizeof(eeprom_i2c.old_sda));
+  load_param(&eeprom_i2c.old_scl, sizeof(eeprom_i2c.old_scl));
+  load_param(&eeprom_i2c.cycles, sizeof(eeprom_i2c.cycles));
+  load_param(&eeprom_i2c.rw, sizeof(eeprom_i2c.rw));
+  load_param(&eeprom_i2c.device_address, sizeof(eeprom_i2c.device_address));
+  load_param(&eeprom_i2c.word_address, sizeof(eeprom_i2c.word_address));
+  load_param(&eeprom_i2c.buffer, sizeof(eeprom_i2c.buffer));
+  load_param(&op_state, sizeof(op_state));
+
+  /* Un blob podrido no puede dejar la maquina en un estado que no existe: el
+     switch de eeprom_i2c_update no tiene default y un valor de mas caeria
+     afuera de todos los case, con el bus congelado y sin que nadie lo diga.
+     Es la misma familia de #62 y #82: acotar con la regla de quien escribe. */
+  eeprom_i2c.state = (op_state <= (uint8)READ_DATA)
+                       ? (T_I2C_STATE)op_state : STAND_BY;
+
+  /* Las lineas son de un bit; el contador llega hasta 9; las direcciones las
+     acota la spec de ESTE proceso, no la del blob. */
+  eeprom_i2c.sda &= 1;
+  eeprom_i2c.scl &= 1;
+  eeprom_i2c.old_sda &= 1;
+  eeprom_i2c.old_scl &= 1;
+  eeprom_i2c.rw &= 1;
+  if (eeprom_i2c.cycles > 9) eeprom_i2c.cycles = 0;
+  eeprom_i2c.word_address &= eeprom_i2c.spec.size_mask;
+
+  return bufferptr;
+}
+
+
+/********************************************************************/
 /* I2C EEPROM internal                                   			*/
 /********************************************************************/
 

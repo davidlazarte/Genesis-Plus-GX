@@ -18,6 +18,15 @@ size_t ayther_build_generated_rom(uint8_t *rom, size_t capacity);
  * las dos plataformas sin necesidad. */
 size_t ayther_build_generated_rom_fm(uint8_t *rom, size_t capacity);
 
+/* #76: cartucho de Mega Drive con EEPROM I2C serie, declarada por CABECERA
+   (0x1b0 = "RA", 0x1b2 = 0xe8) para no depender de la base de CRCs del core.
+   El reset abre una lectura y el handler vertical le da dos pulsos de reloj por
+   frame, con lo cual SIEMPRE hay una transaccion a medias en el borde de un
+   frame: es la condicion de libretro/Genesis-Plus-GX#404. El byte leido va a la
+   tabla de scroll horizontal, asi que perder el estado del bus se ve en el
+   frame. */
+size_t ayther_build_generated_rom_eeprom(uint8_t *rom, size_t capacity);
+
 /* Variante para el bit de sprite exacto (#31/#41). Fondo uniforme, un sprite
  * INDISTINGUIBLE del fondo por su byte (mismo pattern, misma paleta, misma
  * prioridad) y un sprite OPERADOR de shadow/highlight. Son los dos casos que

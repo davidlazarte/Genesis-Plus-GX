@@ -603,6 +603,124 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  # #99: `check-fuzz` -- el corpus y las regresiones, reproducidos-- tiene que
+  # correr en CADA PR, y contra un core INSTRUMENTADO.
+  #
+  # Las dos mitades de esa frase costaron una medicion cada una.
+  #
+  # Que no corria: hasta #99 este workflow no lo nombraba ni una vez. El unico
+  # lugar donde corria era el job `regressions` del nocturno, asi que un caso
+  # agregado a `tests/fuzz/regressions/` -- que es el mecanismo que existe para
+  # que un bug encontrado por fuzzing no vuelva-- no bloqueaba el merge que lo
+  # reintroducia: lo agarraba el cron hasta 24 h despues, sobre master y sin PR
+  # al cual atribuirlo. Y el nocturno afirmaba en dos lugares que si corria.
+  #
+  # Que sin sanitizers no sirve: se midio sacando a mano `SLOT->ksr &= 31;` de
+  # core/sound/ym2612.c, el arreglo que cubre la regresion
+  # `unserialize/ksr-corrupto-indexa-eg-rate-shift-83`.
+  #
+  #     core normal  con el clamp: exit 0   sin el clamp: exit 0   <- no muerde
+  #     core ASan    con el clamp: exit 0   sin el clamp: exit 2
+  #
+  # Sin instrumentar, el indice podrido lee fuera de `eg_rate_shift[]` y cae en
+  # memoria que esta al lado: el replay pasa como si nada. Es el mismo modo de
+  # falla del hallazgo de #63, que caia en `dma_timing`.
+  #
+  # Es deterministico -- reproduce un corpus fijo-- asi que correrlo por PR es
+  # estrictamente mejor que por cron. El nocturno se queda con los jobs de
+  # BUSQUEDA, que son los que de verdad necesitan tiempo de reloj.
+  fuzz-regressions:
+    name: Fuzz corpus and regressions under ASan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Build the core with sanitizers
+        env:
+          CC: clang
+        run: >-
+          make -B -f Makefile.libretro platform=unix
+          AYTHER_EXTENSIONS=1 SOUND_PROBE=1
+          CC="clang -fsanitize=address,undefined -shared-libsan -fno-omit-frame-pointer -g"
+          -j2
+
+      # Los harnesses van con el MISMO runtime dinamico que el core (#61): con
+      # el estatico conviven dos runtimes de ASan en el proceso y muere antes
+      # del primer caso. `verify_asan_link_order=0` es la alternativa al
+      # LD_PRELOAD del Makefile de fuzz: el runtime ya esta linkeado en el
+      # ejecutable, solo hay que decirle a ASan que no exija ser el primero.
+      - name: Replay the fuzz corpus and regressions under ASan
+        env:
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=0:report_error_type=1
+          ASAN_OPTIONS: verify_asan_link_order=0
+          REPLAY_SAN: -fsanitize=address,undefined -shared-libsan -fno-omit-frame-pointer
+        run: |
+          set -euo pipefail
+          export LD_LIBRARY_PATH="$(clang -print-runtime-dir):${LD_LIBRARY_PATH:-}"
+          make -C tests check-fuzz CC=clang CORE=../genesis_plus_gx_libretro.so \
+            2>&1 | tee fuzz-replay.log
+
+      # El gate no puede encogerse en silencio. `check-fuzz` sale de un fan-out
+      # sobre TARGETS y SCENES_unserialize (tests/fuzz/Makefile): si alguien
+      # saca un target o una escena, la CI se pondria MAS VERDE y nadie se
+      # enteraria, porque lo que quedo sigue pasando. Por eso la lista esperada
+      # se afirma POR NOMBRE aca y no se deduce de la corrida.
+      #
+      # Agregar un target es legitimo y hace fallar este paso una vez: se suma
+      # a la lista en el mismo PR, que es el mismo trato que reciben los
+      # goldens y la linea base de puntos de contacto.
+      - name: Every fuzz target and unserialize scene was replayed
+        run: |
+          set -euo pipefail
+          esperados=$(printf '%s\n' \
+            'audio_ring [escena md]' \
+            'generated_rom [escena md]' \
+            'recompose [escena md]' \
+            'unserialize [escena md-nuked]' \
+            'unserialize [escena md]' \
+            'unserialize [escena sms-fm]' \
+            'write_control [escena md]' | sort)
+          corridos=$(sed -n 's/^== \(.*\) ==$/\1/p' fuzz-replay.log | sort -u)
+          if [ "$esperados" != "$corridos" ]; then
+            echo "La cobertura de check-fuzz cambio." >&2
+            echo "--- esperados ---" >&2; echo "$esperados" >&2
+            echo "--- corridos  ---" >&2; echo "$corridos" >&2
+            echo >&2
+            echo "Si agregaste un target o una escena, sumalo a la lista de este paso" >&2
+            echo "en el mismo PR. Si desaparecio uno, el gate se achico: deci por que." >&2
+            exit 1
+          fi
+          echo "check-fuzz: 5 targets, 3 escenas de unserialize, 7 invocaciones"
+
+      # Viajo junto con check-fuzz desde el nocturno, y por el mismo motivo:
+      # check-z80-vdp-fifo SI corria en cada PR, pero contra un core sin
+      # instrumentar, donde el bucle de slots del FIFO se salia de la tabla y
+      # caia en `dma_timing`, que esta al lado, sin que el core se inmutara.
+      # Ese es el hallazgo de #63. Aca corre contra el mismo core con ASan.
+      - name: Z80/VDP fixture under ASan
+        env:
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=0:report_error_type=1
+          ASAN_OPTIONS: verify_asan_link_order=0
+        run: |
+          set -euo pipefail
+          export LD_LIBRARY_PATH="$(clang -print-runtime-dir):${LD_LIBRARY_PATH:-}"
+          make -C tests check-z80-vdp-fifo CC=clang \
+            CFLAGS="-O1 -g -Wall -Wextra -fsanitize=address,undefined -shared-libsan -fno-omit-frame-pointer" \
+            LDFLAGS="-fsanitize=address,undefined -shared-libsan" \
+            CORE=../genesis_plus_gx_libretro.so
+
+      - name: Upload the replay log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ayther-fuzz-regressions
+          path: fuzz-replay.log
+          if-no-files-found: ignore
+          retention-days: 14
+
   thread-sanitizer:
     name: ThreadSanitizer SPSC stress
     runs-on: ubuntu-latest

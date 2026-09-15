@@ -35,6 +35,35 @@ size_t ayther_build_generated_rom_eeprom(uint8_t *rom, size_t capacity);
  * encontraba igual y el arreglo no se distinguiria de lo que ya habia. */
 size_t ayther_build_generated_rom_sh(uint8_t *rom, size_t capacity);
 
+/* #74: Mode 4 leido por el 68000, que es un camino que ningun otro fixture
+   recorre. check-mode4 y check-mode4-raster manejan Mode 4 desde codigo Z80 en
+   un cartucho de Master System; el VDP de Mega Drive tambien entra en Mode 4
+   -- apagando el bit M5 del registro 1-- y ahi las lecturas del puerto de datos
+   pasan por vdp_68k_data_r_m4, que no tenia con que probarse.
+
+   El ROM escribe dos palabras distintas en dos direcciones de VRAM que la
+   formula rota confunde entre si, lee la primera y deja lo leido en dos lugares
+   observables: la palabra de work RAM en AYTHER_M4_RESULT (RETRO_MEMORY_SYSTEM_
+   RAM) y la entrada 0 de CRAM, que con la name table en ceros pinta el frame
+   entero. Verde = leyo lo suyo; rojo = leyo el alias.
+
+   Las direcciones no son cualquiera: la formula entrelazada mapea ADDR_READ
+   exactamente sobre ADDR_ALIAS.
+
+     entrelazada(0x2002) = ((0x2002 << 1) & 0x3FC)
+                         | ((0x2002 & 0x200) >> 8)
+                         | (0x2002 & 0x3C00)       = 0x2004
+     plana(0x2002)       = 0x2002 & 0x3FFE         = 0x2002
+
+   Estan lejos del tile 0 a proposito: el fondo entero dibuja ese tile, asi que
+   el patron de prueba no tiene que ensuciarlo. */
+#define AYTHER_M4_ADDR_READ    0x2002u
+#define AYTHER_M4_ADDR_ALIAS   0x2004u
+#define AYTHER_M4_VALUE_GOOD   0x00e0u  /* verde en CRAM de Mode 5 */
+#define AYTHER_M4_VALUE_ALIAS  0x000eu  /* rojo                    */
+#define AYTHER_M4_RESULT       0x0010u  /* offset dentro de work_ram */
+size_t ayther_build_generated_rom_mode4_68k(uint8_t *rom, size_t capacity);
+
 /* #39.C: 24 sprites en la misma linea -- cuatro mas que los 20 que el VDP
    dibuja en H40-- y uno en x=0 en el slot 12. */
 #define AYTHER_SPR_FIXTURE_COUNT     24u

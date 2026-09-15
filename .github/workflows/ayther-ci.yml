@@ -436,6 +436,16 @@ jobs:
           make -C tests check-mode4-raster
           CORE=../genesis_plus_gx_libretro.so
 
+      # #74: Mode 4 leido por el 68000. Los dos pasos de arriba entran a
+      # Mode 4 con codigo Z80 en un cartucho de Master System; el VDP de
+      # Mega Drive tambien entra en Mode 4 y esa funcion no la recorria
+      # ningun fixture, asi que el arreglo de upstream (29ba0a88) habria
+      # entrado sin que nada lo notara.
+      - name: Mode 4 VRAM reads from the 68k
+        run: >-
+          make -C tests check-mode4-68k-vram
+          CORE=../genesis_plus_gx_libretro.so
+
       - name: Per-scanline state matches the ROM's own scroll table
         run: >-
           make -C tests check-line-state
@@ -758,6 +768,19 @@ jobs:
           CC=clang
           CORE=../genesis_plus_gx_libretro.dll
 
+      # #74: Mode 4 leido por el 68000. Los dos pasos de arriba entran a
+      # Mode 4 con codigo Z80 en un cartucho de Master System; el VDP de
+      # Mega Drive tambien entra en Mode 4 y esa funcion no la recorria
+      # ningun fixture, asi que el arreglo de upstream (29ba0a88) habria
+      # entrado sin que nada lo notara.
+      - name: Mode 4 VRAM reads from the 68k
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        shell: pwsh
+        run: >-
+          make -C tests check-mode4-68k-vram
+          CC=clang
+          CORE=../genesis_plus_gx_libretro.dll
+
       - name: Compare extensions-off and compiled-idle profiles
         continue-on-error: true
         if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
@@ -945,6 +968,17 @@ jobs:
         if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
         run: >-
           make -C tests check-mode4-raster
+          CORE=../genesis_plus_gx_libretro.dylib
+
+      # #74: Mode 4 leido por el 68000. Los dos pasos de arriba entran a
+      # Mode 4 con codigo Z80 en un cartucho de Master System; el VDP de
+      # Mega Drive tambien entra en Mode 4 y esa funcion no la recorria
+      # ningun fixture, asi que el arreglo de upstream (29ba0a88) habria
+      # entrado sin que nada lo notara.
+      - name: Mode 4 VRAM reads from the 68k
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -C tests check-mode4-68k-vram
           CORE=../genesis_plus_gx_libretro.dylib
 
       - name: Journal, frame hashes and resolved palette

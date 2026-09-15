@@ -34,6 +34,7 @@ core/input_hw/gamepad.h	(sin funcion)	extern int gamepad_context_save(unsigned c
 core/loadrom.c	void getrominfo(char *romheader)	rominfo.crc32 = crc32(0, cart.rom, cart.romsize);
 core/loadrom.h	typedef struct	unsigned int crc32; /* ROM Checksum (crc32) */
 core/shared.h	(sin funcion)	#include "audio_probe.h"
+core/shared.h	(sin funcion)	#include "eeprom_i2c.h"
 core/sound/blip_buf.c	void blip_load_buffer_state(blip_t *buf, const blip_buffer_state_t *state)	size_t blip_buffer_state_size( void )
 core/sound/blip_buf.h	typedef struct blip_t blip_t;	#include <stddef.h>
 core/sound/blip_buf.h	void blip_delete_buffer_state(blip_buffer_state_t *state);	size_t blip_buffer_state_size( void );

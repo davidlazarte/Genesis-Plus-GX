@@ -58,8 +58,10 @@ core/sound/psg.c	void psg_write(unsigned int clocks, unsigned int data)	audio_pr
 core/sound/psg.c	void psg_write(unsigned int clocks, unsigned int data)	if ((psg.noiseShiftValue & 1) && !AYTHER_PSG_MUTED(3))
 core/sound/psg.c	void psg_write(unsigned int clocks, unsigned int data)	if ((psg.polarity[i] > 0) && !AYTHER_PSG_MUTED(i))
 core/sound/psg.h	extern void psg_end_frame(unsigned int clocks);	extern void PSG_GetVoice(int ch, ap_voice_t *out);
+core/sound/sound.c	int sound_context_load(uint8 *state)	const opll_patch_t *patchrom = opll.patchrom;
 core/sound/sound.c	int sound_context_load(uint8 *state)	opll_cycles = (int)((unsigned int)opll_cycles % 18u);
 core/sound/sound.c	int sound_context_load(uint8 *state)	ym3438_cycles = (int)((unsigned int)ym3438_cycles % 24u);
+core/sound/sound.c	int sound_context_save(uint8 *state)	opll_t opll_state = opll;
 core/sound/sound.c	int sound_update(unsigned int cycles)	audio_probe_frame(cycles);
 core/sound/sound.c	int8 audio_hard_disable = 0;	uint32 ayther_audio_mute = 0;
 core/sound/sound.c	static int ym3438_cycles;	static int ayther_fm_addr_latch;

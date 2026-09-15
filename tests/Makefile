@@ -35,6 +35,7 @@ STATE_GUARD_BIN := $(BUILD_DIR)/state_guard$(EXE_EXT)
 STATE_LAYOUT_BIN := $(BUILD_DIR)/state_layout$(EXE_EXT)
 AUDIO_CTRL_BIN := $(BUILD_DIR)/audio_controls$(EXE_EXT)
 STATE_XPROC_BIN := $(BUILD_DIR)/state_cross_process$(EXE_EXT)
+STATE_RT_BIN := $(BUILD_DIR)/state_roundtrip$(EXE_EXT)
 FRAME_DELTA_BIN := $(BUILD_DIR)/frame_delta$(EXE_EXT)
 SYSTEM_TRANSITION_BIN := $(BUILD_DIR)/system_transition$(EXE_EXT)
 Z80_VDP_BIN := $(BUILD_DIR)/z80_vdp_fifo$(EXE_EXT)
@@ -80,7 +81,7 @@ PROFILE_COMPARISON := $(ARTIFACT_DIR)/feature_gate_profiles.json
 	check-full-core check-profile-comparison raster-rom-probe \
 	full-core-replay check-idle-metrics check-attribution-scene check-plane-suppress check-multilayer \
 	check-observability check-abi-dynamic check-fuzz check-fuzz-ring validate-roms check-mode4 \
-	check-sprite-outcome check-state-cross-process \
+	check-sprite-outcome check-state-cross-process check-state-roundtrip \
 	regen-multilayer check-scenes regen-scenes regen-full-core check-line-state clean
 
 all: $(UNIT_BIN) $(CONCURRENCY_BIN) $(API_BIN) $(RASTER_BIN) \
@@ -203,6 +204,21 @@ $(STATE_XPROC_BIN): ayther/state_cross_process.c ayther/generated_rom.c \
 check-state-cross-process: $(STATE_XPROC_BIN) | $(BUILD_DIR)
 	$(call require_core)
 	$(STATE_XPROC_BIN) "$(CORE)" "$(BUILD_DIR)"
+
+$(STATE_RT_BIN): ayther/state_roundtrip.c ayther/generated_rom.c \
+		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther \
+		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include \
+		-Iayther -o $@ ayther/state_roundtrip.c ayther/generated_rom.c \
+		$(LDFLAGS) $(ROM_PROBE_LIBS)
+
+# #76: el savestate tiene que estar COMPLETO. Guardar, correr, recargar,
+# correr lo mismo y comparar: cualquier divergencia es un campo que no viaja en
+# el blob. Sin golden -- el oraculo es la corrida de al lado-, sobre Mega Drive,
+# Master System, Master System con FM Nuked y Game Gear.
+check-state-roundtrip: $(STATE_RT_BIN)
+	$(call require_core)
+	$(STATE_RT_BIN) "$(CORE)"
 
 $(FRAME_DELTA_BIN): ayther/frame_delta.c ayther/generated_rom.c \
 		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)

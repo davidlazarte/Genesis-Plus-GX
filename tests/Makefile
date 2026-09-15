@@ -81,7 +81,7 @@ PROFILE_COMPARISON := $(ARTIFACT_DIR)/feature_gate_profiles.json
 	full-core-replay check-idle-metrics check-attribution-scene check-plane-suppress check-multilayer \
 	check-observability check-abi-dynamic check-fuzz check-fuzz-ring validate-roms check-mode4 \
 	check-sprite-outcome check-state-cross-process \
-	regen-multilayer check-scenes regen-scenes check-line-state clean
+	regen-multilayer check-scenes regen-scenes regen-full-core check-line-state clean
 
 all: $(UNIT_BIN) $(CONCURRENCY_BIN) $(API_BIN) $(RASTER_BIN) \
 	$(SPRITE_CAPTURE_BIN) $(DIM_BIN) $(TRACE_BIN)
@@ -387,6 +387,22 @@ check-full-core: $(FULL_CORE_BIN) | $(ARTIFACT_DIR)
 	$(call require_core)
 	$(FULL_CORE_BIN) "$(CORE)" $(FULL_CORE_GOLDEN) $(FULL_CORE_ACTUAL) \
 		$(FULL_CORE_REPORT) $(FULL_CORE_BENCHMARK)
+
+# El golden del full-core se regenera con un comando, como el de scenes y el
+# de multilayer. Antes era el unico que habia que copiar a mano, y un golden
+# que se actualiza a mano es un golden que alguien va a actualizar sin mirar
+# que cambio. El binario escribe el ACTUAL aunque no coincida -- por eso el
+# `-`-, y recien despues se copia encima.
+#
+# Regenerar NO es la respuesta por defecto a un rojo: un hash que se mueve es
+# una pregunta. La regla de la casa es justificar que cambio y por que, por
+# subsistema, en el mismo PR.
+regen-full-core: $(FULL_CORE_BIN) | $(ARTIFACT_DIR)
+	$(call require_core)
+	-$(FULL_CORE_BIN) "$(CORE)" $(FULL_CORE_GOLDEN) $(FULL_CORE_ACTUAL) \
+		$(FULL_CORE_REPORT) $(FULL_CORE_BENCHMARK)
+	$(call copy_file,$(FULL_CORE_ACTUAL),$(FULL_CORE_GOLDEN))
+	@echo "golden regenerado: $(FULL_CORE_GOLDEN)"
 
 check-profile-comparison: $(FULL_CORE_BIN) | $(ARTIFACT_DIR)
 	$(call require_profile_cores)

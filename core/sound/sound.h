@@ -55,6 +55,10 @@ extern void (*fm_reset)(unsigned int cycles);
 extern void (*fm_write)(unsigned int cycles, unsigned int address, unsigned int data);
 extern unsigned int (*fm_read)(unsigned int cycles, unsigned int address);
 extern void save_sound_buffer();
+extern void sound_get_fm_last(int out[2]);
+extern void sound_set_fm_last(const int in[2]);
+extern void sound_get_cd_last(int16 out[2]);
+extern void sound_set_cd_last(const int16 in[2]);
 extern void restore_sound_buffer();
 
 /* ----------------------------------------------------------------------------

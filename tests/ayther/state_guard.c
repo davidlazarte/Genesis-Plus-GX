@@ -16,6 +16,7 @@
  *   1. estado propio            -> se acepta
  *   2. layout de otra arch      -> se RECHAZA (antes: corrupcion silenciosa)
  *   3. estado viejo sin tag     -> se acepta (compatibilidad hacia atras)
+ *   4. estado sin bloque de audio -> se acepta, sin continuidad (#93)
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -152,6 +153,16 @@ int main(int argc, char **argv)
   /* 3. sin tag: estados viejos deben seguir cargando */
   memset(tag,0,16);
   printf("3. estado viejo sin tag          -> %s\n",
+         p_unserialize(buf,n) ? "ACEPTADO (correcto, compat)" : (fail=1,"RECHAZADO (MAL)"));
+
+  /* 4. #93: la continuidad del audio vive en un bloque propio, con su magic,
+        en un offset fijo antes del tag. Un estado viejo no lo tiene; borrarlo
+        es exactamente como se ve uno de esos, y tiene que cargar igual --sin
+        continuidad, como siempre-- o el bloque nuevo rompe los savestates que
+        ya existen. Las constantes son las de libretro.c; el tag de arriba ya
+        se ubica igual, por posicion desde el final. */
+  memset(buf + n - 16 - 1024, 0, 1024);
+  printf("4. estado sin bloque de audio    -> %s\n",
          p_unserialize(buf,n) ? "ACEPTADO (correcto, compat)" : (fail=1,"RECHAZADO (MAL)"));
 
   printf("\n%s\n", fail ? "FALLO" : "TODO OK");

@@ -114,6 +114,8 @@ extern void audio_reset(void);
 extern void audio_shutdown(void);
 extern int audio_update(int16 *buffer);
 extern void audio_set_equalizer(void);
+extern int audio_context_save(uint8 *state);
+extern int audio_context_load(uint8 *state);
 extern void system_init(void);
 extern void system_reset(void);
 extern void system_frame_gen(int do_skip);

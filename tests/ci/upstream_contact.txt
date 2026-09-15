@@ -32,6 +32,9 @@ core/input_hw/gamepad.h	(sin funcion)	extern int gamepad_context_save(unsigned c
 core/loadrom.c	void getrominfo(char *romheader)	rominfo.crc32 = crc32(0, cart.rom, cart.romsize);
 core/loadrom.h	typedef struct	unsigned int crc32; /* ROM Checksum (crc32) */
 core/shared.h	(sin funcion)	#include "audio_probe.h"
+core/sound/blip_buf.c	void blip_load_buffer_state(blip_t *buf, const blip_buffer_state_t *state)	size_t blip_buffer_state_size( void )
+core/sound/blip_buf.h	typedef struct blip_t blip_t;	#include <stddef.h>
+core/sound/blip_buf.h	void blip_delete_buffer_state(blip_buffer_state_t *state);	size_t blip_buffer_state_size( void );
 core/sound/psg.c	(sin funcion)	#include "ayther/ayther_dual_path.h"
 core/sound/psg.c	int psg_context_load(uint8 *state)	(comentario)
 core/sound/psg.c	int psg_context_load(uint8 *state)	for (i=0; i<4; i++) psg_ayther_muted[i] = 0;
@@ -60,6 +63,7 @@ core/sound/psg.c	void psg_write(unsigned int clocks, unsigned int data)	if ((psg
 core/sound/psg.h	extern void psg_end_frame(unsigned int clocks);	extern void PSG_GetVoice(int ch, ap_voice_t *out);
 core/sound/sound.c	int sound_context_load(uint8 *state)	const opll_patch_t *patchrom = opll.patchrom;
 core/sound/sound.c	int sound_context_load(uint8 *state)	opll_cycles = (int)((unsigned int)opll_cycles % 18u);
+core/sound/sound.c	int sound_context_load(uint8 *state)	void sound_get_fm_last(int out[2])
 core/sound/sound.c	int sound_context_load(uint8 *state)	ym3438_cycles = (int)((unsigned int)ym3438_cycles % 24u);
 core/sound/sound.c	int sound_context_save(uint8 *state)	opll_t opll_state = opll;
 core/sound/sound.c	int sound_update(unsigned int cycles)	audio_probe_frame(cycles);
@@ -73,6 +77,7 @@ core/sound/sound.c	static void YM3438_Write(unsigned int cycles, unsigned int a,
 core/sound/sound.c	void sound_reset(void)	audio_probe_reset();
 core/sound/sound.h	(sin funcion)	#include "../ayther/ayther_api.h"
 core/sound/sound.h	extern void restore_sound_buffer();	#define AYTHER_AUDIO_CHIP_FM 0 /* YM2612 (FM) */
+core/sound/sound.h	extern void save_sound_buffer();	extern void sound_get_fm_last(int out[2]);
 core/sound/ym2612.c	(sin funcion)	#include "ayther/ayther_dual_path.h"
 core/sound/ym2612.c	INLINE void OPNWriteMode(int r, int v)	audio_probe_fm_key(c, v);
 core/sound/ym2612.c	int YM2612LoadContext(unsigned char *state)	for (c=0; c<6; c++)
@@ -96,9 +101,11 @@ core/state.c	int state_load(unsigned char *state)	if (version[15] >= 0x37)
 core/state.c	int state_save(unsigned char *state)	Z80_Regs z80_state = Z80;
 core/state.c	int state_save(unsigned char *state)	bufferptr += gamepad_context_save(&state[bufferptr]);
 core/state.h	(sin funcion)	#define STATE_VERSION "GENPLUS-GX 1.7.7"
+core/system.c	void audio_set_equalizer(void)	static void audio_context_eq(EQSTATE *e, double h[11], int store)
 core/system.c	void system_frame_gen(int do_skip)	vdp_ayther_begin_frame();
 core/system.c	void system_frame_scd(int do_skip)	vdp_ayther_begin_frame();
 core/system.c	void system_frame_sms(int do_skip)	vdp_ayther_begin_frame();
+core/system.h	extern void audio_set_equalizer(void);	extern int audio_context_save(uint8 *state);
 core/vdp_ctrl.c	int vdp_context_load(uint8 *state)	memset((char *)ayther_vram_dirty, 0xFF, sizeof(ayther_vram_dirty));
 core/vdp_ctrl.c	int vdp_context_load(uint8 *state)	vdp_ayther_begin_frame();
 core/vdp_ctrl.c	static const int fifo_timing_h40[] =	#define FIFO_TIMING_SLOTS_H32 ((int)(sizeof(fifo_timing_h32) / sizeof(fifo_timing_h32[0])))
@@ -289,7 +296,9 @@ libretro/libretro.c	(sin funcion)	#include <string.h>
 libretro/libretro.c	STATIC_ASSERT(z80_overflow,	STATIC_ASSERT(ayther_sprite_v1_size, sizeof(ayther_sprite_v1) == 10);
 libretro/libretro.c	bool retro_load_game(const struct retro_game_info *info)	ayther_reset_session(true);
 libretro/libretro.c	bool retro_serialize(void *data, size_t size)	ayther_state_tag_write(data);
+libretro/libretro.c	bool retro_unserialize(const void *data, size_t size)	(comentario)
 libretro/libretro.c	bool retro_unserialize(const void *data, size_t size)	ayther_invalidate_snapshot();
+libretro/libretro.c	bool retro_unserialize(const void *data, size_t size)	else ayther_audio_continuity_read(data);
 libretro/libretro.c	bool retro_unserialize(const void *data, size_t size)	if (!ayther_state_tag_ok(data))
 libretro/libretro.c	error:	ayther_reset_session(false);
 libretro/libretro.c	extern void sound_update_fm_function_pointers(void);	void retro_run(void)

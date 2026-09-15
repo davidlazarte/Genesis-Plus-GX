@@ -188,6 +188,137 @@ void audio_set_equalizer(void)
   eq[0].hg = eq[1].hg = (double)(config.hg) / 100.0;
 }
 
+/* Continuidad del audio a traves de un savestate. (#93)
+
+   El problema. Un savestate restaura el ESTADO DE LOS CHIPS, pero la salida
+   de audio no sale de los chips directamente: pasa por un blip_buf, que
+   trabaja por DIFERENCIAS y lleva un integrador, y despues por un filtro que
+   arrastra su ultima muestra. Nada de eso esta en el blob, y state_load hace
+   system_reset() -> audio_reset(), que lo pone todo en cero. Resultado: el
+   estado carga bien y los frames siguientes NO suenan como si nunca se
+   hubiera guardado. Es el audio roto de libretro/Genesis-Plus-GX#290.
+
+   Ya existia la mitad de la solucion: con `fast_savestates` -- el modo que
+   pide runahead-, retro_serialize llama a save_sound_buffer() y
+   retro_unserialize a restore_sound_buffer(). Pero eso vive en la MEMORIA
+   del proceso, no en el savestate, asi que solo sirve dentro de una sesion.
+   Un savestate de archivo, o cargado en otro proceso, no tiene nada de esto.
+
+   Lo que se guarda es exactamente lo que se arrastra entre frames:
+
+     - el estado de cada blip activo (integrador, fase y la cola de deltas
+       que todavia no salio);
+     - fm_last, el ultimo par de muestras del FM, que es el `prev` del que
+       arrancan las diferencias del frame siguiente;
+     - cdd.audio, lo mismo para el CD;
+     - llp/rrp, la ultima muestra del filtro paso-bajos;
+     - la historia de los dos EQ de tres bandas.
+
+   De la EQSTATE va SOLO la historia (los polos y las tres muestras previas).
+   Las frecuencias y las ganancias son configuracion de ESTE proceso, las
+   pone audio_set_equalizer() desde config, y dejar que un blob las pise
+   seria el mismo error que serializar un puntero.
+
+   Que blips existen depende del sistema, asi que va una mascara por delante:
+   sin ella, cargar en un sistema con otra cantidad de streams leeria corrido.
+*/
+static void audio_context_eq(EQSTATE *e, double h[11], int store)
+{
+  double *f[11];
+  int i;
+  f[0] = &e->f1p0; f[1] = &e->f1p1; f[2] = &e->f1p2; f[3] = &e->f1p3;
+  f[4] = &e->f2p0; f[5] = &e->f2p1; f[6] = &e->f2p2; f[7] = &e->f2p3;
+  f[8] = &e->sdm1; f[9] = &e->sdm2; f[10] = &e->sdm3;
+  for (i = 0; i < 11; i++)
+  {
+    if (store) h[i] = *f[i];
+    else       *f[i] = h[i];
+  }
+}
+
+int audio_context_save(uint8 *state)
+{
+  int bufferptr = 0;
+  int i;
+  uint8 present = 0;
+  int fm[2];
+  int16 cd[2];
+  double h[2][11];
+  size_t bstate = blip_buffer_state_size();
+
+  for (i = 0; i < 4; i++)
+  {
+    if (!snd.blips[i]) continue;
+    if (!snd.blip_states[i]) snd.blip_states[i] = blip_new_buffer_state();
+    if (!snd.blip_states[i]) continue;
+    blip_save_buffer_state(snd.blips[i], snd.blip_states[i]);
+    present |= (uint8)(1u << i);
+  }
+
+  save_param(&present, sizeof(present));
+  for (i = 0; i < 4; i++)
+  {
+    if (present & (1u << i))
+    {
+      save_param(snd.blip_states[i], bstate);
+    }
+  }
+
+  sound_get_fm_last(fm);
+  save_param(fm, sizeof(fm));
+  sound_get_cd_last(cd);
+  save_param(cd, sizeof(cd));
+  save_param(&llp, sizeof(llp));
+  save_param(&rrp, sizeof(rrp));
+  audio_context_eq(&eq[0], h[0], 1);
+  audio_context_eq(&eq[1], h[1], 1);
+  save_param(h, sizeof(h));
+
+  return bufferptr;
+}
+
+int audio_context_load(uint8 *state)
+{
+  int bufferptr = 0;
+  int i;
+  uint8 present = 0;
+  int fm[2];
+  int16 cd[2];
+  double h[2][11];
+  size_t bstate = blip_buffer_state_size();
+
+  load_param(&present, sizeof(present));
+  for (i = 0; i < 4; i++)
+  {
+    if (!(present & (1u << i))) continue;
+    if (!snd.blip_states[i]) snd.blip_states[i] = blip_new_buffer_state();
+    if (snd.blip_states[i])
+    {
+      load_param(snd.blip_states[i], bstate);
+      /* El blip puede no existir de este lado -- otro sistema, otra config-:
+         los bytes se consumen igual para no leer corrido lo que sigue, y
+         solo se aplica si hay a donde. */
+      if (snd.blips[i]) blip_load_buffer_state(snd.blips[i], snd.blip_states[i]);
+    }
+    else
+    {
+      bufferptr += (int)bstate;
+    }
+  }
+
+  load_param(fm, sizeof(fm));
+  sound_set_fm_last(fm);
+  load_param(cd, sizeof(cd));
+  sound_set_cd_last(cd);
+  load_param(&llp, sizeof(llp));
+  load_param(&rrp, sizeof(rrp));
+  load_param(h, sizeof(h));
+  audio_context_eq(&eq[0], h[0], 0);
+  audio_context_eq(&eq[1], h[1], 0);
+
+  return bufferptr;
+}
+
 void audio_shutdown(void)
 {
   int i;

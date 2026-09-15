@@ -15,29 +15,18 @@
  * QUE AFIRMA, exactamente:
  *
  *   1. el core acepta su propio savestate en un proceso nuevo y no crashea;
- *   2. cargarlo en un proceso NUEVO da bit por bit lo mismo -- audio y video--
- *      que cargarlo en el MISMO proceso. Esa es la afirmacion que importa:
- *      aisla justo lo que depende del proceso, que es la clase de defecto de
- *      la que salio el crash de upstream (un puntero serializado, valido
- *      todavia en la sesion que lo guardo y muerto en la siguiente);
- *   3. el fixture suena. Dos silencios comparados dan "igual" sin probar nada,
+ *   2. continuar normalmente y restaurar el estado dan los MISMOS hashes de
+ *      audio y video. Es el criterio de fondo: un savestate que carga pero
+ *      cambia como suena lo que sigue no restauro el estado, restauro una
+ *      parte;
+ *   3. cargarlo en un proceso NUEVO da bit por bit lo mismo que cargarlo en el
+ *      MISMO proceso. Parece implicado por 2, y no lo esta: aisla lo que
+ *      depende del proceso -- un puntero serializado, una direccion movida por
+ *      el ASLR-- de lo que le falta al savestate. Cuando 2 falla, es la
+ *      comparacion que dice cual de las dos cosas paso;
+ *   4. el fixture suena. Dos silencios comparados dan "igual" sin probar nada,
  *      asi que se mide la energia de la corrida nativa y se exige que no sea
  *      cero.
- *
- * QUE NO AFIRMA, y por que. La continuacion CARGADA no coincide con la
- * continuacion NATIVA del mismo checkpoint -- se imprime la comparacion, pero
- * no falla por ella-, y NO es un problema de procesos: cargar el estado en el
- * mismo proceso da exactamente el mismo hash que cargarlo en otro. Es un hueco
- * aparte, de completitud del savestate en el camino de audio: `fm_last`, el
- * ultimo par de muestras del frame anterior, no se serializa y `sound_reset`
- * lo pone en cero, y como blip_add_delta trabaja por DIFERENCIAS, arrancar de
- * un `prev` equivocado corre toda la salida. Restaurarlo cambia el hash pero
- * todavia no lo iguala, asi que hay algo mas. Va por su propio issue: meterlo
- * aca obligaria a tocar el FORMATO del savestate, con version nueva y goldens
- * regenerados, que no es lo que este test vino a arreglar.
- *
- * Que este impreso y no asertado es deliberado: el numero queda a la vista de
- * quien lea la salida, en vez de desaparecer.
  *
  * UNA ADVERTENCIA SOBRE PLATAFORMAS. El defecto que destapo este test -- un
  * puntero a una tabla estatica del core, serializado y desreferenciado despues-
@@ -489,40 +478,39 @@ int main(int argc, char **argv)
       !read_hashes(same_path, same))
     return 1;
 
-  /* LA afirmacion: el proceso nuevo tiene que dar lo mismo que el mismo
-     proceso, audio y video. Cualquier cosa que dependa del proceso -- un
-     puntero serializado, una tabla construida en init, una direccion movida
-     por el ASLR-- rompe esto y nada mas lo agarra. */
-  ok_audio  = loaded[0] == same[0];
-  ok_video  = loaded[1] == same[1];
+  /* La afirmacion de fondo: restaurar tiene que dar lo mismo que seguir. */
+  ok_audio  = loaded[0] == native[0];
+  ok_video  = loaded[1] == native[1];
+  /* Y la que separa las causas cuando la de arriba falla. */
+  ok_same   = loaded[0] == same[0] && loaded[1] == same[1];
   /* Un fixture mudo haria pasar el test sin probar nada: dos silencios son
      iguales. La energia es la que afirma que habia FM que romper. */
   ok_energy = native[2] > 0 && native[3] > 0;
-  /* Informativo, no asertado: ver la cabecera. */
-  ok_same   = native[0] == same[0] && native[1] == same[1];
 
-  printf("  proceso nuevo vs mismo proceso:\n");
+  printf("  continuar normalmente vs restaurar el estado:\n");
   printf("    audio   %016llx vs %016llx  -> %s\n",
-         loaded[0], same[0], ok_audio ? "igual" : "DISTINTO");
+         native[0], loaded[0], ok_audio ? "igual" : "DISTINTO");
   printf("    video   %016llx vs %016llx  -> %s\n",
-         loaded[1], same[1], ok_video ? "igual" : "DISTINTO");
+         native[1], loaded[1], ok_video ? "igual" : "DISTINTO");
+  printf("  proceso nuevo vs mismo proceso: %s\n",
+         ok_same ? "igual" : "DISTINTO");
   printf("  energia del FM en la corrida nativa: %llu en %llu muestras -> %s\n",
          native[2], native[3], ok_energy ? "suena" : "MUDO");
-  printf("  [informativo] continuacion nativa %016llx vs cargada %016llx -> %s\n",
-         native[0], same[0], ok_same ? "igual" : "distinta");
-  if (!ok_same)
-    printf("    la carga no reproduce la continuacion nativa. No es cosa del\n"
-           "    proceso -- el mismo proceso da el mismo hash-: falta estado del\n"
-           "    camino de audio en el savestate, y eso va por su propio issue.\n");
 
-  if (ok_audio && ok_video && ok_energy) {
+  if (ok_audio && ok_video && ok_same && ok_energy) {
     printf("\nTODO OK\n");
     return 0;
   }
-  if (!ok_energy)
+  if (!ok_energy) {
     fprintf(stderr, "\nFALLO: el fixture no produjo audio, el test no probo nada\n");
-  else
+  } else if (!ok_same) {
     fprintf(stderr, "\nFALLO: cargar en un proceso nuevo no da lo mismo que en el\n"
-                    "mismo proceso: hay estado que depende del proceso\n");
+                    "mismo proceso: hay estado que DEPENDE DEL PROCESO (un puntero\n"
+                    "serializado, una direccion movida por el ASLR)\n");
+  } else {
+    fprintf(stderr, "\nFALLO: restaurar el estado no reproduce la continuacion\n"
+                    "nativa. El mismo proceso da el mismo hash, asi que no es cosa\n"
+                    "del proceso: FALTA ESTADO en el savestate\n");
+  }
   return 1;
 }

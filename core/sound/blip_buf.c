@@ -753,6 +753,11 @@ void blip_load_buffer_state(blip_t *buf, const blip_buffer_state_t *state)
 	buf->offset = (fixed_t)state->offset;
 }
 
+size_t blip_buffer_state_size( void )
+{
+	return sizeof(blip_buffer_state_t);
+}
+
 blip_buffer_state_t* blip_new_buffer_state()
 {
 	return (blip_buffer_state_t*)calloc(1, sizeof(blip_buffer_state_t));

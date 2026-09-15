@@ -319,6 +319,16 @@ jobs:
           CC=clang
           CORE=../genesis_plus_gx_libretro.so
 
+      # #75: el savestate de SMS con Nuked tiene que cargar en un PROCESO
+      # nuevo y dar lo mismo que en el mismo proceso. Es lo unico que agarra
+      # un puntero serializado: dentro de una sola sesion la direccion sigue
+      # siendo valida y no falla nada.
+      - name: SMS savestate with Nuked FM survives a new process
+        run: >-
+          make -C tests check-state-cross-process
+          CC=clang
+          CORE=../genesis_plus_gx_libretro.so
+
       # #30: dos lecturas del mismo frame tienen que dar lo mismo.
       - name: Frame delta survives a second reader
         run: >-
@@ -662,6 +672,18 @@ jobs:
           CC=clang
           CORE=../genesis_plus_gx_libretro.dll
 
+      # #75: el savestate de SMS con Nuked tiene que cargar en un PROCESO
+      # nuevo y dar lo mismo que en el mismo proceso. Es lo unico que agarra
+      # un puntero serializado: dentro de una sola sesion la direccion sigue
+      # siendo valida y no falla nada.
+      - name: SMS savestate with Nuked FM survives a new process
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        shell: pwsh
+        run: >-
+          make -C tests check-state-cross-process
+          CC=clang
+          CORE=../genesis_plus_gx_libretro.dll
+
       - name: Frame delta survives a second reader
         if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
         shell: pwsh
@@ -822,6 +844,16 @@ jobs:
         if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
         run: >-
           make -C tests check-audio-controls
+          CORE=../genesis_plus_gx_libretro.dylib
+
+      # #75: el savestate de SMS con Nuked tiene que cargar en un PROCESO
+      # nuevo y dar lo mismo que en el mismo proceso. Es lo unico que agarra
+      # un puntero serializado: dentro de una sola sesion la direccion sigue
+      # siendo valida y no falla nada.
+      - name: SMS savestate with Nuked FM survives a new process
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -C tests check-state-cross-process
           CORE=../genesis_plus_gx_libretro.dylib
 
       - name: Frame delta survives a second reader

@@ -690,7 +690,20 @@ int sound_context_save(uint8 *state)
     save_param(&config.opll, sizeof(config.opll));
     if (config.opll)
     {
-      save_param(&opll, sizeof(opll));
+      /* `patchrom` es un PUNTERO adentro de opll_t -- el unico que tiene, y
+         el unico de los dos structs de Nuked-: apunta a patch_ym2413 o a
+         patch_ds1001, dos tablas estaticas de opll.c. Serializarlo mete una
+         direccion de ESTE proceso en el savestate, con dos consecuencias:
+         el blob deja de ser identico entre corridas por el ASLR, y al
+         cargarlo en otro proceso queda apuntando a cualquier lado.
+
+         Se escribe NULL, igual que ya hace state_save con los punteros del
+         Z80, y la carga lo reinstala. (#75) */
+      {
+        opll_t opll_state = opll;
+        opll_state.patchrom = NULL;
+        save_param(&opll_state, sizeof(opll_state));
+      }
       save_param(&opll_accm, sizeof(opll_accm));
       save_param(&opll_sample, sizeof(opll_sample));
       save_param(&opll_cycles, sizeof(opll_cycles));
@@ -751,7 +764,25 @@ int sound_context_load(uint8 *state)
     load_param(&config_opll, sizeof(config_opll));
     if (config_opll)
     {
-      load_param(&opll, sizeof(opll));
+      /* El puntero y el tipo de chip los decide ESTE proceso, no el blob:
+         `patchrom` es funcion pura de `chip_type` -- OPLL_Reset elige una de
+         las dos tablas segun el tipo-, asi que conservando los dos juntos
+         quedan coherentes por construccion. El reset que hace state_load
+         antes de llegar aca ya los dejo bien.
+
+         Sin esto, cargar un savestate de Master System con Nuked en un
+         proceso NUEVO desreferencia una direccion muerta y crashea en
+         OPLL_PreparePatch1. Es el issue libretro/Genesis-Plus-GX#403 tal
+         cual esta escrito -- 'en una sesion nueva', y solo con nuked-, y el
+         audio roto del #290 es el mismo puntero cayendo en algo mapeado en
+         vez de en nada. (#75) */
+      {
+        const opll_patch_t *patchrom = opll.patchrom;
+        uint32_t chip_type = opll.chip_type;
+        load_param(&opll, sizeof(opll));
+        opll.patchrom = patchrom;
+        opll.chip_type = chip_type;
+      }
       load_param(&opll_accm, sizeof(opll_accm));
       load_param(&opll_sample, sizeof(opll_sample));
       load_param(&opll_cycles, sizeof(opll_cycles));

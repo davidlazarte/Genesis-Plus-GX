@@ -34,6 +34,7 @@ FULL_CORE_BIN := $(BUILD_DIR)/full_core_replay$(EXE_EXT)
 STATE_GUARD_BIN := $(BUILD_DIR)/state_guard$(EXE_EXT)
 STATE_LAYOUT_BIN := $(BUILD_DIR)/state_layout$(EXE_EXT)
 AUDIO_CTRL_BIN := $(BUILD_DIR)/audio_controls$(EXE_EXT)
+STATE_XPROC_BIN := $(BUILD_DIR)/state_cross_process$(EXE_EXT)
 FRAME_DELTA_BIN := $(BUILD_DIR)/frame_delta$(EXE_EXT)
 SYSTEM_TRANSITION_BIN := $(BUILD_DIR)/system_transition$(EXE_EXT)
 Z80_VDP_BIN := $(BUILD_DIR)/z80_vdp_fifo$(EXE_EXT)
@@ -79,7 +80,7 @@ PROFILE_COMPARISON := $(ARTIFACT_DIR)/feature_gate_profiles.json
 	check-full-core check-profile-comparison raster-rom-probe \
 	full-core-replay check-idle-metrics check-attribution-scene check-plane-suppress check-multilayer \
 	check-observability check-abi-dynamic check-fuzz check-fuzz-ring validate-roms check-mode4 \
-	check-sprite-outcome \
+	check-sprite-outcome check-state-cross-process \
 	regen-multilayer check-scenes regen-scenes check-line-state clean
 
 all: $(UNIT_BIN) $(CONCURRENCY_BIN) $(API_BIN) $(RASTER_BIN) \
@@ -186,6 +187,22 @@ $(AUDIO_CTRL_BIN): ayther/audio_controls.c ayther/generated_rom.c 		ayther/gener
 check-audio-controls: $(AUDIO_CTRL_BIN)
 	$(call require_core)
 	$(AUDIO_CTRL_BIN) "$(CORE)"
+
+$(STATE_XPROC_BIN): ayther/state_cross_process.c ayther/generated_rom.c \
+		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther \
+		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include \
+		-Iayther -o $@ ayther/state_cross_process.c ayther/generated_rom.c \
+		$(LDFLAGS) $(ROM_PROBE_LIBS)
+
+# #75, segundo criterio: el savestate de SMS+Nuked tiene que cargar en un
+# PROCESO nuevo -- que es lo que dicen los dos issues de upstream que esto
+# persigue-- y sonar igual que la corrida nativa. El binario se relanza a si
+# mismo dos veces; por eso necesita un directorio donde dejar el estado y los
+# hashes, y va BUILD_DIR, que ya se limpia con el resto.
+check-state-cross-process: $(STATE_XPROC_BIN) | $(BUILD_DIR)
+	$(call require_core)
+	$(STATE_XPROC_BIN) "$(CORE)" "$(BUILD_DIR)"
 
 $(FRAME_DELTA_BIN): ayther/frame_delta.c ayther/generated_rom.c \
 		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)

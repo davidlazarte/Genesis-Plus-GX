@@ -6,6 +6,8 @@
 .gitignore	(sin funcion)	.idea/
 .gitignore	genesis_plus_gx_libretro.*	# AYTHER test and benchmark outputs
 .gitignore	sdl/build_sdl2	# built core (BYOC) — anchored to repo root so it does not match docs/
+HISTORY.txt	Genesis Plus GX 1.7.5 (xx/xx/xxxx) (Eke-Eke)	(comentario)
+HISTORY.txt	Genesis Plus GX 1.7.5 (xx/xx/xxxx) (Eke-Eke)	(comentario)
 Makefile.libretro	HOOK_CPU = 0	AYTHER_EXTENSIONS = 1
 Makefile.libretro	clean:	# #43: `clean` solo borra los objetos del core. Los arboles de artefactos viven
 Makefile.libretro	else	# #43: advertencias del compilador, con dos niveles a proposito.
@@ -15,6 +17,15 @@ README.md	(sin funcion)	# ⚡ AYTHER Genesis Core Fork
 builds/README.md	Notes:	---
 core/cart_hw/eeprom_i2c.c	void eeprom_i2c_init(void)	int eeprom_i2c_context_save(uint8 *state)
 core/cart_hw/eeprom_i2c.h	extern void eeprom_i2c_init(void);	extern int eeprom_i2c_context_save(uint8 *state);
+core/cart_hw/md_cart.c	void md_cart_init(void)	(comentario)
+core/cart_hw/md_cart.c	void md_cart_init(void)	strstr(rominfo.domestic,"DAEMON CLAW") ||
+core/cd_hw/cdc.c	(sin funcion)	* Copyright (C) 2012-2026 Eke-Eke (Genesis Plus GX)
+core/cd_hw/cdc.c	void cdc_decoder_update(uint32 header)	cdc.cycles[1] = s68k.cycles + 267000;
+core/cd_hw/cdc.h	(sin funcion)	* Copyright (C) 2012-2026 Eke-Eke (Genesis Plus GX)
+core/cd_hw/cdd.c	(sin funcion)	* Copyright (C) 2012-2026 Eke-Eke (Genesis Plus GX)
+core/cd_hw/cdd.c	int cdd_context_load(uint8 *state, char *version)	if (index > cdd.toc.last)
+core/cd_hw/cdd.c	void cdd_update(void)	cdc_decoder_update(0);
+core/cd_hw/cdd.h	(sin funcion)	* Copyright (C) 2012-2026 Eke-Eke (Genesis Plus GX)
 core/cd_hw/pcm.c	extern int8 reset_do_not_clear_buffers;	#include "audio_probe.h"
 core/cd_hw/pcm.c	void pcm_run(unsigned int length)	int l_delta = ((data * pcm.chan[j].env * (pcm.chan[j].pan & 0x0F)) >> 5);
 core/cd_hw/pcm.c	void pcm_run(unsigned int length)	l += l_delta;
@@ -24,15 +35,42 @@ core/cd_hw/pcm.c	void pcm_write(unsigned int address, unsigned char data, unsign
 core/cd_hw/pcm.c	void pcm_write(unsigned int address, unsigned char data, unsigned int cycles)	audio_probe_pcm_volume(pcm.index, pcm.chan[pcm.index].env, data);
 core/cd_hw/pcm.c	void pcm_write(unsigned int address, unsigned char data, unsigned int cycles)	int i;
 core/cd_hw/pcm.c	void pcm_write(unsigned int address, unsigned char data, unsigned int cycles)	unsigned char old_status = pcm.status;
+core/cd_hw/scd.c	static unsigned int prg_ram_m68k_read_word(unsigned int address)	return *(uint16 *)(m68k.memory_map[offset].base + (address & 0xfffe));
+core/cd_hw/scd.c	static unsigned int s68k_read_bus_16(unsigned int address)	return *(uint16 *)(s68k.memory_map[((address)>>16)&0xff].base + ((address) & 0xfffe));
+core/cd_hw/scd.c	static unsigned int word_ram_m68k_read_word(unsigned int address)	return *(uint16 *)(m68k.memory_map[offset].base + (address & 0xfffe));
+core/cd_hw/scd.c	static unsigned int word_ram_s68k_read_word(unsigned int address)	return *(uint16 *)(s68k.memory_map[offset].base + (address & 0xfffe));
+core/cd_hw/scd.c	static void prg_ram_m68k_write_word(unsigned int address, unsigned int data)	*(uint16 *)(m68k.memory_map[offset].base + (address & 0xfffe)) = data;
+core/cd_hw/scd.c	static void word_ram_m68k_write_byte(unsigned int address, unsigned int data)	WRITE_BYTE(m68k.memory_map[offset].base, address & 0xffff, data);
+core/cd_hw/scd.c	static void word_ram_m68k_write_word(unsigned int address, unsigned int data)	*(uint16 *)(m68k.memory_map[offset].base + (address & 0xfffe)) = data;
+core/cd_hw/scd.c	static void word_ram_s68k_write_byte(unsigned int address, unsigned int data)	WRITE_BYTE(s68k.memory_map[offset].base, address & 0xffff, data);
+core/cd_hw/scd.c	static void word_ram_s68k_write_word(unsigned int address, unsigned int data)	*(uint16 *)(s68k.memory_map[offset].base + (address & 0xfffe)) = data;
+core/cd_hw/scd.c	static void word_ram_z80_write_byte(unsigned int address, unsigned int data)	WRITE_BYTE(m68k.memory_map[offset].base, address & 0xffff, data);
 core/debug/cpuhook.h	typedef enum {	*
 core/debug/cpuhook.h	typedef enum {	extern void (*cpu_hook)(hook_type_t type, int width, unsigned int address, unsigned int value);
+core/genesis.c	(sin funcion)	* Copyright (C) 2007-2026 Eke-Eke (Genesis Plus GX)
 core/genesis.c	extern uint8 reset_do_not_clear_buffers;	static uint32 gen_reset_rng = 0x9E3779B9u;
+core/genesis.c	external_t ext;	uint8 boot_rom[0x10000]; /* Genesis BOOT ROM (2KB only but mirrored into 64KB bank) */
 core/genesis.c	void gen_reset(int hard_reset)	gen_reset_rng = 0x9E3779B9u;
 core/genesis.c	void gen_reset(int hard_reset)	m68k.cycles = gen_reset_random() %
+core/genesis.h	extern external_t ext;	extern uint8 boot_rom[0x10000];
 core/input_hw/gamepad.c	void mastertap_2_write(unsigned char data, unsigned char mask)	int gamepad_context_save(unsigned char *state)
 core/input_hw/gamepad.h	(sin funcion)	extern int gamepad_context_save(unsigned char *state);
 core/loadrom.c	void getrominfo(char *romheader)	rominfo.crc32 = crc32(0, cart.rom, cart.romsize);
 core/loadrom.h	typedef struct	unsigned int crc32; /* ROM Checksum (crc32) */
+core/m68k/m68kcpu.h	(sin funcion)	#define m68k_read_immediate_16(address) *(uint16 *)(m68ki_cpu.memory_map[((address)>>16)&0xff].base + ((address) & 0xfffe))
+core/m68k/m68kcpu.h	INLINE uint m68ki_read_16(uint address)	else val = *(uint16 *)(temp->base + ((address) & 0xfffe));
+core/m68k/m68kcpu.h	INLINE uint m68ki_read_32(uint address)	else val = *(uint16 *)(temp->base + ((address) & 0xfffe)) << 16;
+core/m68k/m68kcpu.h	INLINE uint m68ki_read_32(uint address)	else val |= *(uint16 *)(temp->base + ((address+2) & 0xfffe));
+core/m68k/m68kcpu.h	INLINE void m68ki_write_16(uint address, uint value)	else *(uint16 *)(temp->base + ((address) & 0xfffe)) = value;
+core/m68k/m68kcpu.h	INLINE void m68ki_write_32(uint address, uint value)	else *(uint16 *)(temp->base + ((address + 2) & 0xfffe)) = value;
+core/m68k/m68kcpu.h	INLINE void m68ki_write_32(uint address, uint value)	else *(uint16 *)(temp->base + ((address) & 0xfffe)) = value >> 16;
+core/mem68k.c	unsigned int ctrl_io_read_word(unsigned int address)	return (*(uint16 *)(m68k.memory_map[((address)>>16)&0xff].base + ((address) & 0xfffe)) & 0xFEFF);
+core/mem68k.c	unsigned int ctrl_io_read_word(unsigned int address)	return (*(uint16 *)(m68k.memory_map[((address)>>16)&0xff].base + ((address) & 0xfffe)) | 0x0100);
+core/mem68k.c	unsigned int m68k_lockup_r_16 (unsigned int address)	return *(uint16 *)(m68k.memory_map[((address)>>16)&0xff].base + ((address) & 0xfffe));
+core/mem68k.c	unsigned int m68k_read_bus_16(unsigned int address)	return *(uint16 *)(m68k.memory_map[((address)>>16)&0xff].base + ((address) & 0xfffe));
+core/memz80.c	(sin funcion)	* Copyright (C) 2007-2026 Eke-Eke (Genesis Plus GX)
+core/memz80.c	static void z80_request_68k_bus_access(void)	(comentario)
+core/memz80.h	(sin funcion)	* Copyright (C) 2007-2026 Eke-Eke (Genesis Plus GX)
 core/shared.h	(sin funcion)	#include "audio_probe.h"
 core/shared.h	(sin funcion)	#include "eeprom_i2c.h"
 core/sound/blip_buf.c	void blip_load_buffer_state(blip_t *buf, const blip_buffer_state_t *state)	size_t blip_buffer_state_size( void )
@@ -109,11 +147,13 @@ core/system.c	void system_frame_gen(int do_skip)	vdp_ayther_begin_frame();
 core/system.c	void system_frame_scd(int do_skip)	vdp_ayther_begin_frame();
 core/system.c	void system_frame_sms(int do_skip)	vdp_ayther_begin_frame();
 core/system.h	extern void audio_set_equalizer(void);	extern int audio_context_save(uint8 *state);
+core/vdp_ctrl.c	(sin funcion)	* Copyright (C) 2007-2026 Eke-Eke (Genesis Plus GX)
 core/vdp_ctrl.c	int vdp_context_load(uint8 *state)	memset((char *)ayther_vram_dirty, 0xFF, sizeof(ayther_vram_dirty));
 core/vdp_ctrl.c	int vdp_context_load(uint8 *state)	vdp_ayther_begin_frame();
 core/vdp_ctrl.c	static const int fifo_timing_h40[] =	#define FIFO_TIMING_SLOTS_H32 ((int)(sizeof(fifo_timing_h32) / sizeof(fifo_timing_h32[0])))
 core/vdp_ctrl.c	static int *fifo_timing;        /* FIFO slots timing table */	static int fifo_timing_slots; /* entries in the table fifo_timing points to (#63) */
 core/vdp_ctrl.c	static int hblank_end_cycle;    /* HBLANK flag clear cycle */	static unsigned int ayther_raster_line_at(unsigned int cycles)
+core/vdp_ctrl.c	static unsigned int vdp_68k_data_r_m4(void)	int index = addr & 0x3FFE;
 core/vdp_ctrl.c	static void vdp_68k_data_w_m4(unsigned int data)	ayther_raster_mark(AYTHER_RASTER_REASON_VRAM, (uint16_t)index,
 core/vdp_ctrl.c	static void vdp_68k_data_w_m4(unsigned int data)	ayther_raster_mark_visible(AYTHER_RASTER_REASON_CRAM, (uint16_t)index,
 core/vdp_ctrl.c	static void vdp_68k_data_w_m4(unsigned int data)	while ((slot + fifo_byte_access) < (fifo_timing_slots - 1) && (cycles >= fifo_timing[slot])) slot++;
@@ -131,9 +171,13 @@ core/vdp_ctrl.c	static void vdp_dma_fill(unsigned int length)	ayther_raster_mark
 core/vdp_ctrl.c	static void vdp_dma_fill(unsigned int length)	ayther_raster_mark_vram(addr, data,
 core/vdp_ctrl.c	static void vdp_dma_fill(unsigned int length)	uint16 *p = (uint16 *)&vsram[addr & 0x7E];
 core/vdp_ctrl.c	static void vdp_dma_fill(unsigned int length);	const uint8 hscroll_mask_table[] = { 0x00, 0x07, 0xF8, 0xFF };
+core/vdp_ctrl.c	static void vdp_reg_w(unsigned int r, unsigned int d, unsigned int cycles)	else if (v_counter <= 2)
 core/vdp_ctrl.c	static void vdp_reg_w(unsigned int r, unsigned int d, unsigned int cycles)	fifo_timing_slots = FIFO_TIMING_SLOTS_H32;
 core/vdp_ctrl.c	static void vdp_reg_w(unsigned int r, unsigned int d, unsigned int cycles)	fifo_timing_slots = FIFO_TIMING_SLOTS_H40;
+core/vdp_ctrl.c	static void vdp_reg_w(unsigned int r, unsigned int d, unsigned int cycles)	for (i=0; i<=v_counter; i++)
 core/vdp_ctrl.c	static void vdp_reg_w(unsigned int r, unsigned int d, unsigned int cycles)	if (AYTHER_SUBSCRIBED(AYTHER_SUB_RASTER_TRACKING) &&
+core/vdp_ctrl.c	static void vdp_reg_w(unsigned int r, unsigned int d, unsigned int cycles)	int i;
+core/vdp_ctrl.c	static void vdp_reg_w(unsigned int r, unsigned int d, unsigned int cycles)	render_line(i);
 core/vdp_ctrl.c	static void vdp_reg_w(unsigned int r, unsigned int d, unsigned int cycles)	static void vdp_bus_w(unsigned int data, int from_dma, unsigned int cycles)
 core/vdp_ctrl.c	static void vdp_set_all_vram(const uint8 *src)	AYTHER_MARK_VRAM_DIRTY(name, 0xFF);
 core/vdp_ctrl.c	static void vdp_set_all_vram(const uint8 *src);	AYTHER_MARK_VRAM_DIRTY(name, 1 << ((addr >> 2) & 7)); \
@@ -156,6 +200,7 @@ core/vdp_ctrl.c	void vdp_reset(void)	memset((char *)ayther_vram_dirty, 0xFF, siz
 core/vdp_ctrl.c	void vdp_reset(void)	vdp_ayther_begin_frame();
 core/vdp_ctrl.h	(sin funcion)	#include "ayther_raster.h"
 core/vdp_ctrl.h	(sin funcion)	(comentario)
+core/vdp_ctrl.h	(sin funcion)	* Copyright (C) 2007-2026 Eke-Eke (Genesis Plus GX)
 core/vdp_ctrl.h	extern uint8 hscroll_mask;	extern uint32 ayther_raster_dirty;
 core/vdp_ctrl.h	extern uint8 reg[0x20];	extern uint8 ALIGNED_(4) sat[0x400];
 core/vdp_ctrl.h	extern void vdp_reset(void);	extern void vdp_ayther_begin_frame(void);
@@ -288,6 +333,37 @@ core/vdp_render.c	void render_obj_m5_ste(int line)	int max_pixels = AYTHER_RC_NO
 core/vdp_render.c	void render_reset(void)	AYTHER_HOT_INLINE void render_line_impl(int line, int ayther_observed)
 core/vdp_render.h	(sin funcion)	#include "ayther/ayther_api.h"
 core/vdp_render.h	extern uint16 spr_col;	#define AYTHER_LAYER_A 0x01 /* Plano A (Scroll A) */
+gcw0/main.c	int main (int argc, char **argv)	(comentario)
+gcw0/main.c	int main (int argc, char **argv)	(comentario)
+gcw0/main.c	int main (int argc, char **argv)	(comentario)
+gcw0/main.c	int main (int argc, char **argv)	for (i=0; i<0x800; i+=2)
+gcw0/main.c	int main (int argc, char **argv)	memset(boot_rom, 0xFF, sizeof(boot_rom));
+gx/fileio/file_slot.c	int slot_load(int slot, int device)	CardError = CARD_Read(&CardFile, &in[done], filesize, done);
+gx/fileio/file_slot.c	int slot_load(int slot, int device)	if (CardError || (output_size != uncompressed_size))
+gx/fileio/file_slot.c	int slot_load(int slot, int device)	if (CardError)
+gx/fileio/file_slot.c	int slot_load(int slot, int device)	if (filesize < (2048 + 64 + 4))
+gx/fileio/file_slot.c	int slot_load(int slot, int device)	memcpy(&uncompressed_size, in + 2112, sizeof(uncompressed_size));
+gx/fileio/file_slot.c	int slot_load(int slot, int device)	memset(buffer, 0, filesize);
+gx/fileio/file_slot.c	int slot_load(int slot, int device)	u32 uncompressed_size;
+gx/fileio/fileio.c	int load_archive(char *filename, unsigned char *buffer, int maxsize, char *exten	else if (extension)
+gx/fileio/fileio.c	int load_archive(char *filename, unsigned char *buffer, int maxsize, char *exten	if ((input_size >= 2) && (memcmp(in, "PK", 2) == 0))
+gx/fileio/fileio.c	int load_archive(char *filename, unsigned char *buffer, int maxsize, char *exten	if ((res != Z_OK) && (res != Z_STREAM_END))
+gx/fileio/fileio.c	int load_archive(char *filename, unsigned char *buffer, int maxsize, char *exten	if (extension && (filename_length >= 3))
+gx/fileio/fileio.c	int load_archive(char *filename, unsigned char *buffer, int maxsize, char *exten	if (input_size < sizeof(PKZIPHEADER))
+gx/fileio/fileio.c	int load_archive(char *filename, unsigned char *buffer, int maxsize, char *exten	input_size = fread(in, 1, CHUNKSIZE, fd);
+gx/fileio/fileio.c	int load_archive(char *filename, unsigned char *buffer, int maxsize, char *exten	input_size = fread(in, 1, CHUNKSIZE, fd);
+gx/fileio/fileio.c	int load_archive(char *filename, unsigned char *buffer, int maxsize, char *exten	memcpy(extension, &in[offset + filename_length - 3], 3);
+gx/fileio/fileio.c	int load_archive(char *filename, unsigned char *buffer, int maxsize, char *exten	offset += filename_length + extra_length;
+gx/fileio/fileio.c	int load_archive(char *filename, unsigned char *buffer, int maxsize, char *exten	size_t input_size;
+gx/fileio/fileio.c	int load_archive(char *filename, unsigned char *buffer, int maxsize, char *exten	size_t offset = sizeof(PKZIPHEADER);
+gx/fileio/fileio.c	int load_archive(char *filename, unsigned char *buffer, int maxsize, char *exten	zs.avail_in = input_size - offset;
+gx/fileio/fileio.c	int load_archive(char *filename, unsigned char *buffer, int maxsize, char *exten	zs.avail_in = input_size;
+gx/gui/menu.c	static void rompathmenu ()	(comentario)
+gx/gui/menu.c	static void rompathmenu ()	for (i=0x800; i<0x10000; i++)
+gx/main.c	(sin funcion)	* Copyright Eke-Eke (2007-2026), based on original work from Softdev (2006)
+gx/main.c	static void init_machine(void)	for (i=0x800; i<0x10000; i++)
+gx/main.c	static void init_machine(void)	int i;
+gx/main.c	static void init_machine(void)	memset(boot_rom, 0xFF, sizeof(boot_rom));
 libretro/Makefile.common	SOURCES_C += $(foreach dir,$(GENPLUS_SRC_DIR),$(wildcard $(dir)/*.c))	# AYTHER (#43.2): ayther_core.c YA se compila suelto. Antes se filtraba de aca
 libretro/Makefile.common	ifeq ($(HOOK_CPU), 1)	(comentario)
 libretro/Makefile.common	ifeq ($(HOOK_CPU), 1)	NEED_DEBUG_DIR := 1
@@ -297,7 +373,13 @@ libretro/libretro.c	(sin funcion)	#include "ayther/ayther_api.h"
 libretro/libretro.c	(sin funcion)	#include <limits.h>
 libretro/libretro.c	(sin funcion)	#include <string.h>
 libretro/libretro.c	STATIC_ASSERT(z80_overflow,	STATIC_ASSERT(ayther_sprite_v1_size, sizeof(ayther_sprite_v1) == 10);
+libretro/libretro.c	bool retro_load_game(const struct retro_game_info *info)	(comentario)
+libretro/libretro.c	bool retro_load_game(const struct retro_game_info *info)	(comentario)
+libretro/libretro.c	bool retro_load_game(const struct retro_game_info *info)	(comentario)
 libretro/libretro.c	bool retro_load_game(const struct retro_game_info *info)	ayther_reset_session(true);
+libretro/libretro.c	bool retro_load_game(const struct retro_game_info *info)	for (i=0; i<0x800; i+=2)
+libretro/libretro.c	bool retro_load_game(const struct retro_game_info *info)	for (i=0x800; i<0x10000; i++)
+libretro/libretro.c	bool retro_load_game(const struct retro_game_info *info)	memset(boot_rom, 0xFF, sizeof(boot_rom));
 libretro/libretro.c	bool retro_serialize(void *data, size_t size)	ayther_state_tag_write(data);
 libretro/libretro.c	bool retro_unserialize(const void *data, size_t size)	(comentario)
 libretro/libretro.c	bool retro_unserialize(const void *data, size_t size)	ayther_invalidate_snapshot();
@@ -320,3 +402,13 @@ libretro/libretro.c	void retro_run(void)	ayther_end_frame(soundbuffer, (unsigned
 libretro/libretro.c	void retro_unload_game(void)	is_running = false;
 libretro/link.T	(sin funcion)	(comentario)
 libretro/link.T	(sin funcion)	global: retro_*; ayther_get_interface;
+sdl/sdl1/main.c	int main (int argc, char **argv)	(comentario)
+sdl/sdl1/main.c	int main (int argc, char **argv)	(comentario)
+sdl/sdl1/main.c	int main (int argc, char **argv)	(comentario)
+sdl/sdl1/main.c	int main (int argc, char **argv)	for (i=0; i<0x800; i+=2)
+sdl/sdl1/main.c	int main (int argc, char **argv)	memset(boot_rom, 0xFF, sizeof(boot_rom));
+sdl/sdl2/main.c	int main (int argc, char **argv)	(comentario)
+sdl/sdl2/main.c	int main (int argc, char **argv)	(comentario)
+sdl/sdl2/main.c	int main (int argc, char **argv)	(comentario)
+sdl/sdl2/main.c	int main (int argc, char **argv)	for (i=0; i<0x800; i+=2)
+sdl/sdl2/main.c	int main (int argc, char **argv)	memset(boot_rom, 0xFF, sizeof(boot_rom));

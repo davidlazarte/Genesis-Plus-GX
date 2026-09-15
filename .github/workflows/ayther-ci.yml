@@ -137,6 +137,14 @@ jobs:
       - name: Every Mode 5 renderer consults the layer gates
         run: bash tests/ci/check_render_gates.sh
 
+      # #103: el gate de UB, probado. filter_known_ub.sh es lo unico que separa
+      # "el core esta limpio" de "el core tiene UB que nadie miro", y nadie lo
+      # habia probado nunca: se confiaba en que un hallazgo real lo pusiera en
+      # rojo alguna vez. Corre aca y no en un job con core porque son logs
+      # sinteticos: no necesita compilar nada y da el veredicto en un segundo.
+      - name: The known-UB filter fails on anything it should not accept
+        run: bash tests/ci/check_filter_known_ub.sh
+
       # #68: cuantos hunks nuestros hay en cada archivo de upstream, contra una
       # linea base versionada. Subir un numero es legitimo, pero se hace a
       # proposito y se dice: el PR que agrega un hook regenera la linea base

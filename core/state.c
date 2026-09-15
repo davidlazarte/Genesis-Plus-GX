@@ -162,6 +162,44 @@ int state_load(unsigned char *state)
 
   /* Z80 */ 
   load_param(&Z80, sizeof(Z80_Regs));
+
+  /* El blob entra crudo sobre Z80_Regs y trae dos cosas que el proceso no
+     puede aceptar tal cual.
+
+     La primera son los PAIR. El invariante lo declara el propio tipo en
+     z80/osd_cpu.h: "the upper bytes h2 and h3 normally contain zero (16 bit
+     CPU cores) thus PAIR.d can be used to pass arguments to the memory
+     system". El nucleo lo cumple porque NADA escribe .d entero: todas las
+     escrituras van por .w.l o .b.*, y las pocas asignaciones a PCD salen de
+     ARG16(), de EA -que es (UINT32)(UINT16)...- o de constantes. Un savestate
+     corrupto no pasa por ahi, y entonces cpu_readop indexa z80_readmap[64]
+     con pc.d >> 10: lo encontro el fuzzing de unserialize (#82), con
+     pc.d = 0x00510039 -> indice 5184, y un SEGV al usar el puntero que salio
+     de ahi. Como el YM2612 de #83-#88, no explota donde se carga: z80_reset
+     escribe `PC = 0x0000`, que es .w.l, asi que la mitad alta sobrevive al
+     reset. Y EXX/EX AF' copian PAIR enteros, con lo cual una mitad alta
+     podrida en un registro sombra migra al registro principal.
+
+     Se enmascaran los trece a 16 bits, que es la regla de quien los escribe.
+     Para un estado legitimo no cambia nada: la mitad alta ya era cero.
+
+     La segunda son los punteros. `daisy` e `irq_callback` son direcciones de
+     este proceso, no estado del chip; el guardado ya escribe NULL en los dos
+     (ver state_save) justamente para que el savestate no dependa del ASLR.
+     Se reinstala el callback y se anula la cadena -este core no usa una-, asi
+     que ningun puntero del blob sobrevive a la carga. */
+  {
+    PAIR *pairs[] = {
+      &Z80.pc, &Z80.sp, &Z80.af, &Z80.bc, &Z80.de, &Z80.hl, &Z80.ix, &Z80.iy,
+      &Z80.wz, &Z80.af2, &Z80.bc2, &Z80.de2, &Z80.hl2
+    };
+    unsigned int i;
+    for (i = 0; i < sizeof(pairs) / sizeof(pairs[0]); i++)
+    {
+      pairs[i]->d &= 0xFFFF;
+    }
+  }
+  Z80.daisy = NULL;
   Z80.irq_callback = z80_irq_callback;
 
   /* Extra HW */

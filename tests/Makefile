@@ -47,6 +47,7 @@ OBSERVABILITY_BIN := $(BUILD_DIR)/observability$(EXE_EXT)
 SPR_OUTCOME_BIN := $(BUILD_DIR)/sprite_outcome$(EXE_EXT)
 MODE4_BIN := $(BUILD_DIR)/mode4_controls$(EXE_EXT)
 MODE4_RASTER_BIN := $(BUILD_DIR)/mode4_raster$(EXE_EXT)
+MODE4_68K_BIN := $(BUILD_DIR)/mode4_68k_vram$(EXE_EXT)
 ABI_DYNAMIC_BIN := $(BUILD_DIR)/verify_ayther_api$(EXE_EXT)
 SCENES_BIN := $(BUILD_DIR)/scenes$(EXE_EXT)
 LINE_STATE_BIN := $(BUILD_DIR)/line_state$(EXE_EXT)
@@ -81,6 +82,7 @@ PROFILE_COMPARISON := $(ARTIFACT_DIR)/feature_gate_profiles.json
 	check-full-core check-profile-comparison raster-rom-probe \
 	full-core-replay check-idle-metrics check-attribution-scene check-plane-suppress check-multilayer \
 	check-observability check-abi-dynamic check-fuzz check-fuzz-ring validate-roms check-mode4 \
+	check-mode4-raster check-mode4-68k-vram \
 	check-sprite-outcome check-state-cross-process check-state-roundtrip \
 	regen-multilayer check-scenes regen-scenes regen-full-core check-line-state clean
 
@@ -344,6 +346,22 @@ $(MODE4_RASTER_BIN): ayther/mode4_raster.c ayther/generated_rom.c \
 check-mode4-raster: $(MODE4_RASTER_BIN)
 	$(call require_core)
 	$(MODE4_RASTER_BIN) "$(CORE)"
+
+$(MODE4_68K_BIN): ayther/mode4_68k_vram.c ayther/generated_rom.c \
+		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther \
+		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include \
+		-Iayther -o $@ ayther/mode4_68k_vram.c ayther/generated_rom.c \
+		$(LDFLAGS) $(ROM_PROBE_LIBS)
+
+# #74: Mode 4 leido por el 68000, que es otro camino que el de check-mode4 y
+# check-mode4-raster. Esos dos entran a Mode 4 con codigo Z80 en un cartucho
+# de Master System; vdp_68k_data_r_m4 es la funcion del VDP de Mega Drive en
+# Mode 4 y no la recorria ningun fixture, asi que el arreglo de upstream
+# (29ba0a88) habria entrado sin que nada lo notara.
+check-mode4-68k-vram: $(MODE4_68K_BIN)
+	$(call require_core)
+	$(MODE4_68K_BIN) "$(CORE)"
 
 # #39.C: por que cada sprite se dibujo o no.
 check-sprite-outcome: $(SPR_OUTCOME_BIN)

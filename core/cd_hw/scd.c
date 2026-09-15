@@ -58,7 +58,7 @@ static unsigned int s68k_read_bus_16(unsigned int address)
   error("[SUB 68k] Unused read16 %08X (%08X)\n", address, s68k.pc);
 #endif
   address = s68k.pc;
-  return *(uint16 *)(s68k.memory_map[((address)>>16)&0xff].base + ((address) & 0xffff));
+  return *(uint16 *)(s68k.memory_map[((address)>>16)&0xff].base + ((address) & 0xfffe));
 }
 
 static void s68k_unused_8_w(unsigned int address, unsigned int data)
@@ -231,7 +231,7 @@ static unsigned int prg_ram_m68k_read_word(unsigned int address)
     return m68k.memory_map[offset].read16(address);
   }
 
-  return *(uint16 *)(m68k.memory_map[offset].base + (address & 0xffff));
+  return *(uint16 *)(m68k.memory_map[offset].base + (address & 0xfffe));
 }
 
 static void prg_ram_m68k_write_byte(unsigned int address, unsigned int data)
@@ -258,7 +258,7 @@ static void prg_ram_m68k_write_word(unsigned int address, unsigned int data)
   }
   else
   {
-    *(uint16 *)(m68k.memory_map[offset].base + (address & 0xffff)) = data;
+    *(uint16 *)(m68k.memory_map[offset].base + (address & 0xfffe)) = data;
   }
 }
 
@@ -287,7 +287,7 @@ static void word_ram_z80_write_byte(unsigned int address, unsigned int data)
   }
   else
   {
-    *(uint16 *)(m68k.memory_map[offset].base + (address & 0xfffe)) = data | (data << 8);
+    WRITE_BYTE(m68k.memory_map[offset].base, address & 0xffff, data);
   }
 }
 
@@ -312,7 +312,7 @@ static unsigned int word_ram_m68k_read_word(unsigned int address)
     return m68k.memory_map[offset].read16(address);
   }
 
-  return *(uint16 *)(m68k.memory_map[offset].base + (address & 0xffff));
+  return *(uint16 *)(m68k.memory_map[offset].base + (address & 0xfffe));
 }
 
 static void word_ram_m68k_write_byte(unsigned int address, unsigned int data)
@@ -325,7 +325,7 @@ static void word_ram_m68k_write_byte(unsigned int address, unsigned int data)
   }
   else
   {
-    *(uint16 *)(m68k.memory_map[offset].base + (address & 0xfffe)) = data | (data << 8);
+    WRITE_BYTE(m68k.memory_map[offset].base, address & 0xffff, data);
   }
 }
 
@@ -339,7 +339,7 @@ static void word_ram_m68k_write_word(unsigned int address, unsigned int data)
   }
   else
   {
-    *(uint16 *)(m68k.memory_map[offset].base + (address & 0xffff)) = data;
+    *(uint16 *)(m68k.memory_map[offset].base + (address & 0xfffe)) = data;
   }
 }
 
@@ -364,7 +364,7 @@ static unsigned int word_ram_s68k_read_word(unsigned int address)
     return s68k.memory_map[offset].read16(address);
   }
 
-  return *(uint16 *)(s68k.memory_map[offset].base + (address & 0xffff));
+  return *(uint16 *)(s68k.memory_map[offset].base + (address & 0xfffe));
 }
 
 static void word_ram_s68k_write_byte(unsigned int address, unsigned int data)
@@ -377,7 +377,7 @@ static void word_ram_s68k_write_byte(unsigned int address, unsigned int data)
   }
   else
   {
-    *(uint16 *)(s68k.memory_map[offset].base + (address & 0xfffe)) = data | (data << 8);
+    WRITE_BYTE(s68k.memory_map[offset].base, address & 0xffff, data);
   }
 }
 
@@ -391,7 +391,7 @@ static void word_ram_s68k_write_word(unsigned int address, unsigned int data)
   }
   else
   {
-    *(uint16 *)(s68k.memory_map[offset].base + (address & 0xffff)) = data;
+    *(uint16 *)(s68k.memory_map[offset].base + (address & 0xfffe)) = data;
   }
 }
 

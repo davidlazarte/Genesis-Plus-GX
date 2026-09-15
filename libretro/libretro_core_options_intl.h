@@ -49010,7 +49010,7 @@ struct retro_core_options_v2 options_pl = {
 #define OPTION_VAL_LOW_PASS_PT_BR "Passa-baixo"
 #define OPTION_VAL_EQ_PT_BR "Equalização (EG)"
 #define GENESIS_PLUS_GX_LOWPASS_RANGE_LABEL_PT_BR "Filtro passa-baixo (%)"
-#define GENESIS_PLUS_GX_LOWPASS_RANGE_INFO_0_PT_BR "Define a frequência de corte do filtro passo-baixo. Valores maiores aumentam a \"força\" percebida do filtro, uma vez que uma faixa mais ampla do espectro de alta frequência é atenuada."
+#define GENESIS_PLUS_GX_LOWPASS_RANGE_INFO_0_PT_BR "Define a frequência de corte do filtro passa-baixo. Valores maiores aumentam a \"força\" percebida do filtro, uma vez que uma faixa mais ampla do espectro de alta frequência é atenuada."
 #define GENESIS_PLUS_GX_PSG_PREAMP_LABEL_PT_BR "Nível de pré-amplificação do PSG"
 #define GENESIS_PLUS_GX_PSG_PREAMP_INFO_0_PT_BR "Define o nível de pré-amplificação do Gerador de Som Programável (PSG) de 4 canais (SN76496), encontrado no SG-1000, Sega Mark III, Master System, Game Gear e Mega Drive/Genesis."
 #define GENESIS_PLUS_GX_FM_PREAMP_LABEL_PT_BR "Nível de pré-amplificação do som FM"
@@ -56828,7 +56828,7 @@ struct retro_core_options_v2 options_sr = {
 #define OPTION_VAL_SEGA_MEGA_CD_SV NULL
 #define OPTION_VAL_MEGASD_SV NULL
 #define OPTION_VAL_NONE_SV "Ingen"
-#define GENESIS_PLUS_GX_LOCK_ON_LABEL_SV NULL
+#define GENESIS_PLUS_GX_LOCK_ON_LABEL_SV "Kassettlåsning"
 #define GENESIS_PLUS_GX_LOCK_ON_INFO_0_SV "Lock-On Technology är en Mega Drive/Genesis-funktion som gjorde det möjligt för ett äldre spel att ansluta till pass-through-porten på en speciell kassett för utökad eller förändrad speltid. Detta alternativ anger vilken typ av speciell ”lock-on”-kassett som ska emuleras. En motsvarande bios-fil måste finnas i RetroArchs systemkatalog."
 #define OPTION_VAL_GAME_GENIE_SV NULL
 #define OPTION_VAL_ACTION_REPLAY_PRO_SV NULL

@@ -845,6 +845,113 @@ static void emit_reset_program_sh(struct rom_builder *builder)
   emit_u16(builder, 0x60fau);
 }
 
+#define RAM_MODE4_RESULT (RAM_FRAME + AYTHER_M4_RESULT)
+
+/* #74: Mode 4 leido por el 68000.
+ *
+ * vdp_68k_data_r_m4 calculaba el indice de VRAM con la formula entrelazada
+ * (`((addr << 1) & 0x3FC) | ((addr & 0x200) >> 8) | (addr & 0x3C00)`) mientras
+ * que vdp_68k_data_w_m4 -- y el camino del Z80-- usan `addr & 0x3FFE`. Escribir
+ * y leer la misma direccion daba dos lugares distintos de VRAM. Upstream lo
+ * arreglo en 29ba0a88 y aca no habia ningun fixture que lo notara: check-mode4
+ * y check-mode4-raster entran a Mode 4 con codigo Z80 en un cartucho de Master
+ * System, y ese camino nunca toco la funcion del 68000.
+ *
+ * Tres cosas que este programa tiene que hacer en ese orden y no en otro:
+ *
+ *   1. Programar TODOS los registros de Mode 5 antes de entrar a Mode 4. En
+ *      Mode 4 los registros 11 a 23 estan bloqueados (vdp_reg_w devuelve
+ *      temprano si `!(reg[1] & 4) && r > 10`), asi que el auto-incremento, las
+ *      bases de tabla y el ancho se dejan puestos de antemano.
+ *
+ *   2. Poner la direccion con UNA sola palabra. El protocolo de dos palabras
+ *      del puerto de control es de Mode 5 y nada mas: vdp_68k_ctrl_w hace
+ *      `pending = reg[1] & 4`, asi que en Mode 4 un `move.l` se procesa como
+ *      dos comandos y el segundo -- la mitad baja-- pisa la direccion.
+ *
+ *   3. Escribir la direccion DESPUES de los registros. Una escritura de
+ *      registro deja los bits bajos de `code` en 0b10 (son los bits 15-14 del
+ *      dato, y un comando de registro empieza con 0x8), y en Mode 4
+ *      vdp_68k_data_w_m4 mira justamente `code & 0x02` para decidir entre CRAM
+ *      y VRAM: sin la palabra de direccion en el medio, el patron de prueba se
+ *      iria a la paleta.
+ *
+ * Lo leido queda en dos lugares observables, que se afirman por separado: la
+ * palabra de work RAM en AYTHER_M4_RESULT y la entrada 0 de CRAM. Con la name
+ * table en ceros toda la pantalla dibuja el tile 0, que es todo ceros, asi que
+ * el frame entero sale del color de esa entrada: el valor leido ES el color. */
+static void emit_reset_program_mode4_68k(struct rom_builder *builder)
+{
+  emit_u16(builder, 0x46fcu); /* move.w #$2700,sr */
+  emit_u16(builder, 0x2700u);
+  emit_move_long_immediate_absolute(builder, 0x53454741u, TMSS);
+  emit_move_word_immediate_absolute(builder, 0x0100u, Z80_BUS_REQUEST);
+  emit_move_word_immediate_absolute(builder, 0x0100u, Z80_RESET);
+  emit_move_word_immediate_absolute(builder, 0u, RAM_FRAME);
+  emit_move_word_immediate_absolute(builder, 0u, RAM_LINE);
+  emit_move_word_immediate_absolute(builder, 0u, RAM_MODE4_RESULT);
+
+  /* Mode 5, pantalla apagada, sin interrupciones todavia (punto 1). */
+  emit_vdp_register(builder, 0, 0x04u);
+  emit_vdp_register(builder, 1, 0x04u);
+  emit_vdp_register(builder, 2, 0x30u);   /* plano A en 0xC000 */
+  emit_vdp_register(builder, 3, 0x00u);
+  emit_vdp_register(builder, 4, 0x07u);   /* plano B en 0xE000 */
+  emit_vdp_register(builder, 5, 0x6cu);   /* SAT en 0xD800     */
+  emit_vdp_register(builder, 7, 0x00u);   /* backdrop = entrada 0 */
+  emit_vdp_register(builder, 10, 0x00u);
+  emit_vdp_register(builder, 11, 0x00u);
+  emit_vdp_register(builder, 12, 0x81u);  /* H40, sin shadow ni interlace */
+  emit_vdp_register(builder, 13, 0x3cu);
+  emit_vdp_register(builder, 15, 0x02u);  /* auto-incremento de 2 */
+  emit_vdp_register(builder, 16, 0x01u);
+  emit_vdp_register(builder, 17, 0x00u);
+  emit_vdp_register(builder, 18, 0x00u);
+
+  /* --- a Mode 4: se apaga el bit M5 del registro 1 --- */
+  emit_vdp_register(builder, 1, 0x00u);
+
+  /* Direccion en una sola palabra (puntos 2 y 3). Los bits 15-14 en cero dejan
+     `code` en acceso a VRAM, que es lo que deshace el 0b10 que dejo la ultima
+     escritura de registro. */
+  emit_move_word_immediate_absolute(builder, AYTHER_M4_ADDR_READ, VDP_CONTROL);
+  emit_move_word_immediate_absolute(builder, AYTHER_M4_VALUE_GOOD, VDP_DATA);
+  emit_move_word_immediate_absolute(builder, AYTHER_M4_ADDR_ALIAS, VDP_CONTROL);
+  emit_move_word_immediate_absolute(builder, AYTHER_M4_VALUE_ALIAS, VDP_DATA);
+
+  /* La lectura que se esta probando. */
+  emit_move_word_immediate_absolute(builder, AYTHER_M4_ADDR_READ, VDP_CONTROL);
+  emit_move_word_absolute_d0(builder, VDP_DATA);
+  emit_move_word_d0_absolute(builder, RAM_MODE4_RESULT);
+
+  /* --- de vuelta a Mode 5 para poder mostrarlo --- */
+  emit_vdp_register(builder, 1, 0x04u);
+
+  emit_move_long_immediate_absolute(builder, cram_write_command(0),
+                                    VDP_CONTROL);
+  emit_move_word_d0_absolute(builder, VDP_DATA);
+
+  emit_move_word_immediate_absolute(builder, 0x0000u, Z80_BUS_REQUEST);
+  emit_vdp_register(builder, 1, 0x64u);   /* Mode 5, pantalla y vint */
+
+  emit_u16(builder, 0x4e72u); /* stop #$2300 */
+  emit_u16(builder, 0x2300u);
+  emit_u16(builder, 0x60fau);
+}
+
+/* El handler vertical del fixture de siempre escribe PSG, YM2612, la tabla de
+   scroll y la SAT. Aca no hace falta nada de eso y ademas estorba: lo unico que
+   se quiere es que el 68000 salga del `stop` cada frame y que la escena no se
+   mueva. Reconoce la interrupcion, cuenta el frame y vuelve. */
+static uint32_t emit_vertical_handler_quiet(struct rom_builder *builder)
+{
+  uint32_t address = (uint32_t)builder->pc;
+  emit_move_word_absolute_d0(builder, VDP_CONTROL); /* acknowledge */
+  emit_addq_word_absolute(builder, RAM_FRAME);
+  emit_u16(builder, 0x4e73u); /* rte */
+  return address;
+}
+
 /* #35: el mismo fixture, una configuracion de VDP por ESCENA.
  *
  * El ROM de siempre ejercita un solo modo -- Mode 5 H40 progresivo NTSC, sin
@@ -1314,6 +1421,12 @@ size_t ayther_build_generated_rom_fm(uint8_t *rom, size_t capacity)
 size_t ayther_build_generated_rom_sh(uint8_t *rom, size_t capacity)
 {
   return build_rom(rom, capacity, emit_reset_program_sh);
+}
+
+size_t ayther_build_generated_rom_mode4_68k(uint8_t *rom, size_t capacity)
+{
+  return build_rom_ex(rom, capacity, emit_reset_program_mode4_68k,
+                      emit_vertical_handler_quiet, 0);
 }
 
 /* #40: un cartucho de Master System, generado igual que los de Mega Drive.

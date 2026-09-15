@@ -38,23 +38,37 @@ jobs:
       # vez que upstream las vuelva a tocar, conflicto, para siempre y a cambio
       # de nada.
       #
-      # Por eso se revisa COMMIT POR COMMIT y se saltean los que ya viven en
-      # upstream/master. Los nuestros se siguen revisando enteros, incluidos los
+      # Por eso se revisa COMMIT POR COMMIT y se saltean los que ya viven
+      # aguas arriba. Los nuestros se siguen revisando enteros, incluidos los
       # de un PR que ademas trae un sync: el #46 trajo 24 commits de upstream y
       # uno nuestro, y el nuestro tiene que pasar igual.
+      #
+      # #74: "aguas arriba" son DOS remotos, no uno. libretro es el espejo y a
+      # veces se retrasa -- llego a estar 18 commits detras--, asi que un sync
+      # puede traer commits que todavia no son ancestros de upstream/master
+      # pero si de ekeeke/master. Un commit que ya vive en cualquiera de los dos
+      # no lo escribimos nosotros, y dos de los que trajo este sync vienen con
+      # trailing whitespace de upstream (e12da78f en md_cart.c, 774e360a en
+      # libretro.c): sin este salteo el PR del sync sale rojo por lineas ajenas,
+      # que es exactamente el modo de falla que el parrafo de arriba describe.
       - name: Check whitespace in changed lines
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           UPSTREAM_URL: https://github.com/libretro/Genesis-Plus-GX.git
+          EKEEKE_URL: https://github.com/ekeeke/Genesis-Plus-GX.git
         run: |
           set -euo pipefail
           git remote get-url upstream >/dev/null 2>&1 || git remote add upstream "$UPSTREAM_URL"
+          git remote get-url ekeeke >/dev/null 2>&1 || git remote add ekeeke "$EKEEKE_URL"
           # Si el fetch falla NO se saltea nada: se revisa todo y el job se pone
           # rojo. Fallar cerrado es lo correcto; un fetch caido que apagara el
           # gate en silencio es exactamente el modo de falla que no queremos.
-          git fetch --no-tags --quiet upstream master || echo "AVISO: fetch de upstream fallo; no se saltea ningun commit." >&2
+          # Vale para los dos remotos por separado: que se caiga uno no apaga el
+          # salteo del otro, y que se caigan los dos revisa todo.
+          git fetch --no-tags --quiet upstream master || echo "AVISO: fetch de upstream fallo; no se saltea ningun commit de libretro." >&2
+          git fetch --no-tags --quiet ekeeke master || echo "AVISO: fetch de ekeeke fallo; no se saltea ningun commit de ekeeke." >&2
           if [ "$EVENT_NAME" = "pull_request" ]; then
             range="$BASE_SHA..HEAD"
           else
@@ -62,7 +76,7 @@ jobs:
           fi
           status=0
           for commit in $(git rev-list --no-merges "$range"); do
-            if git merge-base --is-ancestor "$commit" upstream/master 2>/dev/null; then
+            if git merge-base --is-ancestor "$commit" upstream/master 2>/dev/null                || git merge-base --is-ancestor "$commit" ekeeke/master 2>/dev/null; then
               continue
             fi
             parent=$(git rev-parse -q --verify "$commit^") || continue

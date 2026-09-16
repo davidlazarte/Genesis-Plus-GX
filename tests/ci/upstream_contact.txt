@@ -139,6 +139,7 @@ core/sound/ym3438.h	void OPN2_SetTestPin(ym3438_t *chip, Bit32u value);	void OPN
 core/state.c	(sin funcion)	#include "gamepad.h"
 core/state.c	int state_load(unsigned char *state)	PAIR *pairs[] = {
 core/state.c	int state_load(unsigned char *state)	if (version[15] >= 0x37)
+core/state.c	int state_load(unsigned char *state)	zbank &= 0xFF8000;
 core/state.c	int state_save(unsigned char *state)	Z80_Regs z80_state = Z80;
 core/state.c	int state_save(unsigned char *state)	bufferptr += gamepad_context_save(&state[bufferptr]);
 core/state.h	(sin funcion)	#define STATE_VERSION "GENPLUS-GX 1.7.8"

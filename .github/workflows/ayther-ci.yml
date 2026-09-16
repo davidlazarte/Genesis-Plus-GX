@@ -137,6 +137,15 @@ jobs:
       - name: Every Mode 5 renderer consults the layer gates
         run: bash tests/ci/check_render_gates.sh
 
+      # #104: la deteccion de shell, probada. La condicion era
+      # `$(findstring sh,$(notdir $(SHELL)))` y "pwsh" contiene "sh", asi que
+      # con SHELL=pwsh.exe -- el shell de los pasos de Windows de este mismo
+      # workflow-- las recetas POSIX se le mandaban a PowerShell. No se veia
+      # porque en los runners hay un sh.exe en el PATH y make lo prefiere: una
+      # bomba de tiempo, no una teoria. Corre aca porque solo necesita make.
+      - name: The shell detection tells pwsh apart from a POSIX shell
+        run: bash tests/ci/check_shell_detection.sh
+
       # #103: el gate de UB, probado. filter_known_ub.sh es lo unico que separa
       # "el core esta limpio" de "el core tiene UB que nadie miro", y nadie lo
       # habia probado nunca: se confiaba en que un hallazgo real lo pusiera en

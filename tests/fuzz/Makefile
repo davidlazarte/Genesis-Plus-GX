@@ -83,7 +83,17 @@ INC_unserialize    := $(INCLUDES)
 INC_recompose      := $(INCLUDES)
 INC_generated_rom  := $(INCLUDES)
 
-# audio_ring no necesita el core, asi que tampoco necesita CORE=.
+# Que targets necesitan un core cargable, y cuales no (#104).
+#
+# Esta bandera existia desde #34 y NUNCA SE LEIA: estaba declarada y nada mas.
+# La consecuencia se veia corriendo `make -C tests/fuzz replay-recompose-md`
+# sin CORE: compilaba el harness entero y recien despues el binario se quejaba
+# con "AYTHER_FUZZ_CORE no esta seteada", que ademas nombra la variable
+# equivocada -- el replay recibe el core por ARGUMENTO, no por entorno. O sea
+# que rechazaba, pero tarde y diciendo otra cosa.
+#
+# audio_ring es el unico que no necesita core: compila core/debug/audio_probe.c
+# contra tests/stub y no hace dlopen de nada.
 NEEDS_CORE_audio_ring := 0
 
 # Escenas. (#75)
@@ -146,6 +156,9 @@ $(BUILD_DIR)/fuzz_$(1)$(EXE_EXT): fuzz_$(1).c $$(SRC_$(1)) $$(DEP_$(1)) | $(BUIL
 		-o $$@ fuzz_$(1).c $$(SRC_$(1)) $$(DL_LIBS) $$(FUZZ_LIBS)
 
 fuzz-$(1): $$(BUILD_DIR)/fuzz_$(1)$$(EXE_EXT)
+ifneq ($(NEEDS_CORE_$(1)),0)
+	$$(call require_core)
+endif
 	$$(ASAN_PRELOAD) AYTHER_FUZZ_CORE="$$(CORE)" AYTHER_FUZZ_SCENE="$$(SCENE)" \
 		$$(BUILD_DIR)/fuzz_$(1)$$(EXE_EXT) \
 		corpus/$(1) -max_total_time=$$(FUZZ_SECONDS) -print_final_stats=1
@@ -172,6 +185,9 @@ $(foreach t,$(TARGETS),$(eval $(call REPLAY_RULE,$(t))))
 # AYTHER_FUZZ_SCENE, igual que ya hace con la ruta del core.
 define REPLAY_SCENE_RULE
 replay-$(1)-$(2): $$(BUILD_DIR)/replay_$(1)$$(EXE_EXT)
+ifneq ($(NEEDS_CORE_$(1)),0)
+	$$(call require_core)
+endif
 	@echo "== $(1) [escena $(2)] =="
 	$$(BUILD_DIR)/replay_$(1)$$(EXE_EXT) --scene $(2) "$$(CORE)" corpus/$(1) regressions/$(1)
 endef

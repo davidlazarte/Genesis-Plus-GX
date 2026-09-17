@@ -204,4 +204,76 @@ size_t ayther_build_generated_rom_z80_vdp(uint8_t *rom, size_t capacity);
 size_t ayther_build_generated_cd_bios(uint8_t *bios, size_t capacity);
 size_t ayther_build_generated_cd_image(uint8_t *iso, size_t capacity);
 
+/* #98: accesos de palabra a direcciones IMPARES y al borde de un banco.
+   Upstream corrigio en tres archivos la mascara `& 0xffff` por `& 0xfffe`
+   en los accesos crudos de 16 bits (3d948cab m68kcpu.h, 7b74da34 mem68k.c,
+   f9caf203 scd.c): con la vieja, una direccion impar leia o escribia un
+   uint16 desalineado, y en la ultima palabra del banco un byte fuera del
+   array. Ningun fixture hacia esos accesos, y con la emulacion de address
+   error encendida el 68000 los convierte en excepcion antes de llegar al
+   acceso crudo. Estos dos fixtures corren con genesis_plus_gx_addr_error
+   apagado (una opcion del core, no una trampa) y hacen cada acceso a
+   proposito, dejando lo leido en work RAM:
+
+   Cartucho (ayther_build_generated_rom_odd_access):
+     - escribe $1234 en $FFFFFE y lee $FFFFFF: la ultima palabra del banco
+       de work RAM, impar (m68ki_read_16 crudo, m68kcpu.h);
+     - escribe $5678 en $FFFFFF y relee $FFFFFE (m68ki_write_16 crudo);
+     - lee y escribe un long en $FFFFFD (m68ki_read_32 / write_32 crudos);
+     - salta a $FF0101, PC impar, donde un stub en RAM lee $A11300 -- una
+       direccion sin usar del area de control, que devuelve la palabra en PC
+       (m68k_read_bus_16, mem68k.c)- y vuelve al ROM.
+
+   Sega CD (ayther_build_generated_cd_bios con AYTHER_CD_BIOS_ODD_ACCESS):
+     - el principal, con el sub parado, escribe PRG-RAM y Word-RAM por sus
+       bancos directos y las relee por los ESPEJOS en direccion impar
+       (prg_ram_m68k_read_word / word_ram_m68k_*_word, scd.c);
+     - el sub salta a $002001, PC impar, y lee $0C0000, que en modo 2M no
+       esta mapeado y devuelve la palabra en PC (s68k_read_bus_16, scd.c);
+       lo leido y una marca de fin van por los buzones $FF8024/$FF8026, que
+       el handler vertical del principal copia a work RAM.
+
+   Con las mascaras corregidas, cada lectura impar devuelve la palabra PAR
+   de al lado: eso es lo que se afirma. */
+#define AYTHER_ODD_RAM_LAST_R    0x0030u  /* $FFFFFF leido (= $1234)      */
+#define AYTHER_ODD_RAM_LAST_W    0x0032u  /* $FFFFFE tras escribir $FFFFFF */
+#define AYTHER_ODD_RAM_LONG      0x0034u  /* long leido en $FFFFFD         */
+#define AYTHER_ODD_RAM_BUS       0x0038u  /* palabra del bus sin usar, PC impar */
+#define AYTHER_ODD_RAM_DONE      0x003au  /* 1: el stub en PC impar volvio */
+#define AYTHER_ODD_RAM_PRG       0x0040u  /* espejo impar de PRG-RAM (= $9ABC) */
+#define AYTHER_ODD_RAM_WORD      0x0042u  /* espejo impar de Word-RAM (= $DEF0) */
+#define AYTHER_ODD_RAM_WORD_W    0x0044u  /* escritura impar por el espejo (= $1357) */
+#define AYTHER_ODD_RAM_SUB_BUS   0x0046u  /* lo que el sub leyo en $0C0000 */
+#define AYTHER_ODD_RAM_SUB_DONE  0x0048u  /* 1: el sub volvio de PC impar  */
+#define AYTHER_ODD_VALUE_LAST    0x1234u
+#define AYTHER_ODD_VALUE_LAST_W  0x5678u
+#define AYTHER_ODD_VALUE_PRG     0x9abcu
+#define AYTHER_ODD_VALUE_WORD    0xdef0u
+#define AYTHER_ODD_VALUE_WORD_W  0x1357u
+#define AYTHER_CD_BIOS_ODD_ACCESS 1u
+size_t ayther_build_generated_rom_odd_access(uint8_t *rom, size_t capacity);
+size_t ayther_build_generated_cd_bios_ex(uint8_t *bios, size_t capacity,
+                                         unsigned int flags);
+
+/* #98: el boot ROM del TMSS, sintetico. 2KB con "GENESIS OS" en 0x120, que es
+   lo que libretro.c exige para darlo por valido (bios_MD.bin en el directorio
+   de sistema, con la opcion genesis_plus_gx_bios encendida). El core lo
+   expande a un banco de 64KB (upstream 774e360a) y lo mapea en $000000 al
+   arrancar; el programa lee la ULTIMA palabra del banco ($00FFFE) y dos
+   espejos mas, deja lo leido en work RAM, y despues hace lo que hace el boot
+   ROM real: pasa el control al cartucho por $A14101 desde un stub en RAM,
+   porque en el instante del cambio el codigo en $000000 deja de existir.
+
+   Sin la expansion, $00FFFE cae 62KB fuera de un buffer de 2KB: eso es lo que
+   774e360a arreglo, y lo que este fixture hace visible.
+
+   Lo que el harness lee en work RAM (offsets dentro de work_ram): */
+#define AYTHER_BOOT_ROM_SIZE      0x800u
+#define AYTHER_BOOT_MARK          0xbeefu   /* ultima palabra del boot ROM     */
+#define AYTHER_BOOT_RAM_LAST      0x0020u   /* lo leido en $00FFFE (= mark)    */
+#define AYTHER_BOOT_RAM_FIRST     0x0022u   /* lo leido en $000800 (= palabra 0)*/
+#define AYTHER_BOOT_RAM_MID       0x0024u   /* lo leido en $0087FE (= mark)    */
+#define AYTHER_BOOT_RAM_DONE      0x0026u   /* 0x1 cuando el stub llego al fin */
+size_t ayther_build_generated_boot_rom(uint8_t *rom, size_t capacity);
+
 #endif

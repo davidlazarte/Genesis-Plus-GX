@@ -33,6 +33,8 @@ ROM_PROBE_BIN := $(BUILD_DIR)/raster_rom_probe$(EXE_EXT)
 FULL_CORE_BIN := $(BUILD_DIR)/full_core_replay$(EXE_EXT)
 STATE_GUARD_BIN := $(BUILD_DIR)/state_guard$(EXE_EXT)
 STATE_SCD_GUARD_BIN := $(BUILD_DIR)/state_scd_guard$(EXE_EXT)
+TMSS_BIN := $(BUILD_DIR)/tmss_bootrom$(EXE_EXT)
+ODD_ACCESS_BIN := $(BUILD_DIR)/odd_word_access$(EXE_EXT)
 STATE_LAYOUT_BIN := $(BUILD_DIR)/state_layout$(EXE_EXT)
 AUDIO_CTRL_BIN := $(BUILD_DIR)/audio_controls$(EXE_EXT)
 STATE_XPROC_BIN := $(BUILD_DIR)/state_cross_process$(EXE_EXT)
@@ -380,6 +382,36 @@ $(MODE4_68K_BIN): ayther/mode4_68k_vram.c ayther/generated_rom.c \
 check-mode4-68k-vram: $(MODE4_68K_BIN)
 	$(call require_core)
 	$(MODE4_68K_BIN) "$(CORE)"
+
+$(TMSS_BIN): ayther/tmss_bootrom.c ayther/generated_rom.c \
+		ayther/generated_rom.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther \
+		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include \
+		-Iayther -o $@ ayther/tmss_bootrom.c ayther/generated_rom.c \
+		$(LDFLAGS) $(ROM_PROBE_LIBS)
+
+# #98: el boot ROM del TMSS, con un boot ROM sintetico de 2KB escrito en
+# BUILD_DIR como bios_MD.bin. Lee los bordes del banco de 64KB que upstream
+# 774e360a expandio, y le pasa el control al cartucho. Sin la expansion la
+# ultima palabra cae 62KB fuera del buffer.
+check-tmss-bootrom: $(TMSS_BIN) | $(BUILD_DIR)
+	$(call require_core)
+	$(TMSS_BIN) "$(CORE)" "$(BUILD_DIR)"
+
+$(ODD_ACCESS_BIN): ayther/odd_word_access.c ayther/generated_rom.c \
+		ayther/generated_rom.h ayther/cd_fixture.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther \
+		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include \
+		-Iayther -o $@ ayther/odd_word_access.c ayther/generated_rom.c \
+		$(LDFLAGS) $(ROM_PROBE_LIBS)
+
+# #98: accesos de palabra impares y al borde del banco, con address error
+# apagado: es donde las mascaras `& 0xfffe` de upstream (3d948cab, 7b74da34,
+# f9caf203) hacen algo. Cartucho y Sega CD; bajo ASan/UBSan cada mascara
+# vieja es un reporte.
+check-odd-word-access: $(ODD_ACCESS_BIN) | $(BUILD_DIR)
+	$(call require_core)
+	$(ODD_ACCESS_BIN) "$(CORE)" "$(BUILD_DIR)"
 
 # #39.C: por que cada sprite se dibujo o no.
 check-sprite-outcome: $(SPR_OUTCOME_BIN)

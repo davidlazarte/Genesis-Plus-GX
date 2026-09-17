@@ -472,6 +472,21 @@ jobs:
           make -C tests check-mode4-68k-vram
           CORE=../genesis_plus_gx_libretro.so
 
+      # #98: el boot ROM del TMSS, con un boot ROM sintetico de 2KB. Lee los
+      # bordes del banco de 64KB que upstream 774e360a expandio y le pasa el
+      # control al cartucho.
+      - name: TMSS boot ROM bank is expanded and hands over to the cartridge
+        run: >-
+          make -C tests check-tmss-bootrom
+          CORE=../genesis_plus_gx_libretro.so
+
+      # #98: accesos de palabra impares y al borde del banco, con address
+      # error apagado: donde las mascaras `& 0xfffe` de upstream hacen algo.
+      - name: Odd word accesses return the even word next door
+        run: >-
+          make -C tests check-odd-word-access
+          CORE=../genesis_plus_gx_libretro.so
+
       - name: Per-scanline state matches the ROM's own scroll table
         run: >-
           make -C tests check-line-state
@@ -822,6 +837,25 @@ jobs:
             CORE=../genesis_plus_gx_libretro.so \
             2>&1 | tee z80-vdp-fifo.log
 
+      # #98: los dos fixtures que existen por arreglos de UB de upstream, con
+      # la lupa puesta, que es donde se ven: sin la expansion del boot ROM
+      # (774e360a) la ultima palabra del banco cae 62KB fuera del buffer, y
+      # con las mascaras `& 0xffff` viejas (3d948cab, 7b74da34, f9caf203)
+      # cada acceso impar es un reporte. Sin sanitizer solo se ve el valor
+      # equivocado; con el, la causa.
+      - name: TMSS boot ROM and odd word accesses under ASan
+        env:
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=0:report_error_type=1
+          ASAN_OPTIONS: verify_asan_link_order=0
+        run: |
+          set -euo pipefail
+          export LD_LIBRARY_PATH="$(clang -print-runtime-dir):${LD_LIBRARY_PATH:-}"
+          make -C tests check-tmss-bootrom check-odd-word-access CC=clang \
+            CFLAGS="-O1 -g -Wall -Wextra -fsanitize=address,undefined -shared-libsan -fno-omit-frame-pointer" \
+            LDFLAGS="-fsanitize=address,undefined -shared-libsan" \
+            CORE=../genesis_plus_gx_libretro.so \
+            2>&1 | tee odd-access.log
+
       # El veredicto de UBSan (#107). Hasta aca los dos pasos de arriba solo
       # fallaban si ASan abortaba o si un assert del harness saltaba; todo lo
       # que UBSan reporta con halt_on_error=0 quedaba en el log y nadie lo
@@ -844,6 +878,8 @@ jobs:
           bash tests/ci/filter_known_ub.sh z80-vdp-fifo.log
           echo "== fuzz-isolation.log =="
           bash tests/ci/filter_known_ub.sh fuzz-isolation.log
+          echo "== odd-access.log =="
+          bash tests/ci/filter_known_ub.sh odd-access.log
 
       # Los dos logs se suben pase lo que pase: cuando el paso de arriba pone
       # el job en rojo, el reporte completo -con stack trace- esta aca y no
@@ -857,6 +893,7 @@ jobs:
             fuzz-replay.log
             z80-vdp-fifo.log
             fuzz-isolation.log
+            odd-access.log
           if-no-files-found: ignore
           retention-days: 14
 
@@ -1043,6 +1080,22 @@ jobs:
         shell: pwsh
         run: >-
           make -C tests check-mode4-68k-vram
+          CC=clang
+          CORE=../genesis_plus_gx_libretro.dll
+
+      - name: TMSS boot ROM bank is expanded and hands over to the cartridge
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        shell: pwsh
+        run: >-
+          make -C tests check-tmss-bootrom
+          CC=clang
+          CORE=../genesis_plus_gx_libretro.dll
+
+      - name: Odd word accesses return the even word next door
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        shell: pwsh
+        run: >-
+          make -C tests check-odd-word-access
           CC=clang
           CORE=../genesis_plus_gx_libretro.dll
 
@@ -1250,6 +1303,18 @@ jobs:
         if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
         run: >-
           make -C tests check-mode4-68k-vram
+          CORE=../genesis_plus_gx_libretro.dylib
+
+      - name: TMSS boot ROM bank is expanded and hands over to the cartridge
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -C tests check-tmss-bootrom
+          CORE=../genesis_plus_gx_libretro.dylib
+
+      - name: Odd word accesses return the even word next door
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -C tests check-odd-word-access
           CORE=../genesis_plus_gx_libretro.dylib
 
       - name: Journal, frame hashes and resolved palette

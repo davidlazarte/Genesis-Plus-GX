@@ -1783,7 +1783,20 @@ size_t ayther_build_generated_rom_scene(uint8_t *rom, size_t capacity,
    accesible mientras el sub-CPU este parado (SBRQ=1, que es como arranca). */
 #define CD_BIOS_SUB_HALF   0x00010000u  /* segunda mitad de la BIOS: el sub  */
 #define CD_MAIN_PRG_RAM    0x00020000u  /* PRG-RAM banco 0, visto del main   */
-#define CD_SUB_PRG_BYTES   0x00001000u  /* lo que se copia: alcanza de sobra */
+#define CD_SUB_PRG_BYTES   0x00003000u  /* lo que se copia: alcanza de sobra */
+#define CD_MAIN_PRG_MIRROR 0x00060000u  /* espejo de PRG-RAM (#98)           */
+#define CD_MAIN_WORD_RAM   0x00200000u  /* Word-RAM 2M, banco directo        */
+#define CD_MAIN_WORD_MIRROR 0x00240000u /* y su espejo (#98)                 */
+#define CD_GA_COMM_SUB2    0x00a12024u  /* buzones 2 y 3: el sub en PC impar */
+#define CD_GA_COMM_SUB3    0x00a12026u
+#define SUB_GA_COMM2       0x00ff8024u
+#define SUB_GA_COMM3       0x00ff8026u
+#define SUB_UNMAPPED       0x000c0000u  /* sin mapear en modo 2M: bus sin usar */
+#define SUB_ODD_STUB       0x00002000u  /* el stub que corre con PC impar    */
+#define ODD_RAM            0x00ff0000u
+
+/* #98: que variante de BIOS se esta armando (ver AYTHER_CD_BIOS_ODD_ACCESS). */
+static unsigned int cd_bios_flags;
 #define CD_GA_SUB_RESET    0x00a12001u  /* SRES (bit 0) y SBRQ (bit 1)       */
 #define CD_GA_COMM_SUB0    0x00a12020u  /* buzon sub->main, palabra 0        */
 
@@ -1812,6 +1825,24 @@ size_t ayther_build_generated_rom_scene(uint8_t *rom, size_t capacity,
 static void emit_sub_program(struct rom_builder *b)
 {
   emit_u16(b, 0x46fcu); emit_u16(b, 0x2700u);         /* move.w #$2700,sr   */
+
+  if (cd_bios_flags & AYTHER_CD_BIOS_ODD_ACCESS)
+  {
+    /* #98: al stub en PC IMPAR y de vuelta. Con las mascaras corregidas la
+       busqueda en $2001 lee la palabra de $2000, asi que el stub se ejecuta
+       tal cual con el PC impar todo el tiempo; su lectura de $0C0000 entra
+       por s68k_read_bus_16, que devuelve la palabra en PC. */
+    uint32_t back = (uint32_t)(b->pc + 6u);
+    size_t here;
+    emit_u16(b, 0x4ef9u); emit_u32(b, SUB_ODD_STUB + 1u); /* jmp $2001     */
+    here = b->pc;
+    b->pc = SUB_ODD_STUB;
+    emit_move_word_absolute_d0(b, SUB_UNMAPPED);
+    emit_move_word_d0_absolute(b, SUB_GA_COMM2);
+    emit_move_word_immediate_absolute(b, 0x0001u, SUB_GA_COMM3);
+    emit_u16(b, 0x4ef9u); emit_u32(b, back);             /* jmp back       */
+    b->pc = here;
+  }
 
   /* Chip encendido y banco 0 de wave RAM seleccionado (bit 6 = 0: banco). */
   emit_move_byte_immediate_absolute(b, 0x80u, SUB_PCM_CTRL);
@@ -1872,6 +1903,22 @@ static void emit_reset_program_cd(struct rom_builder *b)
      con h-int habilitada el primer h-int saltaria a una direccion impar. */
   emit_vdp_register(b, 0, 0x04u);
 
+  if (cd_bios_flags & AYTHER_CD_BIOS_ODD_ACCESS)
+  {
+    /* #98: con el sub todavia parado, PRG-RAM y Word-RAM se escriben por el
+       banco directo y se releen por el ESPEJO en direccion impar; la
+       escritura impar por el espejo se relee por el banco directo. */
+    emit_move_word_immediate_absolute(b, AYTHER_ODD_VALUE_PRG, CD_MAIN_PRG_RAM);
+    emit_move_word_absolute_d0(b, CD_MAIN_PRG_MIRROR + 1u);
+    emit_move_word_d0_absolute(b, ODD_RAM + AYTHER_ODD_RAM_PRG);
+    emit_move_word_immediate_absolute(b, AYTHER_ODD_VALUE_WORD, CD_MAIN_WORD_RAM);
+    emit_move_word_absolute_d0(b, CD_MAIN_WORD_MIRROR + 1u);
+    emit_move_word_d0_absolute(b, ODD_RAM + AYTHER_ODD_RAM_WORD);
+    emit_move_word_immediate_absolute(b, AYTHER_ODD_VALUE_WORD_W, CD_MAIN_WORD_MIRROR + 3u);
+    emit_move_word_absolute_d0(b, CD_MAIN_WORD_RAM + 2u);
+    emit_move_word_d0_absolute(b, ODD_RAM + AYTHER_ODD_RAM_WORD_W);
+  }
+
   emit_u16(b, 0x41f9u); emit_u32(b, CD_BIOS_SUB_HALF); /* lea sub,a0        */
   emit_u16(b, 0x43f9u); emit_u32(b, CD_MAIN_PRG_RAM);  /* lea prg,a1        */
   emit_u16(b, 0x303cu);                                /* move.w #n-1,d0    */
@@ -1894,11 +1941,25 @@ static uint32_t emit_vertical_handler_cd(struct rom_builder *b)
   emit_move_long_immediate_absolute(b, cram_write_command(0), VDP_CONTROL);
   emit_move_word_absolute_d0(b, CD_GA_COMM_SUB0);
   emit_move_word_d0_absolute(b, VDP_DATA);
+  if (cd_bios_flags & AYTHER_CD_BIOS_ODD_ACCESS)
+  {
+    /* #98: lo que el sub dejo en los buzones 2 y 3, a work RAM. */
+    emit_move_word_absolute_d0(b, CD_GA_COMM_SUB2);
+    emit_move_word_d0_absolute(b, ODD_RAM + AYTHER_ODD_RAM_SUB_BUS);
+    emit_move_word_absolute_d0(b, CD_GA_COMM_SUB3);
+    emit_move_word_d0_absolute(b, ODD_RAM + AYTHER_ODD_RAM_SUB_DONE);
+  }
   emit_vertical_handler(b);
   return address;
 }
 
 size_t ayther_build_generated_cd_bios(uint8_t *bios, size_t capacity)
+{
+  return ayther_build_generated_cd_bios_ex(bios, capacity, 0u);
+}
+
+size_t ayther_build_generated_cd_bios_ex(uint8_t *bios, size_t capacity,
+                                         unsigned int flags)
 {
   struct rom_builder b;
   uint32_t vertical, dflt;
@@ -1906,6 +1967,7 @@ size_t ayther_build_generated_cd_bios(uint8_t *bios, size_t capacity)
 
   if (!bios || capacity < AYTHER_CD_BIOS_SIZE) return 0;
   memset(bios, 0, AYTHER_CD_BIOS_SIZE);
+  cd_bios_flags = flags;
 
   /* Mitad baja: el principal. La cabecera solo importa en 0x120, donde
      load_bios busca los nombres de los modelos (Wondermega, CDX): cualquier
@@ -1935,7 +1997,117 @@ size_t ayther_build_generated_cd_bios(uint8_t *bios, size_t capacity)
     put_u32(b.rom + vector * 4u, dflt);
   put_u32(b.rom + 4u, RESET_PC);
 
+  cd_bios_flags = 0u;
   return AYTHER_CD_BIOS_SIZE;
+}
+
+/* #98: el cartucho de los accesos impares (ver generated_rom.h). */
+static void emit_reset_program_odd_access(struct rom_builder *b)
+{
+  uint32_t stub, back;
+
+  emit_reset_common(b);
+
+  /* La ultima palabra del banco de work RAM, leida y escrita en impar. */
+  emit_move_word_immediate_absolute(b, AYTHER_ODD_VALUE_LAST, 0x00fffffeu);
+  emit_move_word_absolute_d0(b, 0x00ffffffu);
+  emit_move_word_d0_absolute(b, ODD_RAM + AYTHER_ODD_RAM_LAST_R);
+  emit_move_word_immediate_absolute(b, AYTHER_ODD_VALUE_LAST_W, 0x00ffffffu);
+  emit_move_word_absolute_d0(b, 0x00fffffeu);
+  emit_move_word_d0_absolute(b, ODD_RAM + AYTHER_ODD_RAM_LAST_W);
+
+  /* Y un long, que son dos accesos de palabra: $FFFFFD y $FFFFFF. */
+  emit_u16(b, 0x2039u); emit_u32(b, 0x00fffffdu);          /* move.l $FFFFFD,d0 */
+  emit_u16(b, 0x23c0u); emit_u32(b, ODD_RAM + AYTHER_ODD_RAM_LONG); /* move.l d0,ram */
+  emit_u16(b, 0x23fcu); emit_u32(b, 0x0badf00du);          /* move.l #x,$FFFFFD */
+  emit_u32(b, 0x00fffffdu);
+
+  /* El stub en PC impar: se copia de aca a $FF0100 y se salta a $FF0101.
+     Con las mascaras corregidas, la busqueda en $FF0101 lee la palabra de
+     $FF0100 y el stub se ejecuta tal cual con el PC impar todo el tiempo:
+     su lectura de $A11300 entra por m68k_read_bus_16, que devuelve la
+     palabra en PC. El stub vuelve al ROM con un jmp a la continuacion. */
+  stub = (uint32_t)(b->pc + 28u);   /* lea+lea+move.w+move.w+dbra+jmp */
+  back = stub + 26u;                /* largo del stub */
+  emit_u16(b, 0x41f9u); emit_u32(b, stub);                 /* lea stub,a0   */
+  emit_u16(b, 0x43f9u); emit_u32(b, 0x00ff0100u);          /* lea ram,a1    */
+  emit_u16(b, 0x323cu); emit_u16(b, 26u / 2u - 1u);        /* move.w #12,d1 */
+  emit_u16(b, 0x32d8u);                                    /* move.w (a0)+,(a1)+ */
+  emit_u16(b, 0x51c9u); emit_u16(b, 0xfffcu);              /* dbra d1,-4    */
+  emit_u16(b, 0x4ef9u); emit_u32(b, 0x00ff0101u);          /* jmp $FF0101   */
+  /* el stub (26 bytes) */
+  emit_move_word_absolute_d0(b, 0x00a11300u);              /* 6             */
+  emit_move_word_d0_absolute(b, ODD_RAM + AYTHER_ODD_RAM_BUS);          /* 6 */
+  emit_move_word_immediate_absolute(b, 0x0001u, ODD_RAM + AYTHER_ODD_RAM_DONE); /* 8 */
+  emit_u16(b, 0x4ef9u); emit_u32(b, back);                 /* jmp back: 6   */
+
+  emit_wait_forever(b);
+}
+
+size_t ayther_build_generated_rom_odd_access(uint8_t *rom, size_t capacity)
+{
+  return build_rom(rom, capacity, emit_reset_program_odd_access);
+}
+
+/* ------------------------------------------------------------------------ */
+/* #98: el boot ROM del TMSS.                                                */
+/* ------------------------------------------------------------------------ */
+
+#define BOOT_STUB_OFFSET   0x00000300u  /* el stub, como datos en el boot ROM */
+#define BOOT_STUB_RAM      0x00ff0100u  /* y de donde se ejecuta             */
+#define BOOT_RAM_BASE      0x00ff0000u
+#define BOOT_CART_ENABLE   0x00a14101u  /* bit 0 = 1: cartucho en $000000   */
+
+size_t ayther_build_generated_boot_rom(uint8_t *rom, size_t capacity)
+{
+  struct rom_builder b;
+  size_t vector, stub_words;
+  uint32_t dflt;
+
+  if (!rom || capacity < AYTHER_BOOT_ROM_SIZE) return 0;
+  memset(rom, 0, AYTHER_BOOT_ROM_SIZE);
+  memcpy(rom + 0x100u, "SEGA MEGA DRIVE ", 16u);
+  memcpy(rom + 0x120u, "GENESIS OS      ", 16u);
+
+  /* El stub, en 0x300. Corre desde RAM: en cuanto escribe $A14101 el banco 0
+     pasa a ser el cartucho, y lo que sigue se busca ahi. Toma SP y PC de los
+     vectores del cartucho, que ahora estan en $000000. */
+  b.rom = rom; b.pc = BOOT_STUB_OFFSET; b.failed = 0;
+  emit_move_byte_immediate_absolute(&b, 0x01u, BOOT_CART_ENABLE);
+  emit_move_word_immediate_absolute(&b, 0x0001u, BOOT_RAM_BASE + AYTHER_BOOT_RAM_DONE);
+  emit_u16(&b, 0x2e79u); emit_u32(&b, 0x00000000u);   /* movea.l $0.l,a7   */
+  emit_u16(&b, 0x2079u); emit_u32(&b, 0x00000004u);   /* movea.l $4.l,a0   */
+  emit_u16(&b, 0x4ed0u);                              /* jmp (a0)          */
+  stub_words = (b.pc - BOOT_STUB_OFFSET) / 2u;
+
+  /* El programa, en 0x200: leer los bordes del banco de 64KB y guardar. */
+  b.pc = RESET_PC;
+  emit_u16(&b, 0x46fcu); emit_u16(&b, 0x2700u);       /* move.w #$2700,sr  */
+  emit_move_word_absolute_d0(&b, 0x0000fffeu);        /* ultima palabra    */
+  emit_move_word_d0_absolute(&b, BOOT_RAM_BASE + AYTHER_BOOT_RAM_LAST);
+  emit_move_word_absolute_d0(&b, 0x00000800u);        /* primer espejo     */
+  emit_move_word_d0_absolute(&b, BOOT_RAM_BASE + AYTHER_BOOT_RAM_FIRST);
+  emit_move_word_absolute_d0(&b, 0x000087feu);        /* espejo del medio  */
+  emit_move_word_d0_absolute(&b, BOOT_RAM_BASE + AYTHER_BOOT_RAM_MID);
+  emit_move_word_immediate_absolute(&b, 0x0000u, BOOT_RAM_BASE + AYTHER_BOOT_RAM_DONE);
+  emit_u16(&b, 0x41f9u); emit_u32(&b, BOOT_STUB_OFFSET); /* lea stub,a0    */
+  emit_u16(&b, 0x43f9u); emit_u32(&b, BOOT_STUB_RAM);    /* lea ram,a1     */
+  emit_u16(&b, 0x323cu); emit_u16(&b, (uint16_t)(stub_words - 1u));
+  emit_u16(&b, 0x32d8u);                              /* move.w (a0)+,(a1)+ */
+  emit_u16(&b, 0x51c9u); emit_u16(&b, 0xfffcu);       /* dbra d1,-4        */
+  emit_u16(&b, 0x4ef9u); emit_u32(&b, BOOT_STUB_RAM); /* jmp stub          */
+  dflt = (uint32_t)b.pc;
+  emit_u16(&b, 0x4e73u);                              /* rte               */
+  if (b.failed || b.pc > BOOT_STUB_OFFSET) return 0;
+
+  put_u32(rom, 0x00ffff00u);
+  for (vector = 1u; vector < 64u; ++vector)
+    put_u32(rom + vector * 4u, dflt);
+  put_u32(rom + 4u, RESET_PC);
+
+  /* La marca en la ultima palabra: lo que $00FFFE tiene que devolver. */
+  put_u16(rom + AYTHER_BOOT_ROM_SIZE - 2u, AYTHER_BOOT_MARK);
+  return AYTHER_BOOT_ROM_SIZE;
 }
 
 size_t ayther_build_generated_cd_image(uint8_t *iso, size_t capacity)

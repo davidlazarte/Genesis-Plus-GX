@@ -9,22 +9,30 @@ fuzzer y de forma determinística, para que el bug no pueda volver en silencio.
 El replay falla cuando el proceso **crashea**: un abort, un segfault, un error
 de ASan. Eso cubre la mayoría de los hallazgos.
 
-No cubre **UB que solo se reporta**. UBSan por defecto imprime `runtime error`
-y sigue, así que el replay termina en cero y el caso figura como `ok`. Y aunque
-se le pusiera `halt_on_error=1`, el gate se pondría rojo en el primer UB
-*aceptado* de [`../../ci/known_ub.txt`](../../ci/known_ub.txt) — los stores
-desalineados del renderer upstream —, que es un motivo equivocado para frenar
-un merge.
+Por sí solo **no** cubre **UB que solo se reporta**: UBSan por defecto imprime
+`runtime error` y sigue, así que el replay termina en cero y el caso figura
+como `ok`. Por eso ni el job de PR ni el nocturno miran solo el código de
+salida: guardan el log y le aplican
+[`filter_known_ub.sh`](../../ci/filter_known_ub.sh) contra
+[`known_ub.txt`](../../ci/known_ub.txt), que es donde vive la decisión de qué
+UB se acepta — y que está **vacía** desde #101, así que hoy el veredicto es
+"sin UB" a secas.
 
-Hay una segunda razón, más de fondo: `check-fuzz` corre contra el core que le
-pasen por `CORE=`, que normalmente **no** está instrumentado. El UB de un
-hallazgo suele estar dentro del core, no en el driver, así que ahí no hay
-chequeo que dispare.
+- El job `fuzz-regressions` de
+  [`ayther-ci.yml`](../../../.github/workflows/ayther-ci.yml) corre en cada
+  PR: compila el core con ASan+UBSan, reproduce el corpus y `regressions/` y
+  el fixture Z80/VDP, y filtra **los dos logs** (#107). Hasta #107 solo el
+  crash ponía ese job en rojo; un UB recuperable quedaba en el log y nadie lo
+  miraba.
+- El nocturno ([`ayther-fuzz.yml`](../../../.github/workflows/ayther-fuzz.yml))
+  hace lo mismo con el log de cada target mientras **busca** entradas nuevas.
 
-Quien sí los ejerce con la lupa puesta es el job nocturno
-([`ayther-fuzz.yml`](../../../.github/workflows/ayther-fuzz.yml)): compila el
-core con ASan+UBSan y filtra los reportes por `known_ub.txt`, que es donde vive
-la decisión de qué UB se acepta.
+Hay una segunda razón para que `make -C tests check-fuzz` a secas no alcance:
+corre contra el core que le pasen por `CORE=`, que normalmente **no** está
+instrumentado. El UB de un hallazgo suele estar dentro del core, no en el
+driver, así que ahí no hay chequeo que dispare. La lupa la pone el core
+instrumentado de la sección siguiente, y el veredicto,
+`bash tests/ci/filter_known_ub.sh <log>` sobre lo que ese core imprimió.
 
 ## Reproducir un caso con la lupa
 

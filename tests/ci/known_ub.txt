@@ -1,4 +1,4 @@
-# UB conocido y aceptado, con dueño y fecha (#38).
+# UB conocido y aceptado, con dueno y fecha (#38).
 #
 # Cada linea es una subcadena; un reporte de UBSan que la contenga no falla el
 # job. Todo lo demas si. La lista existe para que el job pueda ser una PUERTA
@@ -7,46 +7,51 @@
 # practica es lo mismo que no tenerlo).
 #
 # Para sacar una entrada de aca hay que arreglar la causa, no ampliar la lista.
-
-# --- upstream Genesis Plus GX, no del fork ---
-# El renderer escribe el linebuf de a 32 bits para cubrir 4 pixeles por store, y
-# con scroll horizontal fino el destino arranca en `0x10 + shift` (shift 0..7),
-# que solo esta alineado a 4 cuando shift es multiplo de 4. En x86 el store
-# desalineado funciona; en arm64 puede ser mas lento o directamente fallar segun
-# como este configurado el kernel.
 #
-# Se deja documentado en vez de arreglado porque el fix toca el bucle interno de
-# un renderer upstream -sube el delta de rebase y hay que medir el costo-, y
-# porque hoy no rompe ninguna plataforma soportada. Se vuelve un problema real
-# cuando entre macOS arm64 al matrix: ver #35.
-# Granularidad: ARCHIVO + CLASE de UB, no archivo:linea:columna.
+# ---------------------------------------------------------------------------
+# HOY LA LISTA ESTA VACIA (#101, 2026-09-15).
 #
-# Empece fijando los ocho sitios exactos, que es mas preciso, y duro hasta el
-# primer commit que edito vdp_render.c: las lineas se corren y el gate se pone
-# rojo sin que haya UB nuevo. Un gate que hay que reeditar cada vez que se toca
-# el archivo termina desactivado.
+# No es un descuido: es el estado al que el archivo apuntaba desde el principio.
+# Mientras este vacia, el gate no dice "sin UB NUEVO" sino "SIN UB", que es una
+# afirmacion mucho mas fuerte y mucho mas facil de defender. Conviene que cueste
+# volver a llenarla.
 #
-# Lo que se pierde: un store desalineado NUEVO dentro de vdp_render.c pasaria.
-# Lo que se conserva: cualquier otra clase de UB en este archivo, y cualquier
-# clase en cualquier otro archivo. Es el equilibrio correcto mientras todos los
-# casos conocidos sean el MISMO patron upstream; si aparece uno de otra
-# naturaleza en este archivo, hay que partir la entrada.
-vdp_render.c|store to misaligned address
-
-# Mismo patron, otro archivo: #43.4 saco `ayther_draw_col` de vdp_render.c a su
-# propio header. El codigo no cambio -- la DLL quedo byte a byte del mismo
-# tamanio-- pero UBSan reporta por archivo, asi que el gate lo vio como UB
-# nuevo. Es el store de 32 bits de DRAW_COLUMN sobre `0x10 + shift`, el mismo
-# que describe la entrada de arriba y con la misma condicion de salida: se
-# arregla cuando macOS arm64 entre al matrix (#35).
-ayther_draw_column.h|store to misaligned address
-
-# Mismo patron upstream, tercer archivo, y esta vez del lado de la CARGA: el
-# interprete del 68000 lee palabras del stream de instrucciones con punteros
-# que no siempre caen alineados a 2. Lo encontro el fuzzing de #34 al empezar
-# a correr de verdad; no es codigo nuevo ni del fork.
+# Las tres entradas que vivieron aca -- vdp_render.c y ayther_draw_column.h del
+# lado del store, m68kcpu.h del lado de la carga-- se fueron asi:
 #
-# Misma condicion de salida que las dos entradas de arriba: se arregla cuando
-# macOS arm64 entre al matrix (#35), no antes, porque el fix toca el nucleo
-# del interprete y hoy no rompe ninguna plataforma soportada.
-m68kcpu.h|load of misaligned address
+#   Las dos del store eran el mismo patron: el renderer escribe `linebuf` de a
+#   32 bits para cubrir cuatro pixeles por store, y con scroll horizontal fino
+#   el destino arranca en `0x10 + shift`, que solo esta alineado a 4 cuando
+#   shift es multiplo de 4. Se arreglaron prendiendo ALIGN_LONG, que es un
+#   switch DE UPSTREAM que upstream ya usa para Android, gcw0, PS2 y el resto
+#   de los targets ARM: cambia esos stores por WRITE_LONG, que chequea la
+#   alineacion. Cero lineas de C tocadas, un solo punto de contacto nuevo en
+#   Makefile.libretro, 372 reportes de UBSan a cero, goldens sin moverse y
+#   -0.6% de costo medido intercalando A/B/A/B (o sea: ruido).
+#
+#   La de m68kcpu.h perdio su causa en el sync de #74: 3d948cab enmascaro a par
+#   los siete accesos de palabra del interprete. Hoy los siete `*(uint16 *)` del
+#   archivo van con `& 0xfffe` y no hay ningun `*(uint32 *)`, asi que con `base`
+#   apuntando a pagina una carga desalineada de `unsigned short` no puede
+#   ocurrir por construccion.
+#
+#   Honestidad sobre esa ultima: el argumento es ESTATICO. Se intento
+#   reproducirla revirtiendo las mascaras a `0xffff` y corriendo replay,
+#   escenas y check-fuzz bajo UBSan, y NO aparece -- ni con las mascaras viejas
+#   ni con las nuevas. O sea que el corpus es ciego a ese sitio y no sirve de
+#   oraculo en ninguna direccion. Esa ceguera es material para #98. Si la carga
+#   desalineada vuelve a aparecer, el gate la va a ver, que es exactamente para
+#   lo que existe.
+#
+# Lo que hay que traer para agregar una entrada nueva, y que las tres viejas no
+# tuvieron nunca:
+#
+#   1. El reporte, con archivo y clase de UB.
+#   2. Por que no se arregla AHORA -- no "cuando pase X": una condicion de
+#      salida sin dueno vence en silencio, y estas tres estuvieron tres semanas
+#      vencidas sin que nadie se enterara.
+#   3. En que plataformas se midio. Las tres viejas decian "no rompe ninguna
+#      plataforma soportada" y estaban medidas SOLO en x86-64, que es justo
+#      donde un acceso desalineado no molesta. Desde #101 UBSan tambien corre en
+#      arm64, asi que una entrada nueva se mide en las dos.
+# ---------------------------------------------------------------------------

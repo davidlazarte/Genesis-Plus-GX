@@ -57,7 +57,15 @@ replay_status=${PIPESTATUS[0]}
 # La decision de "que UB se acepta" vive en filter_known_ub.sh, compartida con
 # el job nocturno de fuzzing (#34). Dos copias divergen, y el modo de fallar es
 # el peor: el gate que se quedo viejo sigue verde.
-bash "$here/filter_known_ub.sh" "$log" "$known" || exit 1
+#
+# El codigo se propaga TAL CUAL (#103). Estaba como `|| exit 1`, que aplastaba
+# el 2 del filtro -- "falta la lista" o "la lista tiene un patron mal formado"--
+# contra el 1 de "hay UB nuevo". Son dos noticias distintas: una dice que el
+# codigo tiene un problema, la otra que el gate no se puede evaluar, y quien
+# mira el job en rojo necesita saber cual de las dos es.
+bash "$here/filter_known_ub.sh" "$log" "$known"
+filtro_status=$?
+[ "$filtro_status" -eq 0 ] || exit "$filtro_status"
 
 if [ "$replay_status" -ne 0 ]; then
   echo "el replay fallo por si mismo (golden o assert), no por el sanitizer" >&2

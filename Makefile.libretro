@@ -862,6 +862,29 @@ ifeq ($(CDROM_DEBUG), 1)
 endif
 endif
 
+# AYTHER fork delta (#101): ALIGN_LONG en TODAS nuestras plataformas.
+#
+# Es un switch de upstream, no nuestro: cambia los stores de 32 bits del
+# renderer por WRITE_LONG, que chequea la alineacion y cae a cuatro stores de
+# byte cuando hace falta. Upstream ya lo prende para Android, gcw0, PS2 y el
+# resto de los targets ARM; nuestras tres plataformas -unix, win, osx- lo
+# tenian apagado, y por eso el renderer escribia `linebuf` a 32 bits sobre
+# `0x10 + shift`, que solo esta alineado cuando shift es multiplo de 4.
+#
+# Eran las dos primeras excepciones de tests/ci/known_ub.txt. La justificacion
+# para dejarlas decia "hay que medir el costo" y "se arregla cuando macOS arm64
+# entre al matrix". arm64 entro en ed2441d3 y el costo se midio: intercalando
+# A/B/A/B seis veces sobre el replay full-core, -0.6% de mediana, que es ruido
+# (las corridas individuales se pisan entre si). Con esto los reportes de UBSan
+# pasan de 372 a CERO y los hashes de los goldens no se mueven.
+#
+# Va aca, despues de la cadena de ifs de plataforma y en un solo lugar, en vez
+# de sumar -DALIGN_LONG a los tres bloques: un punto de contacto con upstream
+# en vez de tres. El findstring lo hace no-op donde upstream ya lo prende.
+ifeq (,$(findstring -DALIGN_LONG,$(ENDIANNESS_DEFINES) $(PLATFORM_DEFINES)))
+   ENDIANNESS_DEFINES += -DALIGN_LONG
+endif
+
 LIBRETRO_CFLAGS += $(INCFLAGS) $(INCFLAGS_PLATFORM)
 LIBRETRO_CFLAGS += $(BPP_DEFINES) \
 		$(ENDIANNESS_DEFINES) \

@@ -970,6 +970,18 @@ jobs:
         shell: pwsh
         run: make -C tests check CC=clang
 
+      # #114: la deteccion de shell tambien se prueba ACA, porque el caso que
+      # fallaba solo existe en Windows: sin sh.exe en el PATH, make informa
+      # `$(SHELL) = sh.exe` y ejecuta cmd. El job de Linux corre la tabla; este
+      # corre ademas make_dir y require_core con el PATH sin ningun sh.
+      # `shell: bash` y no `bash` desde pwsh: en una maquina con WSL, `bash` a
+      # secas desde PowerShell puede ser el de WSL (uname Linux) y el caso se
+      # salta solo. GitHub resuelve `shell: bash` al de Git for Windows.
+      - name: The shell detection survives a PATH without sh.exe
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        shell: bash
+        run: bash tests/ci/check_shell_detection.sh
+
       - name: Replay generated ROM across save/load boundary
         if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
         shell: pwsh

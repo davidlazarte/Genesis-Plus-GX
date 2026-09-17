@@ -18,6 +18,11 @@ size_t ayther_build_generated_rom(uint8_t *rom, size_t capacity);
  * las dos plataformas sin necesidad. */
 size_t ayther_build_generated_rom_fm(uint8_t *rom, size_t capacity);
 
+/* El de arriba con el 68000 corriendo libre (un contador en RAM en vez de
+ * `stop`), para que el estado serializado tras cada frame dependa de la fase
+ * del refresh del bus (#118). Lo usa check-rom-probe. */
+size_t ayther_build_generated_rom_fm_busy(uint8_t *rom, size_t capacity);
+
 /* #76: cartucho de Mega Drive con EEPROM I2C serie, declarada por CABECERA
    (0x1b0 = "RA", 0x1b2 = 0xe8) para no depender de la base de CRCs del core.
    El reset abre una lectura y el handler vertical le da dos pulsos de reloj por

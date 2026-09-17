@@ -480,6 +480,16 @@ jobs:
           make -C tests check-tmss-bootrom
           CORE=../genesis_plus_gx_libretro.so
 
+      # #117: el probe de ROMs comerciales (validate-roms) tiene un camino con
+      # checkpoint -serializar a mitad de partida, seguir, restaurar y volver a
+      # correr la misma continuacion- que aca corre con el ROM sintetico de FM:
+      # video y audio de la continuacion restaurada tienen que dar la misma
+      # huella frame a frame. Sin esto el probe solo se compilaba en CI.
+      - name: ROM probe with a synthetic ROM and a mid-run checkpoint
+        run: >-
+          make -C tests check-rom-probe
+          CORE=../genesis_plus_gx_libretro.so
+
       # #98: accesos de palabra impares y al borde del banco, con address
       # error apagado: donde las mascaras `& 0xfffe` de upstream hacen algo.
       - name: Odd word accesses return the even word next door
@@ -869,14 +879,14 @@ jobs:
       # con las mascaras `& 0xffff` viejas (3d948cab, 7b74da34, f9caf203)
       # cada acceso impar es un reporte. Sin sanitizer solo se ve el valor
       # equivocado; con el, la causa.
-      - name: TMSS boot ROM and odd word accesses under ASan
+      - name: TMSS boot ROM, odd word accesses and the ROM probe checkpoint under ASan
         env:
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=0:report_error_type=1
           ASAN_OPTIONS: verify_asan_link_order=0
         run: |
           set -euo pipefail
           export LD_LIBRARY_PATH="$(clang -print-runtime-dir):${LD_LIBRARY_PATH:-}"
-          make -C tests check-tmss-bootrom check-odd-word-access CC=clang \
+          make -C tests check-tmss-bootrom check-odd-word-access check-rom-probe CC=clang \
             CFLAGS="-O1 -g -Wall -Wextra -fsanitize=address,undefined -shared-libsan -fno-omit-frame-pointer" \
             LDFLAGS="-fsanitize=address,undefined -shared-libsan" \
             CORE=../genesis_plus_gx_libretro.so \
@@ -1132,6 +1142,15 @@ jobs:
           CC=clang
           CORE=../genesis_plus_gx_libretro.dll
 
+      # #117: ver el job de Linux.
+      - name: ROM probe with a synthetic ROM and a mid-run checkpoint
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        shell: pwsh
+        run: >-
+          make -C tests check-rom-probe
+          CC=clang
+          CORE=../genesis_plus_gx_libretro.dll
+
       - name: Odd word accesses return the even word next door
         if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
         shell: pwsh
@@ -1350,6 +1369,13 @@ jobs:
         if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
         run: >-
           make -C tests check-tmss-bootrom
+          CORE=../genesis_plus_gx_libretro.dylib
+
+      # #117: ver el job de Linux.
+      - name: ROM probe with a synthetic ROM and a mid-run checkpoint
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -C tests check-rom-probe
           CORE=../genesis_plus_gx_libretro.dylib
 
       - name: Odd word accesses return the even word next door

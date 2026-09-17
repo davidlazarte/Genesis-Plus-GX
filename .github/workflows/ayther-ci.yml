@@ -745,6 +745,23 @@ jobs:
           make -C tests check-fuzz CC=clang CORE=../genesis_plus_gx_libretro.so \
             2>&1 | tee fuzz-replay.log
 
+      # #108: el aislamiento de las entradas de `unserialize`, medido y no
+      # declarado. El target decia restaurar "un estado sano" entre entradas y
+      # restauraba el estado actual, ya podrido: dos veces (#63, #105) el
+      # crash-* del nocturno no reproducia solo por eso. Este paso afirma que
+      # cada entrada da la MISMA huella sola, repetida, y detras de las demas
+      # en orden directo e inverso. Usa el replay que acaba de compilar el
+      # paso de arriba y el mismo core; su stderr va a un log que se juzga
+      # con el filtro, mas abajo, igual que los otros dos.
+      - name: Each unserialize entry gives the same result alone, repeated and after the others
+        env:
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=0:report_error_type=1
+          ASAN_OPTIONS: verify_asan_link_order=0
+        run: |
+          set -euo pipefail
+          export LD_LIBRARY_PATH="$(clang -print-runtime-dir):${LD_LIBRARY_PATH:-}"
+          bash tests/ci/check_fuzz_isolation.sh genesis_plus_gx_libretro.so md fuzz-isolation.log
+
       # El gate no puede encogerse en silencio. `check-fuzz` sale de un fan-out
       # sobre TARGETS y SCENES_unserialize (tests/fuzz/Makefile): si alguien
       # saca un target o una escena, la CI se pondria MAS VERDE y nadie se
@@ -815,6 +832,8 @@ jobs:
           bash tests/ci/filter_known_ub.sh fuzz-replay.log
           echo "== z80-vdp-fifo.log =="
           bash tests/ci/filter_known_ub.sh z80-vdp-fifo.log
+          echo "== fuzz-isolation.log =="
+          bash tests/ci/filter_known_ub.sh fuzz-isolation.log
 
       # Los dos logs se suben pase lo que pase: cuando el paso de arriba pone
       # el job en rojo, el reporte completo -con stack trace- esta aca y no
@@ -827,6 +846,7 @@ jobs:
           path: |
             fuzz-replay.log
             z80-vdp-fifo.log
+            fuzz-isolation.log
           if-no-files-found: ignore
           retention-days: 14
 

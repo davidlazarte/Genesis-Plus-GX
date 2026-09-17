@@ -27,6 +27,7 @@ core/cd_hw/cdd.c	(sin funcion)	* Copyright (C) 2012-2026 Eke-Eke (Genesis Plus G
 core/cd_hw/cdd.c	int cdd_context_load(uint8 *state, char *version)	if (index > cdd.toc.last)
 core/cd_hw/cdd.c	void cdd_update(void)	cdc_decoder_update(0);
 core/cd_hw/cdd.h	(sin funcion)	* Copyright (C) 2012-2026 Eke-Eke (Genesis Plus GX)
+core/cd_hw/gfx.c	void gfx_init(void)	gfx.tracePtr = (uint16 *)scd.word_ram_2M;
 core/cd_hw/pcm.c	extern int8 reset_do_not_clear_buffers;	#include "audio_probe.h"
 core/cd_hw/pcm.c	void pcm_run(unsigned int length)	int l_delta = ((data * pcm.chan[j].env * (pcm.chan[j].pan & 0x0F)) >> 5);
 core/cd_hw/pcm.c	void pcm_run(unsigned int length)	l += l_delta;
@@ -36,6 +37,7 @@ core/cd_hw/pcm.c	void pcm_write(unsigned int address, unsigned char data, unsign
 core/cd_hw/pcm.c	void pcm_write(unsigned int address, unsigned char data, unsigned int cycles)	audio_probe_pcm_volume(pcm.index, pcm.chan[pcm.index].env, data);
 core/cd_hw/pcm.c	void pcm_write(unsigned int address, unsigned char data, unsigned int cycles)	int i;
 core/cd_hw/pcm.c	void pcm_write(unsigned int address, unsigned char data, unsigned int cycles)	unsigned char old_status = pcm.status;
+core/cd_hw/scd.c	int scd_context_load(uint8 *state, char *version)	int loaded = cdd_context_load(&state[bufferptr], version);
 core/cd_hw/scd.c	static unsigned int prg_ram_m68k_read_word(unsigned int address)	return *(uint16 *)(m68k.memory_map[offset].base + (address & 0xfffe));
 core/cd_hw/scd.c	static unsigned int s68k_read_bus_16(unsigned int address)	return *(uint16 *)(s68k.memory_map[((address)>>16)&0xff].base + ((address) & 0xfffe));
 core/cd_hw/scd.c	static unsigned int word_ram_m68k_read_word(unsigned int address)	return *(uint16 *)(m68k.memory_map[offset].base + (address & 0xfffe));
@@ -140,6 +142,8 @@ core/sound/ym3438.h	void OPN2_SetTestPin(ym3438_t *chip, Bit32u value);	void OPN
 core/state.c	(sin funcion)	#include "gamepad.h"
 core/state.c	int state_load(unsigned char *state)	PAIR *pairs[] = {
 core/state.c	int state_load(unsigned char *state)	if (version[15] >= 0x37)
+core/state.c	int state_load(unsigned char *state)	int loaded = scd_context_load(&state[bufferptr], version);
+core/state.c	int state_load(unsigned char *state)	io_reg[0] = region_code | (config.bios & 1);
 core/state.c	int state_load(unsigned char *state)	zbank &= 0xFF8000;
 core/state.c	int state_save(unsigned char *state)	Z80_Regs z80_state = Z80;
 core/state.c	int state_save(unsigned char *state)	bufferptr += gamepad_context_save(&state[bufferptr]);

@@ -250,7 +250,17 @@ int state_load(unsigned char *state)
     }
 
     /* CD hardware */
-    bufferptr += scd_context_load(&state[bufferptr], version);
+    /* AYTHER fork delta (#97): un 0 de scd_context_load es un rechazo (indice
+       de pista fuera de la TOC), no cero bytes: se devuelve 0 para que
+       retro_unserialize conteste FALSE, como con un blob sin el id SCD!. */
+    {
+      int loaded = scd_context_load(&state[bufferptr], version);
+      if (!loaded)
+      {
+        return 0;
+      }
+      bufferptr += loaded;
+    }
   }
   else if ((system_hw & SYSTEM_PBC) == SYSTEM_MD)
   {  

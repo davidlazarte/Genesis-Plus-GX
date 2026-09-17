@@ -2113,7 +2113,22 @@ int scd_context_load(uint8 *state, char *version)
   bufferptr += cdc_context_load(&state[bufferptr]);
 
   /* CD Drive processor */
-  bufferptr += cdd_context_load(&state[bufferptr], version);
+  {
+    /* AYTHER fork delta (#97): cdd_context_load devuelve 0 cuando el indice
+       de pista del blob esta fuera de la TOC (upstream c06f586b). Sumado como
+       "cero bytes consumidos", el PCM y todo lo que sigue se cargaban desde el
+       offset equivocado y state_load daba el estado por bueno: la lectura
+       fuera de rango que ese commit evito se cambiaba por una carga corrupta.
+       Un 0 aca es rechazo, y se propaga como tal (state_load lo devuelve y
+       retro_unserialize contesta FALSE), igual que cuando el blob no trae el
+       id "SCD!". */
+    int loaded = cdd_context_load(&state[bufferptr], version);
+    if (!loaded)
+    {
+      return 0;
+    }
+    bufferptr += loaded;
+  }
 
   /* PCM chip */
   bufferptr += pcm_context_load(&state[bufferptr]);

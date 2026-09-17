@@ -28,6 +28,7 @@
 #include <libretro.h>
 #include "ayther_api.h"
 #include "generated_rom.h"
+#include "cd_fixture.h"
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -82,16 +83,27 @@ typedef enum fuzz_scene
 {
   FUZZ_SCENE_MD = 0,      /* Mega Drive, YM2612 de MAME (el de siempre)   */
   FUZZ_SCENE_MD_NUKED,    /* Mega Drive, Nuked OPN2  (config.ym3438 = 1)  */
-  FUZZ_SCENE_SMS_FM       /* Master System, Nuked YM2413 (config.opll = 1)*/
+  FUZZ_SCENE_SMS_FM,      /* Master System, Nuked YM2413 (config.opll = 1)*/
+  FUZZ_SCENE_SCD          /* Sega CD, BIOS e imagen sinteticas (#97)      */
 } fuzz_scene;
 
 static fuzz_scene fuzz_scene_id;
+
+/* #97: la escena de CD escribe la BIOS y la imagen en este directorio, y el
+   core las lee de ahi. Viaja por el entorno como el core y la escena. */
+static const char *fuzz_workdir(void)
+{
+  const char *d = getenv("AYTHER_FUZZ_WORKDIR");
+  return (d && *d) ? d : ".";
+}
+static char fuzz_cd_path[1024];
 
 static const char *fuzz_scene_name(fuzz_scene s)
 {
   switch (s) {
     case FUZZ_SCENE_MD_NUKED: return "md-nuked";
     case FUZZ_SCENE_SMS_FM:   return "sms-fm";
+    case FUZZ_SCENE_SCD:      return "scd";
     default:                  return "md";
   }
 }
@@ -107,7 +119,8 @@ static fuzz_scene fuzz_scene_from_env(void)
   if (!v || !*v || !strcmp(v, "md")) return FUZZ_SCENE_MD;
   if (!strcmp(v, "md-nuked"))        return FUZZ_SCENE_MD_NUKED;
   if (!strcmp(v, "sms-fm"))          return FUZZ_SCENE_SMS_FM;
-  fprintf(stderr, "AYTHER_FUZZ_SCENE=%s no existe (md, md-nuked, sms-fm)\n", v);
+  if (!strcmp(v, "scd"))             return FUZZ_SCENE_SCD;
+  fprintf(stderr, "AYTHER_FUZZ_SCENE=%s no existe (md, md-nuked, sms-fm, scd)\n", v);
   exit(2);
 }
 
@@ -129,11 +142,14 @@ static bool fuzz_env_cb(unsigned cmd, void *data)
       if (data) *(int *)data = 3;
       return data != NULL;
     case RETRO_ENVIRONMENT_GET_GAME_INFO_EXT:
+      /* El CD entra por ruta (cdd_load abre la imagen del disco): sin
+         info_ext el core usa retro_game_info.path. */
+      if (fuzz_scene_id == FUZZ_SCENE_SCD) return false;
       if (data) *(const struct retro_game_info_ext **)data = &fuzz_gi_ext;
       return data != NULL;
     case RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY:
     case RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY:
-      if (data) *(const char **)data = ".";
+      if (data) *(const char **)data = fuzz_workdir();
       return data != NULL;
     case RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME:
     case RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS:
@@ -231,6 +247,23 @@ static fuzz_core *fuzz_core_get(void)
   fuzz_g.set_input_poll(fuzz_poll_cb);
   fuzz_g.set_input_state(fuzz_input_cb);
   fuzz_g.init();
+
+  /* #97: el CD es distinto de los cartuchos: dos archivos en disco (BIOS e
+     imagen) y el core recibe la RUTA de la imagen, no sus bytes. */
+  if (fuzz_scene_id == FUZZ_SCENE_SCD) {
+    if (!ayther_cd_fixture_write(fuzz_workdir(), fuzz_cd_path, sizeof(fuzz_cd_path))) {
+      fprintf(stderr, "no se pudo escribir el fixture de CD en %s\n", fuzz_workdir());
+      exit(2);
+    }
+    memset(&gi, 0, sizeof(gi));
+    gi.path = fuzz_cd_path;
+    if (!fuzz_g.load_game(&gi)) {
+      fprintf(stderr, "load_game fallo con el Sega CD sintetico\n");
+      exit(2);
+    }
+    fprintf(stderr, "escena: %s\n", fuzz_scene_name(fuzz_scene_id));
+    return &fuzz_g;
+  }
 
   /* La extension es lo que hace que el core elija Master System o Mega Drive,
      asi que va pegada al generador y no puede quedar desincronizada. */

@@ -310,6 +310,17 @@ void gfx_init(void)
 
   memset(&gfx, 0, sizeof(gfx_t));
 
+  /* AYTHER fork delta (#97): los dos punteros a Word-RAM arrancan apuntando a
+     su base, no a NULL. gfx_context_save los serializa como OFFSET respecto de
+     scd.word_ram_2M, y hasta que llega la primera operacion grafica (que es
+     quien los asigna, en gfx_start) valian NULL: el savestate guardaba
+     `NULL - word_ram_2M`, un numero que depende del ASLR del proceso, y que
+     gfx_context_load recortaba a 0x3fff8 al volver. Dos serializaciones del
+     mismo estado no daban los mismos bytes, y un estado recargado no daba los
+     bytes del original. Lo encontro el roundtrip del fixture sintetico de CD. */
+  gfx.tracePtr = (uint16 *)scd.word_ram_2M;
+  gfx.mapPtr = (uint16 *)scd.word_ram_2M;
+
   /* Initialize cell image lookup table */
   /* $220000-$22FFFF corresponds to $200000-$20FFFF */
   for (i=0; i<0x4000; i++)

@@ -59,7 +59,7 @@ endif
 # vacio gasta el presupuesto en llegar a "es un cartucho".
 COMMON_SRC := $(CORE_DIR)/tests/ayther/generated_rom.c
 COMMON_DEP := fuzz_common.h $(CORE_DIR)/tests/ayther/generated_rom.h \
-	$(CORE_DIR)/core/ayther/ayther_api.h
+	$(CORE_DIR)/tests/ayther/cd_fixture.h $(CORE_DIR)/core/ayther/ayther_api.h
 
 # `audio_ring` es el unico que no carga el core: compila audio_probe.c contra el
 # stub de tests/, igual que test_audio_probe_concurrency.c. Lo que prueba es el
@@ -108,7 +108,12 @@ NEEDS_CORE_audio_ring := 0
 # el replay las corre TODAS, porque ahi lo que importa es que un caso
 # arreglado no vuelva, y un caso es una lista de mutaciones que vale en
 # cualquier escena. Sale barato y cubre de mas.
-SCENES_unserialize := md md-nuked sms-fm
+#
+# #97: la cuarta escena es un Sega CD entero (BIOS e imagen sinteticas, ver
+# tests/ayther/cd_fixture.h). Es el sistema con MAS bloques propios en el blob
+# -- dos 68000, PRG-RAM, Word-RAM, CDC, CDD, PCM, ASIC grafico-- y hasta aca
+# ninguno entraba por unserialize. Los archivos se escriben en BUILD_DIR.
+SCENES_unserialize := md md-nuked sms-fm scd
 SCENE ?= md
 
 TARGETS := write_control unserialize recompose generated_rom audio_ring
@@ -160,6 +165,7 @@ ifneq ($(NEEDS_CORE_$(1)),0)
 	$$(call require_core)
 endif
 	$$(ASAN_PRELOAD) AYTHER_FUZZ_CORE="$$(CORE)" AYTHER_FUZZ_SCENE="$$(SCENE)" \
+		AYTHER_FUZZ_WORKDIR="$$(BUILD_DIR)" \
 		$$(BUILD_DIR)/fuzz_$(1)$$(EXE_EXT) \
 		corpus/$(1) -max_total_time=$$(FUZZ_SECONDS) -print_final_stats=1
 endef
@@ -189,7 +195,7 @@ ifneq ($(NEEDS_CORE_$(1)),0)
 	$$(call require_core)
 endif
 	@echo "== $(1) [escena $(2)] =="
-	$$(BUILD_DIR)/replay_$(1)$$(EXE_EXT) --scene $(2) "$$(CORE)" corpus/$(1) regressions/$(1)
+	$$(BUILD_DIR)/replay_$(1)$$(EXE_EXT) --scene $(2) --workdir $$(BUILD_DIR) "$$(CORE)" corpus/$(1) regressions/$(1)
 endef
 $(foreach t,$(TARGETS),$(foreach sc,$(or $(SCENES_$(t)),md),$(eval $(call REPLAY_SCENE_RULE,$(t),$(sc)))))
 

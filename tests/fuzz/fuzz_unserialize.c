@@ -66,8 +66,10 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size)
   {
     state_size = c->serialize_size();
     if (!state_size) { fprintf(stderr, "serialize_size devolvio 0\n"); exit(2); }
-    golden = (uint8_t *)malloc(state_size);
-    state  = (uint8_t *)malloc(state_size);
+    /* calloc: retro_serialize no toca la cola del blob, y la huella de
+       AYTHER_FUZZ_DIGEST cubre el blob entero. */
+    golden = (uint8_t *)calloc(1, state_size);
+    state  = (uint8_t *)calloc(1, state_size);
     if (!golden || !state) { fprintf(stderr, "sin memoria para el estado\n"); exit(2); }
     /* Un frame para que el estado tenga algo adentro, y de ahi en adelante
        este blob no cambia. */

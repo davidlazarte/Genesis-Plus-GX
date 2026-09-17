@@ -115,16 +115,19 @@ int main(int argc, char **argv)
 {
   int i, total = 0;
 
-  /* --scene <nombre>, opcional y siempre primero. */
-  if ((argc > 2) && !strcmp(argv[1], "--scene")) {
-    fuzz_setenv("AYTHER_FUZZ_SCENE", argv[2]);
+  /* --scene <nombre> y --workdir <dir>, opcionales y siempre primero. El
+     segundo (#97) es donde la escena de CD deja su BIOS y su imagen. */
+  while (argc > 2) {
+    if (!strcmp(argv[1], "--scene"))        fuzz_setenv("AYTHER_FUZZ_SCENE", argv[2]);
+    else if (!strcmp(argv[1], "--workdir")) fuzz_setenv("AYTHER_FUZZ_WORKDIR", argv[2]);
+    else break;
     argv += 2;
     argc -= 2;
   }
 
   if (argc < 3) {
     fprintf(stderr,
-            "uso: %s [--scene <nombre>] <core> <archivo-o-directorio>...\n",
+            "uso: %s [--scene <nombre>] [--workdir <dir>] <core> <archivo-o-directorio>...\n",
             argv[0]);
     return 2;
   }

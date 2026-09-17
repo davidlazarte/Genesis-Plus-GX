@@ -130,7 +130,18 @@ int state_load(unsigned char *state)
   load_param(io_reg, sizeof(io_reg));
   if ((system_hw & SYSTEM_PBC) == SYSTEM_MD)
   {
-    io_reg[0] = region_code | 0x20 | (config.bios & 1);
+    io_reg[0] = region_code | (config.bios & 1);
+
+    /* AYTHER fork delta (#97): el bit 5 del registro de version es
+       "no hay unidad de expansion", y io_reset() lo deja en 0 cuando el
+       sistema es SYSTEM_MCD. Aca se forzaba a 1 sin mirar el hardware, asi
+       que cargar un savestate en un Sega CD dejaba $A10001 diciendo que
+       el CD no esta conectado. Lo encontro el roundtrip del fixture
+       sintetico de CD: es el primer byte que difiere tras la recarga. */
+    if (system_hw != SYSTEM_MCD)
+    {
+      io_reg[0] |= 0x20;
+    }
   }
   else
   {

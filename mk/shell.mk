@@ -74,6 +74,41 @@ ifneq ($(filter-out posix cmd,$(SHELL_FLAVOR)),)
 $(error AYTHER_SHELL_FLAVOR=$(SHELL_FLAVOR) no es un valor valido: posix o cmd)
 endif
 
+# --------------------------------------------------------------------------
+# El nombre no alcanza: en Windows hay que PREGUNTARLE al shell (#114).
+#
+# Desde PowerShell -- con o sin Git Bash en el PATH-- GNU make 4.4.1 informa
+# `$(SHELL) = sh.exe`, que es su default y no una eleccion, y despues ejecuta
+# las recetas con cmd.exe. La lista blanca de arriba leia "sh" y elegia la
+# rama POSIX, y `mkdir -p` le llegaba a cmd:
+#
+#   Ya existe el subdirectorio o el archivo -p.
+#   make: *** [Makefile:96: .build/...] Error 1
+#
+# Con SHELL=cmd.exe en la linea de comandos pasaba, porque ahi el nombre y el
+# shell real coincidian. #104 arreglo el caso contrario (pwsh explicito); este
+# es el nombre diciendo sh y el shell siendo cmd.
+#
+# La unica fuente de verdad es el shell que make usa para $(shell ...), que
+# es el mismo que para las recetas: cmd EXPANDE %COMSPEC% y un shell POSIX lo
+# devuelve tal cual. Un proceso al parsear, solo en Windows, y solo cuando
+# nadie forzo el sabor ni esta probando la tabla por AYTHER_SHELL_PROBE (esa
+# costura existe para preguntar por shells que no estan en esta maquina, y
+# preguntarle al shell real la volveria inutil). Con pwsh explicito no se
+# llega aca: la lista blanca ya fallo antes.
+ifeq ($(OS),Windows_NT)
+ifeq ($(AYTHER_SHELL_FLAVOR),)
+ifeq ($(AYTHER_SHELL_PROBE),$(SHELL))
+AYTHER_SHELL_ECHO := $(shell echo %COMSPEC%)
+ifeq ($(findstring %COMSPEC%,$(AYTHER_SHELL_ECHO)),)
+SHELL_FLAVOR := cmd
+else
+SHELL_FLAVOR := posix
+endif
+endif
+endif
+endif
+
 ifeq ($(OS),Windows_NT)
 EXE_EXT := .exe
 THREAD_FLAGS :=

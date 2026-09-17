@@ -84,6 +84,28 @@ int state_load(unsigned char *state)
     load_param(zram, sizeof(zram));
     load_param(&zstate, sizeof(zstate));
     load_param(&zbank, sizeof(zbank));
+
+    /* `zbank` entra crudo del blob y se usa como INDICE. El invariante lo
+       declara su unico escritor, gen_zbank_w(): `& 0xFF8000`. Con eso, el
+       `address` que arman z80_memory_r/_w -- `zbank | (address & 0x7FFF)`
+       -- no pasa de 0xFFFFFF y `address >> 16` cae siempre adentro de
+       zbank_memory_map[256] y de m68k.memory_map[256]. Un savestate no pasa
+       por gen_zbank_w, asi que el blob puede traer cualquier uint32: lo
+       encontro el job nocturno de `unserialize` (#105), con
+       zbank = 0x14550000 -> indice 5205, y un SEGV al LLAMAR el puntero de
+       funcion que salio de ahi -- no un puntero podrido, uno elegido por
+       los bytes del archivo.
+
+       Misma familia que los PAIR de mas abajo (#82) y que el YM2612 de
+       #83-#88, con la misma trampa: no explota donde se carga. Al entrar,
+       system_reset() ya puso zbank = 0, y despues nada lo vuelve a tocar
+       salvo que alguien escriba el registro de banco; el valor podrido
+       espera a que el Z80 acceda al tramo $8000-$FFFF, que puede ser varios
+       frames mas tarde o nunca.
+
+       Se enmascara con la regla de quien lo escribe. Para un estado
+       legitimo no cambia nada: ya la cumplia. */
+    zbank &= 0xFF8000;
     if (zstate == 3)
     {
       m68k.memory_map[0xa0].read8   = z80_read_byte;

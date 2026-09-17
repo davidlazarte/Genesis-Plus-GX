@@ -142,6 +142,33 @@ tests/fuzz/.build/replay_unserialize --scene sms-fm \
   saneado produce `index 5184 out of bounds for type 'unsigned char *[64]'` y
   un `SEGV on unknown address 0x39` a continuación, en `ROP`.
 
+- **`unserialize/zbank-corrupto-indexa-zbank-memory-map`** (#105) — el mismo
+  patrón, en la ventana de banco del Z80. `state.c` carga `zbank` crudo del blob
+  y `z80_memory_r`/`z80_memory_w` lo usan como **índice**: arman
+  `address = zbank | (address & 0x7FFF)` y entran a
+  `zbank_memory_map[address >> 16]` y a `m68k.memory_map[address >> 16]`, los dos
+  de 256 entradas. El invariante lo declara su único escritor, `gen_zbank_w()`,
+  que enmascara con `& 0xFF8000`; un savestate no pasa por ahí.
+
+  Está **fabricado a mano**, porque el archivo que dejó el nocturno
+  (`crash-571106fe…`) *no reproduce solo*. Sus dos mutaciones son
+  `(72088, 0xc7)` y `(32736, 0x40)`: la primera cae en `zram` y la segunda en
+  `work_ram`, y ninguna de las dos toca `zbank`. El `zbank` podrido venía
+  **arrastrado de una entrada anterior**: el target cierra cada entrada
+  “restaurando un estado sano” con `serialize` + `unserialize`, y eso vuelve a
+  serializar el estado *actual*, que a esa altura ya estaba podrido. Mismo modo
+  de falla que el `write_control` de #63, y la misma conclusión: un archivo que
+  pasa con y sin el arreglo no es una regresión.
+
+  Las seis mutaciones de este archivo son la versión determinística del
+  hallazgo: `zram[0..2]` = `LD ($8000),A`, para que el Z80 toque la ventana de
+  banco; `zstate = 1`, que es la única condición con la que `system_frame_gen`
+  corre el Z80; y `zbank = 0x14550000`. Con el core instrumentado y sin la
+  máscara produce `index 5205 out of bounds for type 't_zbank_memory_map [256]'`
+  —el mismo índice que reportó el CI— y un `SEGV` a continuación, al **llamar**
+  el puntero de función que salió de ahí: no un puntero podrido, uno elegido por
+  los bytes del archivo.
+
 - **`unserialize/opll-cycles-corrupto-indexa-opll-accm`** y
   **`unserialize/ym3438-cycles-corrupto-indexa-ym3438-accm`** (#75) — el mismo
   patrón que el YM2612, en los dos cores de Nuked. `sound_context_load` carga

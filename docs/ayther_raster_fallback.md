@@ -88,7 +88,11 @@ The versioned public ABI and capability discovery remain tracked by issue #6.
 
 The reusable libretro probe and the 14-ROM, 25,200-frame result are documented
 in [`validation/raster-roms-2026-08-09.md`](validation/raster-roms-2026-08-09.md).
-The final run produced zero recomposition mismatches with mask zero.
+The final run produced zero recomposition mismatches with mask zero. The same
+corpus was rerun on the 2026-09-17 release candidate (`54c0db20`) with
+`tests/ci/validate_roms.sh`; the result, the exact build configuration and the
+support limits are in
+[`validation/raster-roms-2026-09-17.md`](validation/raster-roms-2026-09-17.md).
 
 ## The raster journal and what replay reproduces (#27)
 

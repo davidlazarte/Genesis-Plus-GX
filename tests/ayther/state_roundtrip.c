@@ -33,11 +33,14 @@
  * serializan pero quedan mal, o que todavia no llegaron a verse.
  *
  * De ahi que un fixture que no ejercita un subsistema no diga nada sobre el.
- * Concretamente, lo que este test NO cubre hoy: la EEPROM I2C de
- * libretro/Genesis-Plus-GX#404. Esta MEDIDO que su estado no se serializa
- * -- `eeprom_i2c` no aparece en ningun save_param del core-, pero para que esto
- * lo vea hace falta un fixture que deje una transaccion I2C a medias antes del
- * checkpoint y lea el resultado despues. Ese ROM no existe todavia.
+ * El caso que motivo esta advertencia ya esta cubierto: la EEPROM I2C de
+ * libretro/Genesis-Plus-GX#404 no se serializaba, y el quinto fixture
+ * ("eeprom", generated_rom_eeprom) deja una transaccion I2C a medias en cada
+ * borde de frame y usa el byte leido para el scroll horizontal, asi que la
+ * perdida se ve en el VIDEO; el fork la serializa detras de STATE_VERSION
+ * 1.7.8 (#76, core/state.h). Lo que sigue sin cubrir es lo que ningun fixture
+ * toca: los mappers de cartucho con estado propio (SVP, Game Genie, Action
+ * Replay, MegaSD) y los perifericos de entrada que no sean el pad.
  *
  * #97: el sexto fixture es un Sega CD entero -- BIOS e imagen sinteticas, ver
  * cd_fixture.h--, que es el sistema donde el savestate tiene MAS que perder:

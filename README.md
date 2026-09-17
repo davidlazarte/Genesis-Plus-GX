@@ -14,20 +14,29 @@
 ## My contribution
 
 > **Todo lo de esta sección es mío.** El resto del repositorio (todo lo que está
-> por debajo del separador **"Upstream README"**) es **Genesis Plus GX upstream
-> sin modificar**. Mis cambios viven en la rama `aether/expose-vram-video-ram` y
-> son **deltas quirúrgicos**: la mayoría en `libretro/libretro.c` (la capa de
-> adaptación libretro), el rasterizado de capas en `core/vdp_render.c`, y una
-> sola extensión del savestate. No toco el núcleo de emulación (CPU, timing,
-> mappers, CD): el objetivo es **exponer** estado interno, no alterar la
-> emulación.
+> por debajo del separador **"Upstream README"**) es el README de **Genesis Plus
+> GX upstream**. Mis cambios viven en `master` y se sincronizan con
+> `ekeeke/Genesis-Plus-GX` según [`docs/upstream_sync_runbook.md`](docs/upstream_sync_runbook.md).
+> La mayoría está en `libretro/libretro.c` (la capa de adaptación libretro), en
+> el rasterizado de capas de `core/vdp_render.c` y en `core/ayther/`. El
+> objetivo es **exponer** estado interno, no alterar la emulación, pero el
+> núcleo **sí tiene deltas** y están inventariados uno por uno:
+> [`tests/ci/upstream_contact.txt`](tests/ci/upstream_contact.txt) es la línea
+> base de hunks por archivo (VDP, sonido, `state.c`, `cd_hw/`, `m68k/`), y el
+> job *Source quality* falla si aparece uno que no esté ahí. Son de tres
+> clases: hooks de observación, arreglos de validación de savestates que
+> salieron del fuzzing (campos que entraban crudos del blob y se usaban como
+> índice) y
+> correcciones de UB medidas con sanitizers. Lo que garantiza que la emulación
+> observable no cambió es `check-full-core`: un solo golden de video, audio y
+> estado que comparten todos los perfiles y las tres plataformas de la CI.
 
 ### Deltas — qué expongo y por qué
 
 | Delta | Qué expone | Dónde | Commit |
 |---|---|---|---|
 | **VRAM** | `retro_get_memory_data(RETRO_MEMORY_VIDEO_RAM)` → `vram` (64 KB) — upstream devuelve `NULL` | `libretro.c` | `7fcf9bc` |
-| **Latch input-hw** | serializa el estado del pad de 6 botones (fase TH) en el savestate (STATE_VERSION 1.7.7) — sin esto, restaurar un savestate a mitad de replay diverge | `state` | `539dc45` |
+| **Latch input-hw** | serializa el estado del pad de 6 botones (fase TH) en el savestate (desde STATE_VERSION 1.7.7; hoy 1.7.8, ver tabla de abajo) — sin esto, restaurar un savestate a mitad de replay diverge | `state` | `539dc45` |
 | **CRAM** | id **privado** `0x100` → `cram` (128 B, 64 colores de 9 bits) | `libretro.c` | `195ebcb` |
 | **Registros VDP** | id **privado** `0x101` → `reg[0x20]` (bases de planos + tamaño, para el tilemap viewer) | `libretro.c` | `09dd082` |
 | **Máscara de capas** | id **privado** `0x102` (1 byte, **escribible**) → ocultar/mostrar Plano A/B/Window/Sprites en el render (aislar capas para autoría en el Lab) | `vdp_render.c` | _(esta rama)_ |
@@ -55,12 +64,12 @@ adapter de transición, pero evita nuevos punteros mutables directos.
 
 | | Upstream (`ekeeke/Genesis-Plus-GX`) | Mío (fork AYTHER) |
 |---|---|---|
-| Núcleo de emulación (CPU/VDP/audio/CD) | ✅ intacto | — sin cambios |
+| Núcleo de emulación (CPU/VDP/audio/CD) | ✅ intacto | hooks + arreglos de savestate/UB inventariados en `tests/ci/upstream_contact.txt`; misma salida que upstream según el golden de `check-full-core` |
 | `RETRO_MEMORY_VIDEO_RAM` | devuelve `NULL` | expone VRAM (64 KB) |
 | Ids de memoria `0x100`–`0x10E` | inexistentes | CRAM, regs VDP, máscaras escribibles, sprites, audio, motivos de fallback |
 | ABI versionada | inexistente | `ayther_get_interface`: capabilities, layouts y snapshots consistentes |
 | `core/vdp_render.c` | render estándar | + `ayther_peel_merge`, `ayther_layer_mask`, `ayther_*_suppress` |
-| Savestate | STATE_VERSION estándar | + latch del pad 6-botones (1.7.7) |
+| Savestate | STATE_VERSION estándar | 1.7.8: + latch del pad 6-botones (1.7.7), + bus de la EEPROM I2C (1.7.8), + bloque de continuidad de audio y tag de layout en offset fijo; carga estados 1.7.7 y rechaza los de otra ABI (`check-state-guard`, `check-state-scd-guard`, `check-state-roundtrip`) |
 | Branding | Genesis Plus GX | **AYTHER Genesis Core Fork** |
 
 ### Integración con AYTHER Engine
@@ -112,15 +121,29 @@ Ese comando produce el perfil estándar: ABI compilada pero sin trabajo AYTHER
 hasta que el frontend solicite suscripciones. Para una DLL sin ABI ni buffers
 AYTHER usar `AYTHER_EXTENSIONS=0 SOUND_PROBE=0`; para consumidores antiguos que
 todavía no suscriben usar `AYTHER_LEGACY_PROFILE=1`. Los cambios de máscara se
-activan juntos al inicio del siguiente frame y el replay de CI exige menos de
-1% de overhead para el perfil compilado-idle frente al build sin extensiones.
+activan juntos al inicio del siguiente frame. El overhead del perfil
+compilado-idle frente al build sin extensiones se **mide y se publica** en cada
+corrida de CI (`check-profile-comparison`, paso *informative*), pero **no
+bloquea**: dos corridas paralelas del mismo commit midieron 1,02 % y 1,71 %, así
+que el ruido del runner es mayor que un umbral del 1 % y un gate así mediría la
+máquina, no el código. Lo que sí bloquea es que los dos perfiles produzcan el
+mismo golden (`check-state-cross-profile`).
 
-Un build UCRT crashea en `retro_load_game` (STATUS_STACK_BUFFER_OVERRUN); el
-MSVCRT es bit-idéntico al DLL stock en emulación. La DLL resultante se despliega
-en AYTHER como `third_party/cores/genesis_plus_gx_libretro_vram.dll`.
+**Runtimes de Windows.** Los assets publicados se construyen con MSVCRT y la CI
+también construye y ejecuta el core con **UCRT** (job *Windows UCRT*): el crash
+en `retro_load_game` (`STATUS_STACK_BUFFER_OVERRUN`) que hubo hasta agosto de
+2026 ya no se reproduce, el build UCRT corre el replay completo y da el mismo
+golden que MSVCRT, Linux y macOS, y los handlers de `tests/ci/ucrt_diag.h`
+siguen puestos para nombrar la causa si vuelve. Los tres perfiles comparten un
+único golden de emulación (`tests/ayther/golden/full_core_replay-x64.json`),
+con extensiones prendidas o apagadas. La DLL resultante se despliega en AYTHER
+como `third_party/cores/genesis_plus_gx_libretro_vram.dll`.
 
-**Rebase con upstream:** revisar que `ekeeke/Genesis-Plus-GX` no haya
-implementado `RETRO_MEMORY_VIDEO_RAM` (entraría en conflicto con `7fcf9bc`).
+**Sync con upstream:** el procedimiento, los gates y el criterio para pedir
+costura aguas arriba están en
+[`docs/upstream_sync_runbook.md`](docs/upstream_sync_runbook.md). Entre lo que
+hay que revisar: que `ekeeke/Genesis-Plus-GX` no haya implementado
+`RETRO_MEMORY_VIDEO_RAM` (entraría en conflicto con `7fcf9bc`).
 
 ### Fallback raster seguro
 

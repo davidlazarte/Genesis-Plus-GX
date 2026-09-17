@@ -307,10 +307,14 @@ static int run_fixture(library_t lib, const struct fixture *fx)
 
   for (f = 0; f < BOOT_FRAMES; ++f) api.run();
 
+  /* calloc y no malloc: retro_serialize escribe ~14% de STATE_SIZE y deja el
+     resto como estaba, y el hash del estado cubre el blob ENTERO. Con malloc,
+     dos buffers reciclados del heap traen colas distintas y el test falla por
+     basura que no es del core -- paso en Windows con el fixture eeprom. */
   size = api.serialize_size();
-  checkpoint = size ? (uint8_t *)malloc(size) : NULL;
-  scratch    = size ? (uint8_t *)malloc(size) : NULL;
-  scratch2   = size ? (uint8_t *)malloc(size) : NULL;
+  checkpoint = size ? (uint8_t *)calloc(1, size) : NULL;
+  scratch    = size ? (uint8_t *)calloc(1, size) : NULL;
+  scratch2   = size ? (uint8_t *)calloc(1, size) : NULL;
   if (!checkpoint || !scratch || !scratch2 || !api.serialize(checkpoint, size)) {
     fprintf(stderr, "%s: no se pudo guardar el checkpoint\n", fx->name);
     bad = 1;

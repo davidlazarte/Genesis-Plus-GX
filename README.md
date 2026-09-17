@@ -117,6 +117,23 @@ La DLL no se versiona (BYOC). Con un toolchain **llvm-mingw de runtime MSVCRT**
 make -f Makefile.libretro platform=win64 -j8
 ```
 
+Las pruebas corren igual desde **PowerShell** o **cmd**, con o sin Git Bash
+instalado:
+
+```powershell
+make -C tests check CC=clang
+make -C tests check-full-core CC=clang CORE=../genesis_plus_gx_libretro.dll
+```
+
+`mk/shell.mk` no le cree al nombre de `$(SHELL)` (desde PowerShell GNU make
+dice `sh.exe` y ejecuta `cmd.exe`): le pregunta al shell que de verdad corre las
+recetas y escribe cada receta en ese idioma, así que los directorios de
+`.build/` y `artifacts/` se crean solos. Si make eligió un shell que no es ni
+POSIX ni cmd (pwsh, por ejemplo, con `SHELL=pwsh.exe`), falla con un mensaje
+en vez de adivinar; `AYTHER_SHELL_FLAVOR=posix|cmd` fuerza el idioma. Lo
+prueba `tests/ci/check_shell_detection.sh`, incluido el caso sin `sh.exe` en
+el PATH.
+
 Ese comando produce el perfil estándar: ABI compilada pero sin trabajo AYTHER
 hasta que el frontend solicite suscripciones. Para una DLL sin ABI ni buffers
 AYTHER usar `AYTHER_EXTENSIONS=0 SOUND_PROBE=0`; para consumidores antiguos que

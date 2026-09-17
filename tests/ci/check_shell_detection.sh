@@ -199,6 +199,75 @@ case $salida in
      fallas=$((fallas + 1)) ;;
 esac
 
+# #114: Windows SIN sh.exe, que es lo que ve alguien desde PowerShell sin Git
+# Bash. Ahi GNU make informa `$(SHELL) = sh.exe` (su default) y ejecuta las
+# recetas con cmd.exe; la lista blanca leia "sh" y mandaba `mkdir -p` a cmd.
+# Se reproduce quitando del PATH todo directorio que tenga un sh, sin SHELL en
+# el entorno, y se afirma lo que fallaba: que make_dir crea un directorio
+# nuevo y que require_core sigue saliendo 2 sin ruido. Solo en Windows: en
+# cualquier otro sistema siempre hay un sh, y el caso no existe.
+echo
+echo "== Windows sin sh.exe en el PATH: el shell real es cmd, y las recetas lo saben =="
+# Por uname y no por $OS: el bash de Git lanzado desde PowerShell no siempre
+# hereda OS=Windows_NT, y el caso quedaba "no aplica" justo en el job que lo
+# necesita.
+case "$(uname -s 2>/dev/null)" in
+  MINGW*|MSYS*|CYGWIN*) es_windows=1 ;;
+  *) es_windows=0 ;;
+esac
+if [ "$es_windows" != 1 ]; then
+  echo "  (no aplica: este sistema no es Windows)"
+else
+  filtrado=""
+  IFS=':' read -r -a entradas <<< "$PATH"
+  for d in "${entradas[@]}"; do
+    [ -n "$d" ] || continue
+    if [ -x "$d/sh.exe" ] || [ -x "$d/sh" ] || [ -x "$d/bash.exe" ]; then continue; fi
+    filtrado="${filtrado:+$filtrado:}$d"
+  done
+  if ! (PATH="$filtrado" command -v make >/dev/null 2>&1); then
+    printf '  FALLA %-52s\n' "make no esta en el PATH sin los directorios de sh"
+    fallas=$((fallas + 1))
+  else
+    dir_probe="$tmp/dir.mk"
+    nuevo_dir="$tmp/nuevo/anidado"
+    {
+      printf 'include %s/mk/shell.mk\n' "$raiz_mk"
+      printf 'crea:\n'
+      printf '\t$(call make_dir,%s)\n' "$(cygpath -m "$nuevo_dir" 2>/dev/null || echo "$nuevo_dir")"
+    } > "$dir_probe"
+
+    # Ojo con el falso positivo: `mkdir -p X` en cmd crea DOS directorios, "-p"
+    # y X, y sale 0 la primera vez (el "ya existe -p" de la evidencia de #114
+    # es la segunda). Asi que no alcanza con que X exista: ademas no tiene que
+    # haber aparecido un "-p" al lado.
+    n=$((n + 1))
+    salida=$(cd "$tmp" && env -u SHELL PATH="$filtrado" make -f "$dir_probe" --no-print-directory crea 2>&1)
+    rc=$?
+    if [ "$rc" = 0 ] && [ -d "$nuevo_dir" ] && [ ! -e "$tmp/-p" ]; then
+      printf '  ok    %-52s -> exit=0, directorio creado, sin un "-p" al lado\n' "sin sh: make_dir crea el directorio"
+    else
+      printf '  FALLA %-52s (exit=%s, existe=%s, "-p" al lado=%s)\n' "sin sh: make_dir crea el directorio" "$rc" \
+        "$([ -d "$nuevo_dir" ] && echo si || echo no)" "$([ -e "$tmp/-p" ] && echo si || echo no)"
+      printf '%s\n' "$salida" | head -4 | sed 's/^/          /'
+      fallas=$((fallas + 1))
+    fi
+
+    n=$((n + 1))
+    salida=$(cd "$tmp" && env -u SHELL PATH="$filtrado" make -f "$core_probe" --no-print-directory pide 2>&1)
+    rc=$?
+    ruido=$(printf '%s\n' "$salida" |
+            grep -icE "not recognized|no se reconoce|command not found|CommandNotFound|ParserError|syntax error|-p\.")
+    if [ "$rc" = 2 ] && [ "$ruido" = 0 ]; then
+      printf '  ok    %-52s -> exit=2, sin ruido\n' "sin sh y sin CORE: rechaza"
+    else
+      printf '  FALLA %-52s (exit=%s, lineas de ruido=%s)\n' "sin sh y sin CORE: rechaza" "$rc" "$ruido"
+      printf '%s\n' "$salida" | head -4 | sed 's/^/          /'
+      fallas=$((fallas + 1))
+    fi
+  fi
+fi
+
 echo
 if [ "$fallas" = 0 ]; then
   echo "deteccion de shell: $n comprobaciones, 0 fallas"

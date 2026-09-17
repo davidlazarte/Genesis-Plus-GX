@@ -726,6 +726,14 @@ jobs:
       # del primer caso. `verify_asan_link_order=0` es la alternativa al
       # LD_PRELOAD del Makefile de fuzz: el runtime ya esta linkeado en el
       # ejecutable, solo hay que decirle a ASan que no exija ser el primero.
+      #
+      # `halt_on_error=0` (#107): ASan aborta solo, pero UBSan con este flag
+      # IMPRIME Y SIGUE, asi que un indice fuera de rango o un shift invalido
+      # dejaba el proceso en exit 0 y el job en verde. El flag se queda -- una
+      # corrida deja el inventario completo en vez del primer caso, igual que en
+      # run_sanitizers.sh y en el nocturno--, pero el veredicto ya no lo da el
+      # codigo de salida: lo da filter_known_ub.sh sobre el log, mas abajo. Por
+      # eso el `tee` no es cosmetico: el log ES la evidencia que se juzga.
       - name: Replay the fuzz corpus and regressions under ASan
         env:
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=0:report_error_type=1
@@ -784,14 +792,41 @@ jobs:
           make -C tests check-z80-vdp-fifo CC=clang \
             CFLAGS="-O1 -g -Wall -Wextra -fsanitize=address,undefined -shared-libsan -fno-omit-frame-pointer" \
             LDFLAGS="-fsanitize=address,undefined -shared-libsan" \
-            CORE=../genesis_plus_gx_libretro.so
+            CORE=../genesis_plus_gx_libretro.so \
+            2>&1 | tee z80-vdp-fifo.log
 
-      - name: Upload the replay log
+      # El veredicto de UBSan (#107). Hasta aca los dos pasos de arriba solo
+      # fallaban si ASan abortaba o si un assert del harness saltaba; todo lo
+      # que UBSan reporta con halt_on_error=0 quedaba en el log y nadie lo
+      # miraba. Medido en la revision de #106, con master antes de #102: el
+      # replay de la regresion de zbank salia exit 0 con 16 reportes de `store
+      # to misaligned address` en el log. Ese UB ya no esta, pero el proximo
+      # habria pasado igual.
+      #
+      # Es el mismo filtro que juzga run_sanitizers.sh y el nocturno, contra
+      # la misma known_ub.txt -- vacia desde #101, asi que "sin UB" a secas--,
+      # y se aplica a los DOS logs: el del corpus y el del fixture. Un paso
+      # aparte y no un `&&` al final de cada uno, para que el log exista
+      # entero cuando se juzga y para que la razon del rojo se lea sola.
+      - name: Reject any sanitizer report in the replay logs
+        run: |
+          set -euo pipefail
+          echo "== fuzz-replay.log =="
+          bash tests/ci/filter_known_ub.sh fuzz-replay.log
+          echo "== z80-vdp-fifo.log =="
+          bash tests/ci/filter_known_ub.sh z80-vdp-fifo.log
+
+      # Los dos logs se suben pase lo que pase: cuando el paso de arriba pone
+      # el job en rojo, el reporte completo -con stack trace- esta aca y no
+      # solo el resumen por sitio que imprime el filtro.
+      - name: Upload the replay and fixture logs
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: ayther-fuzz-regressions
-          path: fuzz-replay.log
+          path: |
+            fuzz-replay.log
+            z80-vdp-fifo.log
           if-no-files-found: ignore
           retention-days: 14
 

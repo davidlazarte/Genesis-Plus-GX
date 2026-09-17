@@ -50,6 +50,7 @@ jobs:
           - {id: unserialize,          target: unserialize,    scene: md}
           - {id: unserialize-md-nuked, target: unserialize,    scene: md-nuked}
           - {id: unserialize-sms-fm,   target: unserialize,    scene: sms-fm}
+          - {id: unserialize-scd,      target: unserialize,    scene: scd}
           - {id: recompose,            target: recompose,      scene: md}
           - {id: generated_rom,        target: generated_rom,  scene: md}
           - {id: audio_ring,           target: audio_ring,     scene: md}

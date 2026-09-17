@@ -1773,3 +1773,199 @@ size_t ayther_build_generated_rom_scene(uint8_t *rom, size_t capacity,
   ayther_current_scene = 0;
   return built;
 }
+
+/* ------------------------------------------------------------------------ */
+/* #97: Sega CD sintetico -- BIOS de 128KB e imagen de disco.                */
+/* ------------------------------------------------------------------------ */
+
+/* Lado del 68000 principal, arrancando desde CD (scd.cartridge.boot = 0):
+   $000000-$01FFFF es la BIOS y $020000-$03FFFF el primer banco de PRG-RAM,
+   accesible mientras el sub-CPU este parado (SBRQ=1, que es como arranca). */
+#define CD_BIOS_SUB_HALF   0x00010000u  /* segunda mitad de la BIOS: el sub  */
+#define CD_MAIN_PRG_RAM    0x00020000u  /* PRG-RAM banco 0, visto del main   */
+#define CD_SUB_PRG_BYTES   0x00001000u  /* lo que se copia: alcanza de sobra */
+#define CD_GA_SUB_RESET    0x00a12001u  /* SRES (bit 0) y SBRQ (bit 1)       */
+#define CD_GA_COMM_SUB0    0x00a12020u  /* buzon sub->main, palabra 0        */
+
+/* Lado del sub-68000. PCM en $FF0001+2n (solo bytes impares, /LDS), wave RAM
+   en $FF2001+2n, gate array en $FF8000. */
+#define SUB_PCM_ENV        0x00ff0001u
+#define SUB_PCM_PAN        0x00ff0003u
+#define SUB_PCM_FD_L       0x00ff0005u
+#define SUB_PCM_FD_H       0x00ff0007u
+#define SUB_PCM_LS_L       0x00ff0009u
+#define SUB_PCM_LS_H       0x00ff000bu
+#define SUB_PCM_ST         0x00ff000du
+#define SUB_PCM_CTRL       0x00ff000fu
+#define SUB_PCM_ONOFF      0x00ff0011u
+#define SUB_PCM_WAVE       0x00ff2001u
+#define SUB_GA_COMM0       0x00ff8020u  /* buzon sub->main, palabra 0        */
+#define SUB_GA_COMM1       0x00ff8022u  /* palabra 1: el estado del CDD      */
+#define SUB_GA_CDD_CTRL    0x00ff8037u  /* HOCK (bit 2): el CDD contesta     */
+#define SUB_GA_CDD_STATUS  0x00ff8038u
+#define SUB_GA_CDD_CMD     0x00ff8042u  /* $42..$48: comando; $4A lo dispara */
+#define SUB_COUNTER        0x00001000u  /* contador en PRG-RAM               */
+#define SUB_STACK          0x00010000u
+
+/* El programa del sub-CPU. Sin interrupciones (SR=$2700): el CDD se consulta
+   por registro, no hace falta el nivel 4. */
+static void emit_sub_program(struct rom_builder *b)
+{
+  emit_u16(b, 0x46fcu); emit_u16(b, 0x2700u);         /* move.w #$2700,sr   */
+
+  /* Chip encendido y banco 0 de wave RAM seleccionado (bit 6 = 0: banco). */
+  emit_move_byte_immediate_absolute(b, 0x80u, SUB_PCM_CTRL);
+
+  /* Onda: 255 muestras en diente de sierra (0..126, dos veces) y la marca de
+     fin de loop 0xFF en la ultima. Formato signo-magnitud: bit 7 es el signo,
+     asi que los valores quedan por debajo de 0x80. */
+  emit_u16(b, 0x41f9u); emit_u32(b, SUB_PCM_WAVE);    /* lea wave,a0        */
+  emit_u16(b, 0x7000u);                               /* moveq #0,d0        */
+  emit_u16(b, 0x323cu); emit_u16(b, 254u);            /* move.w #254,d1     */
+  emit_u16(b, 0x1080u);                               /* move.b d0,(a0)     */
+  emit_u16(b, 0x5488u);                               /* addq.l #2,a0       */
+  emit_u16(b, 0x5240u);                               /* addq.w #1,d0       */
+  emit_u16(b, 0x0200u); emit_u16(b, 0x007fu);         /* andi.b #$7f,d0     */
+  emit_u16(b, 0x51c9u); emit_u16(b, 0xfff4u);         /* dbra d1,-12        */
+  emit_u16(b, 0x10bcu); emit_u16(b, 0x00ffu);         /* move.b #$ff,(a0)   */
+
+  /* Canal 0: volumen y paneo al maximo, incremento 0x0400 (media muestra por
+     clock), loop al principio, arranque en 0, y encendido (bit 0 = 0). */
+  emit_move_byte_immediate_absolute(b, 0xc0u, SUB_PCM_CTRL);
+  emit_move_byte_immediate_absolute(b, 0xffu, SUB_PCM_ENV);
+  emit_move_byte_immediate_absolute(b, 0xffu, SUB_PCM_PAN);
+  emit_move_byte_immediate_absolute(b, 0x00u, SUB_PCM_FD_L);
+  emit_move_byte_immediate_absolute(b, 0x04u, SUB_PCM_FD_H);
+  emit_move_byte_immediate_absolute(b, 0x00u, SUB_PCM_LS_L);
+  emit_move_byte_immediate_absolute(b, 0x00u, SUB_PCM_LS_H);
+  emit_move_byte_immediate_absolute(b, 0x00u, SUB_PCM_ST);
+  emit_move_byte_immediate_absolute(b, 0xfeu, SUB_PCM_ONOFF);
+
+  /* CDD: HOCK para que conteste, y Play desde 00:02:00, que es el LBA 0 (los
+     dos segundos de pausa del principio del disco). La escritura en $FF804A
+     es la que dispara cdd_process. */
+  emit_move_byte_immediate_absolute(b, 0x04u, SUB_GA_CDD_CTRL);
+  emit_move_word_immediate_absolute(b, 0x0300u, SUB_GA_CDD_CMD + 0u);
+  emit_move_word_immediate_absolute(b, 0x0000u, SUB_GA_CDD_CMD + 2u);
+  emit_move_word_immediate_absolute(b, 0x0002u, SUB_GA_CDD_CMD + 4u);
+  emit_move_word_immediate_absolute(b, 0x0000u, SUB_GA_CDD_CMD + 6u);
+  emit_move_word_immediate_absolute(b, 0x0000u, SUB_GA_CDD_CMD + 8u);
+
+  /* Bucle: contador al buzon y a PRG-RAM, estado del CDD al segundo buzon. */
+  emit_u16(b, 0x7000u);                               /* moveq #0,d0        */
+  emit_u16(b, 0x5240u);                               /* addq.w #1,d0       */
+  emit_move_word_d0_absolute(b, SUB_GA_COMM0);
+  emit_move_word_d0_absolute(b, SUB_COUNTER);
+  emit_u16(b, 0x3239u); emit_u32(b, SUB_GA_CDD_STATUS); /* move.w st,d1     */
+  emit_u16(b, 0x33c1u); emit_u32(b, SUB_GA_COMM1);      /* move.w d1,comm1  */
+  emit_u16(b, 0x60e4u);                               /* bra.s -28          */
+}
+
+/* El programa del principal: el arranque del cartucho de siempre, y despues
+   lo que hace una BIOS de verdad -- copiar el programa del sub y soltarlo. */
+static void emit_reset_program_cd(struct rom_builder *b)
+{
+  emit_reset_common(b);
+
+  /* Sin interrupcion horizontal: scd_reset pisa ese vector de la BIOS con
+     $FFFFFFFF (es como funciona la BIOS real, que lo redirige a RAM), asi que
+     con h-int habilitada el primer h-int saltaria a una direccion impar. */
+  emit_vdp_register(b, 0, 0x04u);
+
+  emit_u16(b, 0x41f9u); emit_u32(b, CD_BIOS_SUB_HALF); /* lea sub,a0        */
+  emit_u16(b, 0x43f9u); emit_u32(b, CD_MAIN_PRG_RAM);  /* lea prg,a1        */
+  emit_u16(b, 0x303cu);                                /* move.w #n-1,d0    */
+  emit_u16(b, (uint16_t)(CD_SUB_PRG_BYTES / 4u - 1u));
+  emit_u16(b, 0x22d8u);                                /* move.l (a0)+,(a1)+ */
+  emit_u16(b, 0x51c8u); emit_u16(b, 0xfffcu);          /* dbra d0,-4        */
+
+  /* SRES=1, SBRQ=0: el sub arranca de los vectores que acaba de recibir. */
+  emit_move_byte_immediate_absolute(b, 0x01u, CD_GA_SUB_RESET);
+  emit_wait_forever(b);
+}
+
+/* El handler vertical de siempre, con una cosa antes: la palabra 0 del buzon
+   del sub a la entrada 0 de CRAM. Con la name table llena solo en las cuatro
+   filas de arriba, la entrada 0 pinta el resto del frame: el contador del sub
+   se vuelve un color, y un sub-CPU que no avanza o que vuelve atras se ve. */
+static uint32_t emit_vertical_handler_cd(struct rom_builder *b)
+{
+  uint32_t address = (uint32_t)b->pc;
+  emit_move_long_immediate_absolute(b, cram_write_command(0), VDP_CONTROL);
+  emit_move_word_absolute_d0(b, CD_GA_COMM_SUB0);
+  emit_move_word_d0_absolute(b, VDP_DATA);
+  emit_vertical_handler(b);
+  return address;
+}
+
+size_t ayther_build_generated_cd_bios(uint8_t *bios, size_t capacity)
+{
+  struct rom_builder b;
+  uint32_t vertical, dflt;
+  size_t vector;
+
+  if (!bios || capacity < AYTHER_CD_BIOS_SIZE) return 0;
+  memset(bios, 0, AYTHER_CD_BIOS_SIZE);
+
+  /* Mitad baja: el principal. La cabecera solo importa en 0x120, donde
+     load_bios busca los nombres de los modelos (Wondermega, CDX): cualquier
+     otra cosa es el hardware por defecto, que es lo que se quiere. */
+  memcpy(bios + 0x100u, "SEGA MEGA DRIVE ", 16u);
+  memcpy(bios + 0x120u, "AYTHER GENERATED CD BOOT ROM    ", 32u);
+  b.rom = bios; b.pc = RESET_PC; b.failed = 0;
+  emit_reset_program_cd(&b);
+  vertical = emit_vertical_handler_cd(&b);
+  dflt = (uint32_t)b.pc;
+  emit_u16(&b, 0x4e73u); /* rte */
+  if (b.failed) return 0;
+  put_u32(bios, 0x00ffff00u);
+  for (vector = 1u; vector < 64u; ++vector)
+    put_u32(bios + vector * 4u, dflt);
+  put_u32(bios + 4u, RESET_PC);
+  put_u32(bios + 30u * 4u, vertical);
+
+  /* Mitad alta: el sub. Sus vectores son los de PRG-RAM una vez copiado. */
+  b.rom = bios + CD_BIOS_SUB_HALF; b.pc = RESET_PC; b.failed = 0;
+  emit_sub_program(&b);
+  dflt = (uint32_t)b.pc;
+  emit_u16(&b, 0x4e73u); /* rte */
+  if (b.failed) return 0;
+  put_u32(b.rom, SUB_STACK);
+  for (vector = 1u; vector < 64u; ++vector)
+    put_u32(b.rom + vector * 4u, dflt);
+  put_u32(b.rom + 4u, RESET_PC);
+
+  return AYTHER_CD_BIOS_SIZE;
+}
+
+size_t ayther_build_generated_cd_image(uint8_t *iso, size_t capacity)
+{
+  size_t sector, i;
+
+  if (!iso || capacity < AYTHER_CD_ISO_SIZE) return 0;
+  memset(iso, 0, AYTHER_CD_ISO_SIZE);
+
+  /* Sector 0: la cabecera del sistema y la del "juego". "SEGADISCSYSTEM" es lo
+     que cdd_load usa para reconocer una imagen cocida de 2048; el resto es lo
+     que getrominfo lee para nombre y region (JUE -> USA con la deteccion
+     automatica, y la BIOS se escribe con los tres nombres igual). */
+  memcpy(iso + 0x000u, "SEGADISCSYSTEM  ", 16u);
+  memcpy(iso + 0x010u, "AYTHER-CD  ", 11u);
+  memcpy(iso + 0x100u, "SEGA MEGA DRIVE ", 16u);
+  memcpy(iso + 0x110u, "(C)AYTHER 2026.SEP", 18u);
+  memcpy(iso + 0x120u, "AYTHER GENERATED CD FIXTURE", 27u);
+  memcpy(iso + 0x150u, "AYTHER GENERATED CD FIXTURE", 27u);
+  memcpy(iso + 0x180u, "GM AYTHER-CD01", 14u);
+  memcpy(iso + 0x1f0u, "JUE             ", 16u);
+
+  /* Los demas sectores: un patron distinto por sector, para que lo que el CDC
+     decodifica mientras el CDD lee tenga contenido. */
+  for (sector = 1u; sector < AYTHER_CD_ISO_SECTORS; ++sector)
+  {
+    uint8_t *s = iso + sector * AYTHER_CD_SECTOR_SIZE;
+    put_u32(s, (uint32_t)sector);
+    for (i = 4u; i < AYTHER_CD_SECTOR_SIZE; ++i)
+      s[i] = (uint8_t)(sector * 7u + i);
+  }
+  return AYTHER_CD_ISO_SIZE;
+}

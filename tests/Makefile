@@ -32,6 +32,7 @@ SPRITE_CAPTURE_BIN := $(BUILD_DIR)/test_sprite_capture$(EXE_EXT)
 ROM_PROBE_BIN := $(BUILD_DIR)/raster_rom_probe$(EXE_EXT)
 FULL_CORE_BIN := $(BUILD_DIR)/full_core_replay$(EXE_EXT)
 STATE_GUARD_BIN := $(BUILD_DIR)/state_guard$(EXE_EXT)
+STATE_SCD_GUARD_BIN := $(BUILD_DIR)/state_scd_guard$(EXE_EXT)
 STATE_LAYOUT_BIN := $(BUILD_DIR)/state_layout$(EXE_EXT)
 AUDIO_CTRL_BIN := $(BUILD_DIR)/audio_controls$(EXE_EXT)
 STATE_XPROC_BIN := $(BUILD_DIR)/state_cross_process$(EXE_EXT)
@@ -170,6 +171,20 @@ check-state-guard: $(STATE_GUARD_BIN)
 	$(call require_core)
 	$(STATE_GUARD_BIN) "$(CORE)"
 
+# #97: lo mismo para Sega CD: un estado con un indice de pista fuera de la TOC
+# se rechaza, en vez de cargarse corrido desde el bloque del PCM en adelante.
+# El fixture (BIOS e imagen sinteticas) se escribe en BUILD_DIR.
+$(STATE_SCD_GUARD_BIN): ayther/state_scd_guard.c ayther/generated_rom.c \
+		ayther/generated_rom.h ayther/cd_fixture.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core \
+		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include \
+		-Iayther -o $@ ayther/state_scd_guard.c ayther/generated_rom.c \
+		$(LDFLAGS) $(ROM_PROBE_LIBS)
+
+check-state-scd-guard: $(STATE_SCD_GUARD_BIN) | $(BUILD_DIR)
+	$(call require_core)
+	$(STATE_SCD_GUARD_BIN) "$(CORE)" "$(BUILD_DIR)"
+
 # #45: shared.h arrastra los headers del core, asi que necesita el mismo set de
 # -I que el build real.
 CORE_INCFLAGS := -I$(CORE_DIR)/core -I$(CORE_DIR)/core/z80 	-I$(CORE_DIR)/core/m68k -I$(CORE_DIR)/core/ntsc -I$(CORE_DIR)/core/sound 	-I$(CORE_DIR)/core/input_hw -I$(CORE_DIR)/core/cd_hw 	-I$(CORE_DIR)/core/cart_hw -I$(CORE_DIR)/core/cart_hw/svp 	-I$(CORE_DIR)/core/debug -I$(CORE_DIR)/core/ayther 	-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include
@@ -208,7 +223,8 @@ check-state-cross-process: $(STATE_XPROC_BIN) | $(BUILD_DIR)
 	$(STATE_XPROC_BIN) "$(CORE)" "$(BUILD_DIR)"
 
 $(STATE_RT_BIN): ayther/state_roundtrip.c ayther/generated_rom.c \
-		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
+		ayther/generated_rom.h ayther/cd_fixture.h \
+		$(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther \
 		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include \
 		-Iayther -o $@ ayther/state_roundtrip.c ayther/generated_rom.c \
@@ -217,10 +233,12 @@ $(STATE_RT_BIN): ayther/state_roundtrip.c ayther/generated_rom.c \
 # #76: el savestate tiene que estar COMPLETO. Guardar, correr, recargar,
 # correr lo mismo y comparar: cualquier divergencia es un campo que no viaja en
 # el blob. Sin golden -- el oraculo es la corrida de al lado-, sobre Mega Drive,
-# Master System, Master System con FM Nuked y Game Gear.
-check-state-roundtrip: $(STATE_RT_BIN)
+# Master System, Master System con FM Nuked, Game Gear, MD con EEPROM y, desde
+# #97, Sega CD. Ese ultimo escribe su BIOS y su imagen en BUILD_DIR, que es de
+# donde el core las lee (directorio de sistema) y donde deja la backup RAM.
+check-state-roundtrip: $(STATE_RT_BIN) | $(BUILD_DIR)
 	$(call require_core)
-	$(STATE_RT_BIN) "$(CORE)"
+	$(STATE_RT_BIN) "$(CORE)" "$(BUILD_DIR)"
 
 $(FRAME_DELTA_BIN): ayther/frame_delta.c ayther/generated_rom.c \
 		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)

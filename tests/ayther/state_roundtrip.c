@@ -17,9 +17,9 @@
  *           que recien importa dentro de veinte frames. Sin ella el test diria
  *           "todo bien" hasta que el sintoma aparece lejos de la causa.
  *
- * Y se corre sobre las cuatro combinaciones que el fork puede armar hoy con sus
- * fixtures sinteticos: Mega Drive, Master System, Master System con el FM de
- * Nuked y Game Gear. La consola la elige la EXTENSION del archivo -- el core la
+ * Y se corre sobre las combinaciones que el fork puede armar con sus fixtures
+ * sinteticos: Mega Drive, Master System, Master System con el FM de Nuked,
+ * Game Gear, Mega Drive con EEPROM y Sega CD. La consola la elige la EXTENSION del archivo -- el core la
  * mira en loadrom.c-, asi que Game Gear sale del mismo ROM que Master System
  * con otro nombre: lo que cambia es el hardware que el core levanta alrededor,
  * que es justo lo que #76 pone en duda.
@@ -39,7 +39,12 @@
  * lo vea hace falta un fixture que deje una transaccion I2C a medias antes del
  * checkpoint y lea el resultado despues. Ese ROM no existe todavia.
  *
- * Uso: state_roundtrip <core> [fixture]
+ * #97: el sexto fixture es un Sega CD entero -- BIOS e imagen sinteticas, ver
+ * cd_fixture.h--, que es el sistema donde el savestate tiene MAS que perder:
+ * dos 68000, PRG-RAM, Word-RAM, CDC, CDD, PCM y el ASIC grafico, todo en
+ * bloques propios del blob que hasta este fixture nadie cargaba en un test.
+ *
+ * Uso: state_roundtrip <core> [directorio-de-trabajo] [fixture]
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -47,6 +52,7 @@
 #include <stdint.h>
 #include <libretro.h>
 #include "generated_rom.h"
+#include "cd_fixture.h"
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -74,20 +80,25 @@ struct fixture
   int         fm;       /* YM2413 de Nuked encendido */
   int         sms_rom;  /* el ROM sintetico de Master System */
   int         eeprom;   /* cartucho de MD con EEPROM I2C serie */
+  int         cd;       /* #97: Sega CD, BIOS e imagen sinteticas en disco */
   unsigned    flags;    /* escena, si sms_rom */
 };
 
 static const struct fixture FIXTURES[] = {
-  { "md",     "md",  0, 0, 0, 0 },
-  { "sms",    "sms", 0, 1, 0, 0 },
-  { "sms-fm", "sms", 1, 1, 0, AYTHER_SMS_SCENE_FM },
-  { "gg",     "gg",  0, 1, 0, 0 },
-  { "eeprom", "md",  0, 0, 1, 0 },
+  { "md",     "md",  0, 0, 0, 0, 0 },
+  { "sms",    "sms", 0, 1, 0, 0, 0 },
+  { "sms-fm", "sms", 1, 1, 0, 0, AYTHER_SMS_SCENE_FM },
+  { "gg",     "gg",  0, 1, 0, 0, 0 },
+  { "eeprom", "md",  0, 0, 1, 0, 0 },
+  { "scd",    "iso", 0, 0, 0, 1, 0 },
 };
 #define N_FIXTURES ((int)(sizeof(FIXTURES) / sizeof(FIXTURES[0])))
 
 static const struct fixture *g_fx;
 static struct retro_game_info_ext gi_ext;
+/* Donde se escriben los archivos del fixture de CD, y donde el core busca la
+   BIOS y deja la backup RAM: el BUILD_DIR del Makefile, que ya se limpia. */
+static const char *g_workdir = ".";
 static uint64_t g_video, g_audio;
 static uint64_t g_audio_n;
 static int g_capturing;
@@ -113,11 +124,14 @@ static bool env_cb(unsigned cmd, void *data)
       if (data) *(int *)data = 3;
       return data != NULL;
     case RETRO_ENVIRONMENT_GET_GAME_INFO_EXT:
+      /* El CD entra por RUTA: cdd_load abre la imagen del disco, no la
+         recibe en memoria. Sin info_ext el core usa retro_game_info.path. */
+      if (g_fx && g_fx->cd) return false;
       if (data) *(const struct retro_game_info_ext **)data = &gi_ext;
       return data != NULL;
     case RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY:
     case RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY:
-      if (data) *(const char **)data = ".";
+      if (data) *(const char **)data = g_workdir;
       return data != NULL;
     case RETRO_ENVIRONMENT_GET_VARIABLE:
     {
@@ -243,8 +257,8 @@ static int run_fixture(library_t lib, const struct fixture *fx)
   struct core_api api;
   struct retro_game_info game;
   uint8_t *rom = (uint8_t *)malloc(ROM_SIZE);
-  uint8_t *checkpoint = NULL, *scratch = NULL;
-  char path[64];
+  uint8_t *checkpoint = NULL, *scratch = NULL, *scratch2 = NULL;
+  char path[1024];
   size_t size;
   unsigned f;
   struct outcome sin_recarga, con_recarga;
@@ -253,22 +267,32 @@ static int run_fixture(library_t lib, const struct fixture *fx)
   g_fx = fx;
   if (!rom || !load_api(lib, &api)) { free(rom); return 1; }
 
-  if (fx->sms_rom
-        ? !ayther_build_generated_rom_sms_scene(rom, ROM_SIZE, fx->flags)
-        : (fx->eeprom ? !ayther_build_generated_rom_eeprom(rom, ROM_SIZE)
-                      : !ayther_build_generated_rom(rom, ROM_SIZE))) {
-    fprintf(stderr, "%s: no se pudo construir el fixture\n", fx->name);
-    free(rom); return 1;
-  }
-  snprintf(path, sizeof(path), "ayther-%s.%s", fx->name, fx->ext);
-
-  memset(&gi_ext, 0, sizeof(gi_ext));
-  gi_ext.full_path = path; gi_ext.dir = ".";
-  gi_ext.name = fx->name; gi_ext.ext = fx->ext;
-  gi_ext.data = rom; gi_ext.size = ROM_SIZE;
-  gi_ext.persistent_data = true;
   memset(&game, 0, sizeof(game));
-  game.path = path; game.data = rom; game.size = ROM_SIZE;
+  if (fx->cd) {
+    /* #97: BIOS e imagen al disco, y el core recibe la ruta de la imagen. */
+    if (!ayther_cd_fixture_write(g_workdir, path, sizeof(path))) {
+      fprintf(stderr, "%s: no se pudo escribir el fixture de CD en %s\n",
+              fx->name, g_workdir);
+      free(rom); return 1;
+    }
+    game.path = path;
+  } else {
+    if (fx->sms_rom
+          ? !ayther_build_generated_rom_sms_scene(rom, ROM_SIZE, fx->flags)
+          : (fx->eeprom ? !ayther_build_generated_rom_eeprom(rom, ROM_SIZE)
+                        : !ayther_build_generated_rom(rom, ROM_SIZE))) {
+      fprintf(stderr, "%s: no se pudo construir el fixture\n", fx->name);
+      free(rom); return 1;
+    }
+    snprintf(path, sizeof(path), "ayther-%s.%s", fx->name, fx->ext);
+
+    memset(&gi_ext, 0, sizeof(gi_ext));
+    gi_ext.full_path = path; gi_ext.dir = ".";
+    gi_ext.name = fx->name; gi_ext.ext = fx->ext;
+    gi_ext.data = rom; gi_ext.size = ROM_SIZE;
+    gi_ext.persistent_data = true;
+    game.path = path; game.data = rom; game.size = ROM_SIZE;
+  }
 
   api.set_environment(env_cb);
   api.set_video_refresh(vid_cb);
@@ -286,7 +310,8 @@ static int run_fixture(library_t lib, const struct fixture *fx)
   size = api.serialize_size();
   checkpoint = size ? (uint8_t *)malloc(size) : NULL;
   scratch    = size ? (uint8_t *)malloc(size) : NULL;
-  if (!checkpoint || !scratch || !api.serialize(checkpoint, size)) {
+  scratch2   = size ? (uint8_t *)malloc(size) : NULL;
+  if (!checkpoint || !scratch || !scratch2 || !api.serialize(checkpoint, size)) {
     fprintf(stderr, "%s: no se pudo guardar el checkpoint\n", fx->name);
     bad = 1;
     goto done;
@@ -301,7 +326,7 @@ static int run_fixture(library_t lib, const struct fixture *fx)
     bad = 1;
     goto done;
   }
-  if (!measure(&api, scratch, size, &con_recarga)) { bad = 1; goto done; }
+  if (!measure(&api, scratch2, size, &con_recarga)) { bad = 1; goto done; }
 
   printf("  %-7s video %016llx %s  audio %016llx %s  estado %016llx %s",
          fx->name,
@@ -322,9 +347,30 @@ static int run_fixture(library_t lib, const struct fixture *fx)
     if (sin_recarga.audio != con_recarga.audio)
       printf("           audio  sin recarga %016llx\n",
              (unsigned long long)sin_recarga.audio);
-    if (sin_recarga.state != con_recarga.state)
+    if (sin_recarga.state != con_recarga.state) {
+      /* Los dos blobs estan a mano: decir DONDE difieren, que es lo que
+         convierte "el estado no viaja" en "este campo no viaja". */
+      size_t i = 0, shown = 0;
       printf("           estado sin recarga %016llx\n",
              (unsigned long long)sin_recarga.state);
+      while (i < size && shown < 8) {
+        if (scratch[i] != scratch2[i]) {
+          size_t j = i;
+          while (j < size && scratch[j] != scratch2[j]) ++j;
+          size_t k, w = (j - i < 8u) ? 8u : (j - i);
+          printf("           difiere en [%zu, %zu):", i, j);
+          printf("  sin recarga");
+          for (k = 0; k < w && i + k < size; ++k) printf(" %02x", scratch[i + k]);
+          printf("  con recarga");
+          for (k = 0; k < w && i + k < size; ++k) printf(" %02x", scratch2[i + k]);
+          printf("\n");
+          shown++;
+          i = j;
+        } else {
+          ++i;
+        }
+      }
+    }
     bad = 1;
   } else if (sin_recarga.samples == 0) {
     /* Un fixture mudo hace que la comparacion de audio no afirme nada. */
@@ -336,6 +382,7 @@ static int run_fixture(library_t lib, const struct fixture *fx)
   api.unload_game();
   api.deinit();
 done:
+  free(scratch2);
   free(scratch);
   free(checkpoint);
   free(rom);
@@ -348,18 +395,19 @@ int main(int argc, char **argv)
   int i, fail = 0, ran = 0;
 
   if (argc < 2) {
-    fprintf(stderr, "uso: %s <core> [fixture]\n", argv[0]);
+    fprintf(stderr, "uso: %s <core> [directorio-de-trabajo] [fixture]\n", argv[0]);
     return 2;
   }
   lib = open_library(argv[1]);
   if (!lib) { fprintf(stderr, "no carga el core: %s\n", argv[1]); return 2; }
+  if (argc > 2) g_workdir = argv[2];
 
   printf("roundtrip del savestate: guardar, correr %u frames, recargar y repetir\n",
          (unsigned)RUN_FRAMES);
   printf("  '=' es que la recarga reprodujo la corrida; '!' que no.\n\n");
 
   for (i = 0; i < N_FIXTURES; ++i) {
-    if (argc > 2 && strcmp(argv[2], FIXTURES[i].name) != 0) continue;
+    if (argc > 3 && strcmp(argv[3], FIXTURES[i].name) != 0) continue;
     fail |= run_fixture(lib, &FIXTURES[i]);
     ran++;
   }

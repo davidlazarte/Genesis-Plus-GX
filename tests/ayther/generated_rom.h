@@ -179,4 +179,29 @@ unsigned int ayther_scene_raster(size_t index);
    VRAM se llene con lo que escribe el Z80. */
 size_t ayther_build_generated_rom_z80_vdp(uint8_t *rom, size_t capacity);
 
+/* #97: un Sega CD entero, sintetico. Dos archivos, porque el core los lee del
+   disco (ver cd_fixture.h):
+
+   La BIOS (128KB, lo que load_bios exige). La mitad baja es el programa del
+   68000 principal: levanta el VDP y el FM/PSG como el cartucho de siempre,
+   copia la mitad alta a PRG-RAM y suelta el sub-CPU escribiendo SRES=1 en
+   $A12001. La mitad alta es el programa del sub-68000: llena la wave RAM del
+   RF5C164, deja el canal 0 sonando, manda un Play al CDD desde el LBA 0 y
+   despues cuenta sin parar en el buzon $FF8020, que el handler vertical del
+   principal lee en $A12020 y escribe en la entrada 0 de CRAM. Asi el progreso
+   del sub-CPU se VE (color de fondo), el PCM se OYE, y el CDD/CDC tienen
+   estado que perder (LBA avanzando, sectores leidos).
+
+   La imagen: sectores de 2048 bytes (MODE1 cocido) con "SEGADISCSYSTEM" al
+   frente, que es lo unico que cdd_load mira para montarla. Una pista de datos
+   de AYTHER_CD_ISO_SECTORS sectores, cada uno con un patron distinto, para
+   que lo que lee el CDC no sea todo ceros. */
+#define AYTHER_CD_BIOS_SIZE    0x20000u
+#define AYTHER_CD_SECTOR_SIZE  2048u
+#define AYTHER_CD_ISO_SECTORS  300u
+#define AYTHER_CD_ISO_SIZE     (AYTHER_CD_ISO_SECTORS * AYTHER_CD_SECTOR_SIZE)
+#define AYTHER_CD_ISO_NAME     "ayther-cd.iso"
+size_t ayther_build_generated_cd_bios(uint8_t *bios, size_t capacity);
+size_t ayther_build_generated_cd_image(uint8_t *iso, size_t capacity);
+
 #endif

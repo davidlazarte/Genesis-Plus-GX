@@ -35,7 +35,7 @@ log=${3:-"$fuzz/artifacts/isolation-$scene.log"}
 replay="$fuzz/.build/replay_unserialize"
 [ -x "$replay" ] || replay="$replay.exe"
 if [ ! -x "$replay" ]; then
-  echo "no encuentro $fuzz/.build/replay_unserialize (falta make -C tests/fuzz .build/replay_unserialize)" >&2
+  echo "no encuentro $fuzz/.build/replay_unserialize: lo compila make -C tests check-fuzz CORE=<core> (o make -C tests/fuzz .build/replay_unserialize[.exe])" >&2
   exit 2
 fi
 case $core in /*|[A-Za-z]:*) ;; *) core="$(pwd)/$core" ;; esac
@@ -43,6 +43,8 @@ case $core in /*|[A-Za-z]:*) ;; *) core="$(pwd)/$core" ;; esac
 mkdir -p "$(dirname "$log")"
 : > "$log"
 export AYTHER_FUZZ_DIGEST=1
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
 
 # Todas las entradas del target: las regresiones y el corpus. El orden es el
 # del nombre, fijo, que es justamente lo que el driver NO garantiza cuando se le
@@ -56,14 +58,16 @@ if [ "${#files[@]}" -lt 2 ]; then
   exit 2
 fi
 
-# huellas <archivo>... : imprime una huella por entrada, en el orden dado.
-# Deja el codigo de salida del replay en $rc.
-rc=0
+# huellas <archivo>... : imprime una huella por entrada, en el orden dado, y
+# deja el codigo de salida del replay en $tmp/rc. En un archivo y no en una
+# variable porque quien llama captura la salida con $(...), o sea en un
+# subshell, y una variable asignada adentro se pierde: asi es como la primera
+# version de este script informaba "exit 0" sobre un replay que habia muerto
+# con segfault -- lo delato la cuenta de huellas, no el codigo.
 huellas() {
-  local out
-  out=$("$replay" --scene "$scene" "$core" "$@" 2>>"$log")
-  rc=$?
-  printf '%s\n' "$out" | sed -n 's/^  digest \([0-9a-f]*\) .*/\1/p'
+  "$replay" --scene "$scene" "$core" "$@" 2>>"$log" |
+    sed -n 's/^  digest \([0-9a-f]*\) .*/\1/p'
+  echo "${PIPESTATUS[0]}" > "$tmp/rc"
 }
 
 fallas=0
@@ -71,10 +75,10 @@ n=0
 falla() { printf '  FALLA %s\n' "$1"; fallas=$((fallas + 1)); }
 
 echo "== $scene: ${#files[@]} entradas, orden directo e inverso =="
-directo=$(huellas "${files[@]}"); rc_d=$rc
+directo=$(huellas "${files[@]}"); rc_d=$(cat "$tmp/rc")
 inverso_files=()
 for ((i = ${#files[@]} - 1; i >= 0; i--)); do inverso_files+=("${files[$i]}"); done
-inverso=$(huellas "${inverso_files[@]}"); rc_i=$rc
+inverso=$(huellas "${inverso_files[@]}"); rc_i=$(cat "$tmp/rc")
 
 n=$((n + 2))
 [ "$rc_d" = 0 ] && printf '  ok    orden directo: exit 0\n'  || falla "orden directo: exit $rc_d"
@@ -97,8 +101,8 @@ for ((i = 0; i < ${#files[@]}; i++)); do
   ref=${D[$i]:-}
   inv=${I[$(( ${#files[@]} - 1 - i ))]:-}
 
-  sola=$(huellas "$f"); rc_s=$rc
-  rep=$(huellas "$f" "$f"); rc_r=$rc
+  sola=$(huellas "$f"); rc_s=$(cat "$tmp/rc")
+  rep=$(huellas "$f" "$f"); rc_r=$(cat "$tmp/rc")
   rep1=$(printf '%s\n' "$rep" | sed -n 1p)
   rep2=$(printf '%s\n' "$rep" | sed -n 2p)
 

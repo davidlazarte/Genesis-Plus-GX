@@ -48,19 +48,26 @@ tests/fuzz/.build/replay_recompose \
 
 ## Escenas (#75)
 
-El target `unserialize` corre en tres escenas, y la escena decide **qué chip de
-FM** entra en `sound_context_load`:
+El target `unserialize` corre en cuatro escenas, y la escena decide **qué
+hardware** hay detrás del blob:
 
-| escena | consola | rama de la carga |
+| escena | consola | lo que entra crudo del blob |
 |---|---|---|
 | `md` (la de siempre) | Mega Drive | `YM2612LoadContext` (MAME) |
 | `md-nuked` | Mega Drive | `config.ym3438` → struct de Nuked OPN2 |
 | `sms-fm` | Master System | `config.opll` → struct de Nuked YM2413 |
+| `scd` (#97) | Sega CD | el bloque `SCD!` entero: dos 68000, PRG-RAM, Word-RAM, CDC, CDD, PCM, ASIC gráfico |
 
 Hasta #75 solo existía la primera, así que las otras dos ramas —structs enteros
 que también entran crudos del blob— **nunca se ejercitaban**. Ahí es donde
 apuntan los dos issues abiertos de upstream sobre cargar un savestate de Master
 System con Nuked (libretro/Genesis-Plus-GX#403 y #290).
+
+La cuarta (#97) es un Sega CD entero con **BIOS e imagen sintéticas**
+([`../../ayther/cd_fixture.h`](../../ayther/cd_fixture.h)): el core las lee del
+disco, así que el replay las escribe en `BUILD_DIR` (`--workdir`) antes de
+cargar. Es el sistema con más bloques propios en el savestate, y hasta esa
+escena ninguna mutación tocaba uno.
 
 El fuzzer corre una escena por proceso (`SCENE=`, un job por escena en el
 nocturno): cambiarla implica `load_game`, y hacerlo por entrada convertiría al

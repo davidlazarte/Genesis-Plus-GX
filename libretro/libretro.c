@@ -3722,6 +3722,87 @@ size_t retro_serialize_size(void) { return STATE_SIZE; }
                                   - AYTHER_AUDIO_CONT_BYTES)
 #define AYTHER_STATE_TAG_OFFSET (STATE_SIZE - AYTHER_STATE_TAG_BYTES)
 
+/* Fase de los relojes del 68000 a traves de un savestate. (#118)
+
+   state_save guarda m68k.cycles pero no m68k.refresh_cycles, que es el
+   proximo ciclo en que el bus externo se detiene por el refresh de la DRAM
+   (128 ciclos de CPU en la Mega Drive; m68kops.h cobra el stall cuando
+   cycles lo alcanza). Los dos se rebasan juntos al final de cada frame
+   (system.c), asi que su DIFERENCIA es estado del chip, y al cargar quedaba
+   la que tenia el proceso: en una sesion nueva la del reset, en la misma
+   sesion la del ultimo frame corrido. Como el periodo (896 ciclos maestros)
+   no divide al frame, la fase deriva y ninguna de las dos coincide con la
+   original. El efecto no es un crash: el 68000 paga los stalls en otras
+   instrucciones, el Z80 y las escrituras al YM2612 se corren unos ciclos, y
+   la continuacion restaurada deja de sonar como la original. Medido con
+   raster_rom_probe --checkpoint sobre 14 ROMs: 12 con audio distinto desde
+   el primer frame restaurado, y uno (Musha Aleste) con el video divergiendo
+   78 frames despues.
+
+   Lo mismo para la deteccion de polling (m68k.poll / s68k.poll), que
+   decide si el CPU salta al final de su porcion de tiempo, y para el
+   sub-CPU del Mega CD.
+
+   Va a un OFFSET FIJO, pegado al bloque de continuidad del audio, por las
+   mismas razones que aquel: no mueve un byte de lo que ya se escribia y un
+   estado sin el bloque se sigue cargando. Sin bloque, la fase del refresh
+   se recompone desde cycles como hace m68k_pulse_reset -- determinista y
+   dentro del periodo--, en vez de heredar la del proceso. */
+#define AYTHER_TIMING_MAGIC  UINT32_C(0x4d495441)  /* "ATIM" */
+#define AYTHER_TIMING_BYTES  64
+#define AYTHER_TIMING_OFFSET (AYTHER_AUDIO_CONT_OFFSET - AYTHER_TIMING_BYTES)
+
+static void ayther_timing_put(unsigned char *p, size_t at, uint32_t v)
+{
+   memcpy(p + at, &v, sizeof(v));
+}
+
+static uint32_t ayther_timing_get(const unsigned char *p, size_t at)
+{
+   uint32_t v;
+   memcpy(&v, p + at, sizeof(v));
+   return v;
+}
+
+static void ayther_timing_write(void *data)
+{
+   unsigned char *p = (unsigned char *)data + AYTHER_TIMING_OFFSET;
+
+   memset(p, 0, AYTHER_TIMING_BYTES);
+   ayther_timing_put(p,  0, AYTHER_TIMING_MAGIC);
+   ayther_timing_put(p,  4, (uint32_t)m68k.refresh_cycles);
+   ayther_timing_put(p,  8, (uint32_t)m68k.poll.pc);
+   ayther_timing_put(p, 12, (uint32_t)m68k.poll.cycle);
+   ayther_timing_put(p, 16, (uint32_t)m68k.poll.detected);
+   ayther_timing_put(p, 20, (uint32_t)s68k.refresh_cycles);
+   ayther_timing_put(p, 24, (uint32_t)s68k.poll.pc);
+   ayther_timing_put(p, 28, (uint32_t)s68k.poll.cycle);
+   ayther_timing_put(p, 32, (uint32_t)s68k.poll.detected);
+}
+
+static void ayther_timing_read(const void *data)
+{
+   const unsigned char *p = (const unsigned char *)data + AYTHER_TIMING_OFFSET;
+
+   if (ayther_timing_get(p, 0) != AYTHER_TIMING_MAGIC)
+   {
+      /* Estado sin bloque: la fase que da el reset para estos cycles. */
+      m68k.refresh_cycles = ((m68k.cycles / (128*7)) * (128*7)) + 128*7;
+      s68k.refresh_cycles = ((s68k.cycles / (128*7)) * (128*7)) + 128*7;
+      m68k.poll.detected = 0;
+      s68k.poll.detected = 0;
+      return;
+   }
+   m68k.refresh_cycles = (sint)ayther_timing_get(p, 4);
+   m68k.poll.pc        = ayther_timing_get(p, 8);
+   m68k.poll.cycle     = ayther_timing_get(p, 12);
+   m68k.poll.detected  = ayther_timing_get(p, 16);
+   s68k.refresh_cycles = (sint)ayther_timing_get(p, 20);
+   s68k.poll.pc        = ayther_timing_get(p, 24);
+   s68k.poll.cycle     = ayther_timing_get(p, 28);
+   s68k.poll.detected  = ayther_timing_get(p, 32);
+}
+
 /* Huella del layout de ESTE binario. sizeof(void*) es la causa raiz; los
  * structs que se vuelcan enteros van tambien, asi que un cambio de packing o
  * de compilador se detecta igual. */
@@ -3832,6 +3913,7 @@ bool retro_serialize(void *data, size_t size)
    state_save(data);
    ayther_state_tag_write(data);
    ayther_audio_continuity_write(data);
+   ayther_timing_write(data);
    if (fast_savestates) save_sound_buffer();
 
    return TRUE;
@@ -3856,6 +3938,7 @@ bool retro_unserialize(const void *data, size_t size)
       es el caso de un savestate de archivo o de otra sesion, sale del blob. */
    if (fast_savestates) restore_sound_buffer();
    else                 ayther_audio_continuity_read(data);
+   ayther_timing_read(data);
 
 #ifdef HAVE_OVERCLOCK
    update_overclock();

@@ -124,7 +124,8 @@ Por ROM:
   de `check-scenes`.
 - **Savestates**: el probe no guarda ni carga estados durante la corrida. La completitud del
   savestate se afirma aparte (`check-state-roundtrip`, seis fixtures) y su validacion frente a
-  bytes corruptos la cubre `check-fuzz` con el core instrumentado.
+  bytes corruptos la cubre `check-fuzz` con el core instrumentado. (Cubierto despues por #117:
+  `raster-roms-2026-09-17-checkpoint.md`, que sobre este mismo binario encontro #118.)
 
 ## Como se rehace
 

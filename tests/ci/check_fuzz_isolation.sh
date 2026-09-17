@@ -19,6 +19,8 @@
 # y el aislamiento es una declaracion, no un hecho.
 #
 # Uso: check_fuzz_isolation.sh <core> [escena] [log]
+#      AYTHER_FUZZ_REPLAY=<ruta> elige otro replay_unserialize (un BUILD_DIR
+#      aparte, o un target alterado para medir que el script lo ve fallar).
 #
 # Necesita el replay ya compilado (make -C tests/fuzz .build/replay_unserialize,
 # o cualquier check-fuzz previo). El stderr de todas las corridas -donde caen
@@ -32,7 +34,7 @@ here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 fuzz=$(CDPATH= cd -- "$here/../fuzz" && pwd)
 log=${3:-"$fuzz/artifacts/isolation-$scene.log"}
 
-replay="$fuzz/.build/replay_unserialize"
+replay=${AYTHER_FUZZ_REPLAY:-"$fuzz/.build/replay_unserialize"}
 [ -x "$replay" ] || replay="$replay.exe"
 if [ ! -x "$replay" ]; then
   echo "no encuentro $fuzz/.build/replay_unserialize: lo compila make -C tests check-fuzz CORE=<core> (o make -C tests/fuzz .build/replay_unserialize[.exe])" >&2

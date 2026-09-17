@@ -338,6 +338,15 @@ jobs:
           CC=clang
           CORE=../genesis_plus_gx_libretro.so
 
+      # #97: un savestate de Sega CD con un indice de pista fuera de la TOC se
+      # rechaza, en vez de cargarse corrido. Es el primer test que carga un
+      # estado de CD; el fixture es una BIOS y una imagen sinteticas.
+      - name: Reject a Sega CD savestate with an invalid track index
+        run: >-
+          make -C tests check-state-scd-guard
+          CC=clang
+          CORE=../genesis_plus_gx_libretro.so
+
       # #45: los tamanios quedan en el log de las DOS plataformas; comparar la
       # divergencia de state_hash pasa a ser leer dos corridas.
       - name: Report serialized struct layout
@@ -780,6 +789,7 @@ jobs:
             'recompose [escena md]' \
             'unserialize [escena md-nuked]' \
             'unserialize [escena md]' \
+            'unserialize [escena scd]' \
             'unserialize [escena sms-fm]' \
             'write_control [escena md]' | sort)
           corridos=$(sed -n 's/^== \(.*\) ==$/\1/p' fuzz-replay.log | sort -u)
@@ -792,7 +802,7 @@ jobs:
             echo "en el mismo PR. Si desaparecio uno, el gate se achico: deci por que." >&2
             exit 1
           fi
-          echo "check-fuzz: 5 targets, 3 escenas de unserialize, 7 invocaciones"
+          echo "check-fuzz: 5 targets, 4 escenas de unserialize, 8 invocaciones"
 
       # Viajo junto con check-fuzz desde el nocturno, y por el mismo motivo:
       # check-z80-vdp-fifo SI corria en cada PR, pero contra un core sin
@@ -936,6 +946,14 @@ jobs:
         shell: pwsh
         run: >-
           make -C tests check-state-guard
+          CC=clang
+          CORE=../genesis_plus_gx_libretro.dll
+
+      - name: Reject a Sega CD savestate with an invalid track index
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        shell: pwsh
+        run: >-
+          make -C tests check-state-scd-guard
           CC=clang
           CORE=../genesis_plus_gx_libretro.dll
 
@@ -1138,6 +1156,12 @@ jobs:
         if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
         run: >-
           make -C tests check-state-guard
+          CORE=../genesis_plus_gx_libretro.dylib
+
+      - name: Reject a Sega CD savestate with an invalid track index
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -C tests check-state-scd-guard
           CORE=../genesis_plus_gx_libretro.dylib
 
       - name: Report serialized struct layout

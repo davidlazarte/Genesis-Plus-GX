@@ -65,7 +65,7 @@ fi
 # version de este script informaba "exit 0" sobre un replay que habia muerto
 # con segfault -- lo delato la cuenta de huellas, no el codigo.
 huellas() {
-  "$replay" --scene "$scene" "$core" "$@" 2>>"$log" |
+  "$replay" --scene "$scene" --workdir "$fuzz/.build" "$core" "$@" 2>>"$log" |
     sed -n 's/^  digest \([0-9a-f]*\) .*/\1/p'
   echo "${PIPESTATUS[0]}" > "$tmp/rc"
 }

@@ -91,6 +91,36 @@ tests/fuzz/.build/replay_unserialize --scene sms-fm \
   la pasa sin empaquetar. Con el core instrumentado y sin la máscara, este
   archivo produce `index 43839 out of bounds for type 'unsigned short[512]'`.
 
+- **`generated_rom/pila-sobre-el-puerto-del-svp-sin-svp`** y
+  **`generated_rom/lectura-del-puerto-del-svp-sin-svp`** (#128) — los primeros
+  del target, y un bug de upstream que no necesita un cartucho corrupto: alcanza
+  con uno **que no sea Virtua Racing**. `$A15000-$A15005` son los registros del
+  SVP, y `ctrl_io_read_byte`, `ctrl_io_read_word` y `ctrl_io_write_word`
+  desreferenciaban `svp` sin mirar; `md_cart.c` lo deja en `NULL` en todo
+  cartucho sin SVP —y el resto del core sí pregunta `if (svp)`—. El arreglo le
+  da a esas direcciones el trato de las demás no usadas del bloque.
+
+  Están **fabricados a mano**, porque el archivo del nocturno
+  (`crash-b4bc49e6…`) *no reproduce solo*: medido, pasa limpio con y sin el
+  arreglo. Sus mutaciones mueven el SSP inicial de `$00FFFF00` a `$00A6FF00` y
+  tocan cuatro bytes más del ROM, y por sí solas no llevan la pila hasta
+  `$A15000`, que es donde el CI vio al 68000 empujar un stack frame de address
+  error. Un archivo que pasa con y sin el arreglo no es una regresión: misma
+  conclusión que en #63 y #105. La versión
+  determinística del hallazgo es el primer archivo: cuatro mutaciones que ponen
+  el SSP del vector de reset en `$00A15006`, con lo cual la primera excepción
+  —el v-int del ROM sintético— empuja PC y SR sobre el puerto. Con el core
+  instrumentado y sin el arreglo produce `member access within null pointer of
+  type 'struct svp_t'` y un `SEGV on unknown address 0x00000004042e` en
+  `ctrl_io_write_word`: mismo sitio y misma dirección que reportó el CI.
+
+  El segundo cubre los dos sitios de lectura, que el nocturno no tocó pero
+  tienen el mismo defecto: apunta el PC de reset a `$F000` y escribe ahí
+  `tst.w $A15000`, `tst.b $A15005`, `tst.b $A15001`, `bra.s *`. Sin el arreglo
+  muere en la primera (`SEGV` en `ctrl_io_read_word`), así que la prueba
+  negativa medida es la de la lectura de word; de la de byte queda medida la
+  positiva —con el arreglo las tres corren limpias—.
+
 - **`unserialize/pms-corrupto-indexa-lfo-pm-table`** — muta bytes de un
   savestate válido y lo carga. `YM2612LoadContext` copia el blob crudo sobre el
   struct, y `pms`, `ams`, `lfo_cnt` y `LFO_PM` indexan tablas del proceso sin

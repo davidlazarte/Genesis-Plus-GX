@@ -69,7 +69,7 @@ adapter de transición, pero evita nuevos punteros mutables directos.
 | Ids de memoria `0x100`–`0x10E` | inexistentes | CRAM, regs VDP, máscaras escribibles, sprites, audio, motivos de fallback |
 | ABI versionada | inexistente | `ayther_get_interface`: capabilities, layouts y snapshots consistentes |
 | `core/vdp_render.c` | render estándar | + `ayther_peel_merge`, `ayther_layer_mask`, `ayther_*_suppress` |
-| Savestate | STATE_VERSION estándar | 1.7.8: + latch del pad 6-botones (1.7.7), + bus de la EEPROM I2C (1.7.8), + bloque de continuidad de audio y tag de layout en offset fijo; carga estados 1.7.7 y rechaza los de otra ABI (`check-state-guard`, `check-state-scd-guard`, `check-state-roundtrip`) |
+| Savestate | STATE_VERSION estándar | 1.7.8: + latch del pad 6-botones (1.7.7), + bus de la EEPROM I2C (1.7.8), + bloque de continuidad de audio y tag de layout en offset fijo, + bloque de fase de relojes del 68000 (refresh del bus y deteccion de polling, #118) en offset fijo; carga estados 1.7.7 y rechaza los de otra ABI (`check-state-guard`, `check-state-scd-guard`, `check-state-roundtrip`) |
 | Branding | Genesis Plus GX | **AYTHER Genesis Core Fork** |
 
 ### Integración con AYTHER Engine

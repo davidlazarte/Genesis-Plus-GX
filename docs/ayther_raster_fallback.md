@@ -93,6 +93,11 @@ corpus was rerun on the 2026-09-17 release candidate (`54c0db20`) with
 `tests/ci/validate_roms.sh`; the result, the exact build configuration and the
 support limits are in
 [`validation/raster-roms-2026-09-17.md`](validation/raster-roms-2026-09-17.md).
+The same corpus was then run with a mid-game checkpoint (`--checkpoint 900`,
+`SOUND_PROBE=1`): the restored continuation must reproduce the original's video,
+audio and serialized state frame by frame while the raster contract still holds.
+That run, and the savestate defect it found (#118), are in
+[`validation/raster-roms-2026-09-17-checkpoint.md`](validation/raster-roms-2026-09-17-checkpoint.md).
 
 ## The raster journal and what replay reproduces (#27)
 

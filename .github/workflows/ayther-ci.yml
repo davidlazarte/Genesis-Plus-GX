@@ -480,6 +480,16 @@ jobs:
           make -C tests check-tmss-bootrom
           CORE=../genesis_plus_gx_libretro.so
 
+      # #117: el probe de ROMs comerciales (validate-roms) tiene un camino con
+      # checkpoint -serializar a mitad de partida, seguir, restaurar y volver a
+      # correr la misma continuacion- que aca corre con el ROM sintetico de FM:
+      # video y audio de la continuacion restaurada tienen que dar la misma
+      # huella frame a frame. Sin esto el probe solo se compilaba en CI.
+      - name: ROM probe with a synthetic ROM and a mid-run checkpoint
+        run: >-
+          make -C tests check-rom-probe
+          CORE=../genesis_plus_gx_libretro.so
+
       # #98: accesos de palabra impares y al borde del banco, con address
       # error apagado: donde las mascaras `& 0xfffe` de upstream hacen algo.
       - name: Odd word accesses return the even word next door
@@ -775,16 +785,29 @@ jobs:
       # crash-* del nocturno no reproducia solo por eso. Este paso afirma que
       # cada entrada da la MISMA huella sola, repetida, y detras de las demas
       # en orden directo e inverso. Usa el replay que acaba de compilar el
-      # paso de arriba y el mismo core; su stderr va a un log que se juzga
-      # con el filtro, mas abajo, igual que los otros dos.
-      - name: Each unserialize entry gives the same result alone, repeated and after the others
+      # paso de arriba y el mismo core; su stderr va a un log POR ESCENA que
+      # se juzga con el filtro, mas abajo, igual que los otros.
+      #
+      # #116: en las CUATRO escenas, no solo en `md`. Lo que se restaura entre
+      # entradas es el estado inicial de la escena, y ese estado es distinto
+      # en cada una (el bloque del CD en `scd`, el YM2413 en `sms-fm`, el
+      # Nuked en `md-nuked`): que `md` aisle no decia nada de las otras tres,
+      # que el corpus reproduce igual. La lista de escenas es explicita y la
+      # afirma por nombre el paso "Every fuzz target and unserialize scene
+      # was replayed", mas abajo, para que no pueda encogerse en silencio.
+      - name: Each unserialize entry gives the same result alone, repeated and after the others, in every scene
         env:
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=0:report_error_type=1
           ASAN_OPTIONS: verify_asan_link_order=0
         run: |
           set -euo pipefail
           export LD_LIBRARY_PATH="$(clang -print-runtime-dir):${LD_LIBRARY_PATH:-}"
-          bash tests/ci/check_fuzz_isolation.sh genesis_plus_gx_libretro.so md fuzz-isolation.log
+          rc=0
+          for scene in md md-nuked sms-fm scd; do
+            bash tests/ci/check_fuzz_isolation.sh genesis_plus_gx_libretro.so "$scene" "fuzz-isolation-$scene.log" \
+              2>&1 | tee "fuzz-isolation-$scene.out" || rc=1
+          done
+          exit "$rc"
 
       # El gate no puede encogerse en silencio. `check-fuzz` sale de un fan-out
       # sobre TARGETS y SCENES_unserialize (tests/fuzz/Makefile): si alguien
@@ -819,6 +842,19 @@ jobs:
           fi
           echo "check-fuzz: 5 targets, 4 escenas de unserialize, 8 invocaciones"
 
+          # #116: el aislamiento tambien, por nombre. Un veredicto por escena,
+          # en la ultima linea de cada .out, y las cuatro escenas presentes.
+          esperados_iso=$(printf '%s\n' md md-nuked sms-fm scd | sort)
+          corridos_iso=$(cat fuzz-isolation-*.out 2>/dev/null |
+            sed -n 's/^aislamiento de unserialize \[\(.*\)\]: [0-9]* comprobaciones, 0 fallas$/\1/p' | sort -u)
+          if [ "$esperados_iso" != "$corridos_iso" ]; then
+            echo "El aislamiento de unserialize no se midio en las cuatro escenas." >&2
+            echo "--- esperadas ---" >&2; echo "$esperados_iso" >&2
+            echo "--- con veredicto 0 fallas ---" >&2; echo "$corridos_iso" >&2
+            exit 1
+          fi
+          echo "aislamiento de unserialize: 4 escenas, 20 comprobaciones cada una"
+
       # Viajo junto con check-fuzz desde el nocturno, y por el mismo motivo:
       # check-z80-vdp-fifo SI corria en cada PR, pero contra un core sin
       # instrumentar, donde el bucle de slots del FIFO se salia de la tabla y
@@ -843,14 +879,14 @@ jobs:
       # con las mascaras `& 0xffff` viejas (3d948cab, 7b74da34, f9caf203)
       # cada acceso impar es un reporte. Sin sanitizer solo se ve el valor
       # equivocado; con el, la causa.
-      - name: TMSS boot ROM and odd word accesses under ASan
+      - name: TMSS boot ROM, odd word accesses and the ROM probe checkpoint under ASan
         env:
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=0:report_error_type=1
           ASAN_OPTIONS: verify_asan_link_order=0
         run: |
           set -euo pipefail
           export LD_LIBRARY_PATH="$(clang -print-runtime-dir):${LD_LIBRARY_PATH:-}"
-          make -C tests check-tmss-bootrom check-odd-word-access CC=clang \
+          make -C tests check-tmss-bootrom check-odd-word-access check-rom-probe CC=clang \
             CFLAGS="-O1 -g -Wall -Wextra -fsanitize=address,undefined -shared-libsan -fno-omit-frame-pointer" \
             LDFLAGS="-fsanitize=address,undefined -shared-libsan" \
             CORE=../genesis_plus_gx_libretro.so \
@@ -876,8 +912,10 @@ jobs:
           bash tests/ci/filter_known_ub.sh fuzz-replay.log
           echo "== z80-vdp-fifo.log =="
           bash tests/ci/filter_known_ub.sh z80-vdp-fifo.log
-          echo "== fuzz-isolation.log =="
-          bash tests/ci/filter_known_ub.sh fuzz-isolation.log
+          for scene in md md-nuked sms-fm scd; do
+            echo "== fuzz-isolation-$scene.log =="
+            bash tests/ci/filter_known_ub.sh "fuzz-isolation-$scene.log"
+          done
           echo "== odd-access.log =="
           bash tests/ci/filter_known_ub.sh odd-access.log
 
@@ -892,7 +930,8 @@ jobs:
           path: |
             fuzz-replay.log
             z80-vdp-fifo.log
-            fuzz-isolation.log
+            fuzz-isolation-*.log
+            fuzz-isolation-*.out
             odd-access.log
           if-no-files-found: ignore
           retention-days: 14
@@ -1100,6 +1139,15 @@ jobs:
         shell: pwsh
         run: >-
           make -C tests check-tmss-bootrom
+          CC=clang
+          CORE=../genesis_plus_gx_libretro.dll
+
+      # #117: ver el job de Linux.
+      - name: ROM probe with a synthetic ROM and a mid-run checkpoint
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        shell: pwsh
+        run: >-
+          make -C tests check-rom-probe
           CC=clang
           CORE=../genesis_plus_gx_libretro.dll
 
@@ -1321,6 +1369,13 @@ jobs:
         if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
         run: >-
           make -C tests check-tmss-bootrom
+          CORE=../genesis_plus_gx_libretro.dylib
+
+      # #117: ver el job de Linux.
+      - name: ROM probe with a synthetic ROM and a mid-run checkpoint
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -C tests check-rom-probe
           CORE=../genesis_plus_gx_libretro.dylib
 
       - name: Odd word accesses return the even word next door

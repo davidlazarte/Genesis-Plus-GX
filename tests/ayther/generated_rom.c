@@ -333,6 +333,53 @@ static void emit_reset_program_fm(struct rom_builder *builder)
   emit_u16(builder, 0x60fau);
 }
 
+/* La variante de FM con el 68000 corriendo LIBRE: en vez de `stop`, un bucle
+ * que incrementa una palabra de RAM sin parar, con las interrupciones abiertas
+ * para que el handler vertical siga haciendo su trabajo por frame.
+ *
+ * Existe por #118. Con `stop`, el 68000 termina cada frame exactamente donde
+ * lo despierta la interrupcion, y ni el PC ni m68k.cycles delatan un stall de
+ * mas o de menos: el ROM de arriba no ve la fase del refresh del bus. Con el
+ * bucle libre, cuantas iteraciones entran en un frame -- y con que resto de
+ * ciclos termina-- depende de cada stall de refresh, asi que una fase
+ * restaurada distinta de la original cambia el contador en RAM y el resto
+ * de m68k.cycles: el estado serializado tras el frame deja de ser igual, y
+ * check-rom-probe lo ve. Medido: con el binario sin el bloque de timing el
+ * estado difiere en el primer frame restaurado; con el, en ninguno. */
+#define RAM_BUSY_COUNTER 0x00ff0ff0u
+
+static void emit_reset_program_fm_busy(struct rom_builder *builder)
+{
+  unsigned int index;
+
+  emit_move_word_immediate_absolute(builder, 0x0100u, Z80_BUS_REQUEST);
+  emit_move_word_immediate_absolute(builder, 0x0100u, Z80_RESET);
+  emit_move_long_immediate_absolute(builder, 0x53454741u, TMSS);
+  emit_fixture_data(builder);
+
+  emit_ym_write(builder, 0x22u, 0x00u);
+  emit_ym_write(builder, 0x27u, 0x00u);
+  emit_ym_write(builder, 0x2bu, 0x00u);
+
+  emit_fm_voice(builder, 0u, 0x22u, 0x69u);
+  emit_fm_voice(builder, 1u, 0x24u, 0x1au);
+  emit_fm_voice(builder, 2u, 0x26u, 0xa3u);
+
+  for (index = 0; index < 8u; ++index)
+    emit_move_byte_immediate_absolute(builder,
+      (uint8_t)(0x9fu | ((index * 3u) & 0x0fu)), PSG_PORT);
+
+  emit_move_word_immediate_absolute(builder, 0x0000u, Z80_BUS_REQUEST);
+  emit_move_word_immediate_absolute(builder, 0u, RAM_BUSY_COUNTER);
+  emit_vdp_register(builder, 0, 0x14u);
+  emit_vdp_register(builder, 1, 0x74u);
+
+  emit_u16(builder, 0x46fcu); /* move.w #$2300,sr: interrupciones abiertas */
+  emit_u16(builder, 0x2300u);
+  emit_addq_word_absolute(builder, RAM_BUSY_COUNTER); /* 6 bytes */
+  emit_u16(builder, 0x60f8u); /* bra.s -8: al addq */
+}
+
 /* --- EEPROM I2C serie (#76) -------------------------------------------------
  *
  * El cartucho la declara por CABECERA y no por la base de CRCs del core: con
@@ -1416,6 +1463,11 @@ size_t ayther_build_generated_rom_eeprom(uint8_t *rom, size_t capacity)
 size_t ayther_build_generated_rom_fm(uint8_t *rom, size_t capacity)
 {
   return build_rom(rom, capacity, emit_reset_program_fm);
+}
+
+size_t ayther_build_generated_rom_fm_busy(uint8_t *rom, size_t capacity)
+{
+  return build_rom(rom, capacity, emit_reset_program_fm_busy);
 }
 
 size_t ayther_build_generated_rom_sh(uint8_t *rom, size_t capacity)

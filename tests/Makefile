@@ -244,7 +244,9 @@ check-state-cross-process: $(STATE_XPROC_BIN) | $(BUILD_DIR)
 # (continuidad exacta), estado sin bloque (acepta, corre, determinista) y un
 # estado REAL generado por el binario de ayther-abi-1.10-r2, guardado disperso
 # en ayther/golden con su procedencia. Se regenera SOLO con ese binario:
-#   .build/state_atim_compat --dump-sparse <dll de r2> ayther/golden/state-md-fm-busy-1.10-r2.sparse
+#   .build/state_atim_compat --dump-sparse <binario de r2> ayther/golden/state-md-fm-busy-1.10-r2-<layout>.sparse
+# Hay uno por layout (win64 = LLP64, lp64 = Linux y macOS): el tag AYSS lleva
+# el id de layout y un estado de la otra plataforma se rechaza, como debe.
 $(STATE_ATIM_BIN): ayther/state_atim_compat.c ayther/generated_rom.c \
 		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther \
@@ -254,7 +256,7 @@ $(STATE_ATIM_BIN): ayther/state_atim_compat.c ayther/generated_rom.c \
 
 check-state-atim-compat: $(STATE_ATIM_BIN)
 	$(call require_core)
-	$(STATE_ATIM_BIN) "$(CORE)" ayther/golden/state-md-fm-busy-1.10-r2.sparse
+	$(STATE_ATIM_BIN) "$(CORE)" ayther/golden/state-md-fm-busy-1.10-r2-win64.sparse ayther/golden/state-md-fm-busy-1.10-r2-lp64.sparse
 
 $(STATE_RT_BIN): ayther/state_roundtrip.c ayther/generated_rom.c \
 		ayther/generated_rom.h ayther/cd_fixture.h \

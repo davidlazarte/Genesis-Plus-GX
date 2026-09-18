@@ -1,16 +1,31 @@
-state-md-fm-busy-1.10-r2.sparse: savestate REAL de un binario publicado, para
-check-state-atim-compat (#121).
+state-md-fm-busy-1.10-r2-<layout>.sparse: savestates REALES de un binario
+anterior a #118, para check-state-atim-compat (#121).
 
-  generado por : genesis_plus_gx_libretro_ayther_x64.dll, release ayther-abi-1.10-r2
-                 (core 9e8b6bc6), SHA-256
-                 0e118623132ed8ec545f4feb6bae815cb6f07d7df51e640152ddd49e577f1eb5
-  como         : .build/state_atim_compat --dump-sparse <esa dll> <este archivo>
-                 (Windows x64, 2026-09-17): ROM sintetico de FM con el 68000 libre,
-                 60 frames, retro_serialize.
+Hay uno por layout porque el tag AYSS lleva un id de layout (sizeof de void*,
+Z80_Regs, m68ki_cpu_core y cart_hw_t) y Windows x64 (LLP64) y Linux/macOS (LP64)
+no coinciden: un estado de la otra plataforma se rechaza, como debe, y el
+harness elige el que tiene el layout de este core.
+
   contenido    : blob de 1.036.288 bytes en formato disperso AYSP (solo las zonas
                  no nulas); tag AYSS y bloque AINC presentes, bloque ATIM ausente.
+                 ROM sintetico de FM con el 68000 libre, 60 frames, retro_serialize.
+  como         : .build/state_atim_compat --dump-sparse <binario de r2> <archivo>
+
+  -win64.sparse
+    generado por : genesis_plus_gx_libretro_ayther_x64.dll del release
+                   ayther-abi-1.10-r2 (core 9e8b6bc6), SHA-256
+                   0e118623132ed8ec545f4feb6bae815cb6f07d7df51e640152ddd49e577f1eb5
+                   (Windows x64, 2026-09-17)
+  -lp64.sparse
+    generado por : genesis_plus_gx_libretro.so construido desde el mismo commit
+                   9e8b6bc6 con gcc 11 en Linux x86_64 (WSL Ubuntu, 2026-09-17;
+                   SHA-256 del .so db3c15b3ba6258ef70f30456fbeb5c53c6dac10534225db264be404f118731c6),
+                   `make -f Makefile.libretro platform=unix AYTHER_EXTENSIONS=1
+                   SOUND_PROBE=1`. El release no publica binarios de Linux, asi
+                   que este no tiene hash publicado: vale la procedencia por commit.
+
   para que     : probar que un estado guardado por un release ANTERIOR a #118
                  carga en este core y corre, y que su continuacion es identica a
                  la de un estado actual con el bloque ATIM borrado.
 
-No se regenera con este core: perderia justamente lo que prueba.
+No se regeneran con este core: perderian justamente lo que prueban.

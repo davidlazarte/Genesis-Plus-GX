@@ -24,16 +24,21 @@
  * refresh no se ve (ver generated_rom.c, #118).
  *
  * Uso:
- *   state_atim_compat <core> [fixture-r2.sparse]
+ *   state_atim_compat <core> [fixture-r2.sparse ...]
+ *       con varios fixtures se usa el que tiene el layout de este core: el
+ *       tag AYSS lleva un id de layout (sizeof de void*, Z80_Regs,
+ *       m68ki_cpu_core, cart_hw_t) y Windows x64 (LLP64) y Linux/macOS
+ *       (LP64) no coinciden, asi que hay un fixture de r2 por cada uno.
  *   state_atim_compat --dump-sparse <core> <salida.sparse>
  *       arranca el fixture, corre BOOT_FRAMES, serializa y escribe el blob en
  *       formato disperso. Es como se genero el fixture de r2: con el binario
  *       de ayther-abi-1.10-r2, no con este.
  *
- * El fixture ayther/golden/state-md-fm-busy-1.10-r2.sparse se genero con
- * genesis_plus_gx_libretro_ayther_x64.dll del release ayther-abi-1.10-r2
- * (core 9e8b6bc6, SHA-256 0e118623132ed8ec545f4feb6bae815cb6f07d7df51e640152ddd49e577f1eb5),
- * en Windows x64, con este mismo harness en modo --dump-sparse.
+ * Los fixtures ayther/golden/state-md-fm-busy-1.10-r2-*.sparse se generaron
+ * con este mismo harness en modo --dump-sparse: el win64 con el DLL x64 del
+ * release ayther-abi-1.10-r2 (SHA-256 0e118623...), el lp64 con un build de
+ * gcc en Linux del mismo commit (9e8b6bc6). Procedencia completa en el .txt
+ * de al lado.
  *
  * Formato disperso ("AYSP"): u32 magic, u32 tamanio total, y despues chunks
  * (u32 offset, u32 largo, bytes) de las zonas no nulas. El blob de 1 MiB del
@@ -254,6 +259,14 @@ static uint32_t magic_at(const uint8_t *blob, size_t n, size_t from_end)
   return v;
 }
 
+/* El id de layout del tag AYSS: los cuatro bytes que siguen al magic. */
+static uint32_t layout_of(const uint8_t *blob, size_t n)
+{
+  uint32_t v;
+  memcpy(&v, blob + n - TAG_BYTES + 4, 4);
+  return v;
+}
+
 /* --- el test ------------------------------------------------------------------ */
 
 struct cont {
@@ -317,11 +330,11 @@ int main(int argc, char **argv)
   const char *what;
   int d, fail = 0;
   const char *core, *fixture = NULL;
+  int arg;
 
   if (argc == 4 && !strcmp(argv[1], "--dump-sparse")) return mode_dump(argv[2], argv[3]);
   if (argc < 2) { fprintf(stderr, "uso: %s <core> [fixture-r2.sparse] | --dump-sparse <core> <salida>\n", argv[0]); return 2; }
   core = argv[1];
-  if (argc > 2) fixture = argv[2];
 
   rom = (uint8_t *)malloc(ROM_SIZE);
   if (!rom || !load_api(core, &api) || !boot(&api, rom)) return 2;
@@ -337,6 +350,22 @@ int main(int argc, char **argv)
          magic_at(S, n, TAG_BYTES + AINC_BYTES + ATIM_BYTES) == ATIM_MAGIC ? "ok" : "AUSENTE");
   if (magic_at(S, n, TAG_BYTES + AINC_BYTES + ATIM_BYTES) != ATIM_MAGIC) {
     printf("   este core no escribe el bloque ATIM: no hay nada que probar\n");
+    fail = 1;
+  }
+
+  /* El fixture de r2 con el layout de este core, si hay alguno. */
+  for (arg = 2; arg < argc && !fixture; ++arg) {
+    size_t m = 0;
+    uint8_t *b = read_sparse(argv[arg], &m);
+    if (!b) { fail = 1; continue; }
+    if (m == n && layout_of(b, m) == layout_of(S, n)) fixture = argv[arg];
+    else printf("   fixture %s: layout 0x%08x, este core 0x%08x -> es de otra plataforma, no aplica\n",
+                argv[arg], layout_of(b, m), layout_of(S, n));
+    free(b);
+  }
+  if (argc > 2 && !fixture) {
+    printf("   ningun fixture de r2 tiene el layout de este core (0x%08x): hay que generar uno con\n"
+           "   el binario de r2 de esta plataforma (--dump-sparse)\n", layout_of(S, n));
     fail = 1;
   }
 
@@ -385,14 +414,14 @@ int main(int argc, char **argv)
 
   /* C. estado real de 1.10-r2 */
   if (!fixture) {
-    printf("C. estado de 1.10-r2: sin fixture (pasar la ruta del .sparse)\n");
+    printf("C. estado de 1.10-r2: sin fixture aplicable\n");
   } else if (!(R2 = read_sparse(fixture, &n2))) {
     fail = 1;
   } else if (n2 != n) {
     printf("C. estado de 1.10-r2: mide %lu y el core declara %lu (MAL)\n", (unsigned long)n2, (unsigned long)n);
     fail = 1;
   } else {
-    printf("C. estado de 1.10-r2: tag AYSS %s, AINC %s, ATIM %s (tiene que estar ausente)\n",
+    printf("C. estado de 1.10-r2 (%s): tag AYSS %s, AINC %s, ATIM %s (tiene que estar ausente)\n", fixture,
            magic_at(R2, n, TAG_BYTES) == AYSS_MAGIC ? "ok" : "AUSENTE",
            magic_at(R2, n, TAG_BYTES + AINC_BYTES) == AINC_MAGIC ? "ok" : "AUSENTE",
            magic_at(R2, n, TAG_BYTES + AINC_BYTES + ATIM_BYTES) == ATIM_MAGIC ? "PRESENTE (MAL)" : "ausente");

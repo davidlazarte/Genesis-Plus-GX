@@ -748,6 +748,63 @@ int sound_context_load(uint8 *state)
          modulo; para un estado legitimo no cambia nada. (#75) */
       ym3438_cycles = (int)((unsigned int)ym3438_cycles % 24u);
       ym3438.cycles %= 24;
+
+      /* El resto de la familia, adentro del struct de Nuked: cada campo
+         que OPN2_Clock usa como indice de tabla o como cantidad de un
+         shift, acotado con la mascara de su unico escritor (OPN2_DoRegWrite
+         para los registros, el propio OPN2_Clock para los derivados). Un
+         savestate legitimo ya cumple todas, asi que no cambia nada.
+         El nocturno reporto tres (`connect` = 50 en fm_algorithm[4][6][8],
+         `ks` y `pg_block` como exponentes de shift); los demas salen de
+         recorrer el struct con la misma pregunta. (#129) */
+      {
+        int i;
+
+        /* invariante de OPN2_Clock: channel = cycles % 6. Indexa todos los
+           arreglos de 6 */
+        ym3438.channel = ym3438.cycles % 6;
+
+        for (i = 0; i < 6; i++)
+        {
+          ym3438.connect[i]   &= 0x07; /* fm_algorithm[4][6][8] */
+          ym3438.fb[i]        &= 0x07; /* mod >> (10 - fb) */
+          ym3438.pms[i]       &= 0x07; /* pg_lfo_sh1/sh2[8][8] */
+          ym3438.ams[i]       &= 0x03; /* eg_am_shift[4] */
+          ym3438.block[i]     &= 0x07; /* pasa a pg_block */
+          ym3438.block_3ch[i] &= 0x07;
+          ym3438.kcode[i]     &= 0x1f; /* (block << 2) | fn_note */
+          ym3438.kcode_3ch[i] &= 0x1f;
+        }
+
+        for (i = 0; i < 24; i++)
+        {
+          ym3438.ks[i] &= 0x03; /* pg_kcode >> (ks ^ 3) */
+        }
+
+        ym3438.pg_block &= 0x07; /* fnum << pg_block */
+        ym3438.pg_kcode &= 0x1f;
+        ym3438.lfo_freq &= 0x07; /* lfo_cycles[8] */
+
+        /* derivados del generador de envolvente: eg_inc sale de
+           OPN2_EnvelopePrepare topeado en 4 y es exponente en
+           OPN2_EnvelopeADSR; eg_timer_low_lock es `eg_timer & 3` e indexa
+           eg_stephi[4][4]; eg_cycle se reinicia en los ciclos 1 y 13, asi
+           que no pasa de 12, y es exponente en OPN2_Clock */
+        if (ym3438.eg_inc > 4)
+        {
+          ym3438.eg_inc = 4;
+        }
+        ym3438.eg_timer_low_lock &= 0x03;
+        ym3438.eg_cycle &= 0x0f;
+
+        /* bits sueltos del registro de test: mode_test_21[0] indexa
+           eg_read[2] en OPN2_Read */
+        for (i = 0; i < 8; i++)
+        {
+          ym3438.mode_test_21[i] &= 0x01;
+          ym3438.mode_test_2c[i] &= 0x01;
+        }
+      }
     }
     else
     {

@@ -28,4 +28,9 @@ harness elige el que tiene el layout de este core.
                  carga en este core y corre, y que su continuacion es identica a
                  la de un estado actual con el bloque ATIM borrado.
 
+  (macOS arm64)
+    tiene un tercer layout (0x2419d61a) y no hay binario publicado de r2: la CI
+    construye el commit 9e8b6bc6 en el job de macOS y vuelca el fixture en el
+    momento (tests/.build/, no se commitea).
+
 No se regeneran con este core: perderian justamente lo que prueban.

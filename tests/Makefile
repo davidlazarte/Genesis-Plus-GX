@@ -261,9 +261,14 @@ $(STATE_ATIM_BIN): ayther/state_atim_compat.c ayther/generated_rom.c \
 		-Iayther -o $@ ayther/state_atim_compat.c ayther/generated_rom.c \
 		$(LDFLAGS) $(ROM_PROBE_LIBS)
 
+# ATIM_FIXTURES: los fixtures de r2 disponibles; el harness usa el que tiene el
+# layout de este core. macOS arm64 tiene un tercer layout y ningun binario
+# publicado de r2: la CI construye el commit de r2 ahi y suma el fixture
+# generado en el momento.
+ATIM_FIXTURES ?= ayther/golden/state-md-fm-busy-1.10-r2-win64.sparse ayther/golden/state-md-fm-busy-1.10-r2-lp64.sparse
 check-state-atim-compat: $(STATE_ATIM_BIN)
 	$(call require_core)
-	$(STATE_ATIM_BIN) "$(CORE)" ayther/golden/state-md-fm-busy-1.10-r2-win64.sparse ayther/golden/state-md-fm-busy-1.10-r2-lp64.sparse
+	$(STATE_ATIM_BIN) "$(CORE)" $(ATIM_FIXTURES)
 
 $(STATE_RT_BIN): ayther/state_roundtrip.c ayther/generated_rom.c \
 		ayther/generated_rom.h ayther/cd_fixture.h \

@@ -98,6 +98,10 @@ The same corpus was then run with a mid-game checkpoint (`--checkpoint 900`,
 audio and serialized state frame by frame while the raster contract still holds.
 That run, and the savestate defect it found (#118), are in
 [`validation/raster-roms-2026-09-17-checkpoint.md`](validation/raster-roms-2026-09-17-checkpoint.md).
+After the fix, the same corpus was run with three checkpoints per ROM (300, 900, 1500)
+under both `SOUND_PROBE` profiles: 84 runs, 75,600 restored frames, zero differences in
+video, audio or serialized state, raster contract intact. See
+[`validation/checkpoint-matrix-2026-09-18.md`](validation/checkpoint-matrix-2026-09-18.md).
 
 ## The raster journal and what replay reproduces (#27)
 

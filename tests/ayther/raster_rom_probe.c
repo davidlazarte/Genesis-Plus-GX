@@ -167,7 +167,10 @@ static int video_valid;
 static int current_frame;
 static int auto_input = 1;
 static const char *dump_prefix;
-static int checkpoint_frame = -1;    /* --checkpoint N (#117); -1 = sin checkpoint */
+static int checkpoint_frame = -1;    /* el checkpoint de la corrida en curso (#117); -1 = sin checkpoint */
+#define MAX_CHECKPOINTS 16
+static int checkpoint_list[MAX_CHECKPOINTS];   /* --checkpoint A,B,C (#123) */
+static int checkpoint_count;
 static int state_diff;               /* --state-diff: diagnostico, ver probe_rom */
 static uint64_t audio_digest;        /* huella FNV-1a de las muestras del frame en curso */
 static uint64_t audio_sample_count;  /* muestras estereo del frame en curso */
@@ -1075,7 +1078,7 @@ static void write_rom_result(FILE *output, const char *path, size_t rom_size,
 static void usage(const char *program)
 {
   fprintf(stderr,
-          "usage: %s [--frames N] [--checkpoint N] [--no-auto-input] [--output FILE] "
+          "usage: %s [--frames N] [--checkpoint N[,N...]] [--no-auto-input] [--output FILE] "
           "[--dump-prefix PATH] CORE ROM|@generated-fm [ROM...]\n"
           "  --checkpoint N  serializa en el frame N, corre hasta --frames, restaura y\n"
           "                  vuelve a correr N..frames: video y audio tienen que dar la\n"
@@ -1107,7 +1110,19 @@ int main(int argc, char **argv)
     }
     else if (strcmp(argv[first_rom], "--checkpoint") == 0 && first_rom + 1 < argc)
     {
-      checkpoint_frame = atoi(argv[++first_rom]);
+      /* #123: una lista. Cada checkpoint es una corrida entera: la partida
+         original hasta --frames mas la continuacion restaurada. */
+      const char *list = argv[++first_rom];
+      checkpoint_count = 0;
+      while (*list && checkpoint_count < MAX_CHECKPOINTS)
+      {
+        char *end = NULL;
+        long v = strtol(list, &end, 10);
+        if (end == list) break;
+        checkpoint_list[checkpoint_count++] = (int)v;
+        list = *end == ',' ? end + 1 : end;
+      }
+      checkpoint_frame = checkpoint_count ? checkpoint_list[0] : -1;
     }
     else if (strcmp(argv[first_rom], "--state-diff") == 0)
     {
@@ -1131,16 +1146,23 @@ int main(int argc, char **argv)
       break;
     }
   }
-  if (!core_path || first_rom >= argc || frames <= 0 ||
-      checkpoint_frame >= frames)
   {
-    if (checkpoint_frame >= frames)
-      fprintf(stderr, "--checkpoint %d tiene que ser menor que --frames %d\n",
-              checkpoint_frame, frames);
+    int k;
+    for (k = 0; k < checkpoint_count; ++k)
+      if (checkpoint_list[k] < 0 || checkpoint_list[k] >= frames)
+      {
+        fprintf(stderr, "--checkpoint %d tiene que estar entre 0 y --frames %d\n",
+                checkpoint_list[k], frames);
+        usage(argv[0]);
+        return 2;
+      }
+  }
+  if (!core_path || first_rom >= argc || frames <= 0)
+  {
     usage(argv[0]);
     return 2;
   }
-  if (checkpoint_frame < 0) checkpoint_frame = -1;
+  if (!checkpoint_count) checkpoint_frame = -1;
 
   if (output_path)
   {
@@ -1180,9 +1202,15 @@ int main(int argc, char **argv)
      delatan sus exports), el checkpoint y la secuencia de entrada. */
   fputs("{\"type\":\"core\",\"build_id\":", output);
   json_string(output, api.ayther->build_id ? api.ayther->build_id : "");
-  fprintf(output, ",\"sound_probe\":%s,\"checkpoint_frame\":%d,\"input\":",
+  fprintf(output, ",\"sound_probe\":%s,\"checkpoint_frame\":%d,\"checkpoints\":[",
           library_symbol(library, "audio_probe_get_context") ? "true" : "false",
           checkpoint_frame);
+  {
+    int k;
+    for (k = 0; k < checkpoint_count; ++k)
+      fprintf(output, "%s%d", k ? "," : "", checkpoint_list[k]);
+  }
+  fputs("],\"input\":", output);
   json_string(output, auto_input
               ? "port 0 joypad: START 2 frames every 180 from frame 60; "
                 "A 2 frames every 120 from frame 90"
@@ -1191,35 +1219,48 @@ int main(int argc, char **argv)
 
   for (rom = first_rom; rom < argc; ++rom)
   {
-    size_t rom_size = 0;
-    int reason;
-    fprintf(stderr, "[%d/%d] %s\n", rom - first_rom + 1,
-            argc - first_rom, base_name(argv[rom]));
-    if (!probe_rom(&api, argv[rom], frames, recomposed, &stats, &rom_size))
+    /* #123: con varios checkpoints, la misma ROM se corre una vez por cada
+       uno, de cero, y cada corrida deja su propia linea. Sin checkpoint,
+       una sola corrida como siempre. */
+    int runs = checkpoint_count ? checkpoint_count : 1;
+    int k;
+    for (k = 0; k < runs; ++k)
     {
-      ++failures;
-      continue;
+      size_t rom_size = 0;
+      int reason;
+      checkpoint_frame = checkpoint_count ? checkpoint_list[k] : -1;
+      if (checkpoint_count)
+        fprintf(stderr, "[%d/%d] %s (checkpoint %d)\n", rom - first_rom + 1,
+                argc - first_rom, base_name(argv[rom]), checkpoint_frame);
+      else
+        fprintf(stderr, "[%d/%d] %s\n", rom - first_rom + 1,
+                argc - first_rom, base_name(argv[rom]));
+      if (!probe_rom(&api, argv[rom], frames, recomposed, &stats, &rom_size))
+      {
+        ++failures;
+        continue;
+      }
+      ++probed;
+      write_rom_result(output, argv[rom], rom_size, frames, &stats);
+      total.clean_equal += stats.clean_equal;
+      total.guarded_equal += stats.guarded_equal;
+      total.clean_mismatch += stats.clean_mismatch;
+      total.guarded_mismatch += stats.guarded_mismatch;
+      total.unsupported_guarded += stats.unsupported_guarded;
+      total.unavailable_without_reason += stats.unavailable_without_reason;
+      total.missing_video += stats.missing_video;
+      total.different_pixels += stats.different_pixels;
+      for (reason = 0; reason < REASON_COUNT; ++reason)
+        total.reason_frames[reason] += stats.reason_frames[reason];
+      total.restored_frames += stats.restored_frames;
+      total.restored_video_mismatch += stats.restored_video_mismatch;
+      total.restored_audio_mismatch += stats.restored_audio_mismatch;
+      total.restored_mask_differs += stats.restored_mask_differs;
+      total.restored_state_mismatch += stats.restored_state_mismatch;
+      failures += stats.clean_mismatch > 0 || stats.unavailable_without_reason > 0 ||
+                  stats.restored_video_mismatch > 0 || stats.restored_audio_mismatch > 0 ||
+                  stats.restored_state_mismatch > 0;
     }
-    ++probed;
-    write_rom_result(output, argv[rom], rom_size, frames, &stats);
-    total.clean_equal += stats.clean_equal;
-    total.guarded_equal += stats.guarded_equal;
-    total.clean_mismatch += stats.clean_mismatch;
-    total.guarded_mismatch += stats.guarded_mismatch;
-    total.unsupported_guarded += stats.unsupported_guarded;
-    total.unavailable_without_reason += stats.unavailable_without_reason;
-    total.missing_video += stats.missing_video;
-    total.different_pixels += stats.different_pixels;
-    for (reason = 0; reason < REASON_COUNT; ++reason)
-      total.reason_frames[reason] += stats.reason_frames[reason];
-    total.restored_frames += stats.restored_frames;
-    total.restored_video_mismatch += stats.restored_video_mismatch;
-    total.restored_audio_mismatch += stats.restored_audio_mismatch;
-    total.restored_mask_differs += stats.restored_mask_differs;
-    total.restored_state_mismatch += stats.restored_state_mismatch;
-    failures += stats.clean_mismatch > 0 || stats.unavailable_without_reason > 0 ||
-                stats.restored_video_mismatch > 0 || stats.restored_audio_mismatch > 0 ||
-                stats.restored_state_mismatch > 0;
   }
 
   fprintf(output,
@@ -1237,6 +1278,7 @@ int main(int argc, char **argv)
           ",\"restored_audio_mismatch\":%" PRIu64
           ",\"restored_mask_differs\":%" PRIu64
           ",\"restored_state_mismatch\":%" PRIu64
+          ",\"checkpoints_per_rom\":%d"
           ",\"passed\":%s}\n",
           probed, probed * frames, total.clean_equal, total.guarded_equal,
           total.clean_mismatch, total.guarded_mismatch,
@@ -1244,7 +1286,7 @@ int main(int argc, char **argv)
           total.missing_video, checkpoint_frame, total.restored_frames,
           total.restored_video_mismatch, total.restored_audio_mismatch,
           total.restored_mask_differs, total.restored_state_mismatch,
-          failures ? "false" : "true");
+          checkpoint_count, failures ? "false" : "true");
 
   free(video_frame);
   free(recomposed);

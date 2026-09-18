@@ -42,8 +42,10 @@
  * dependiente del proceso que si se veria en Windows.
  *
  * Uso:
- *   state_cross_process <core> <dir-de-trabajo>
- *       el driver: se relanza tres veces y compara.
+ *   state_cross_process <core> <dir-de-trabajo> [sms-fm|md-busy|scd]
+ *       el driver: se relanza tres veces y compara. (#122: tres fixtures, y
+ *       ademas de audio y video compara el ESTADO SERIALIZADO tras la
+ *       continuacion.)
  *   state_cross_process --save <core> <estado> <hashes>
  *       arranca limpio, guarda el checkpoint y deja los hashes NATIVOS.
  *   state_cross_process --same <core> <estado> <hashes>
@@ -58,6 +60,7 @@
 #include <libretro.h>
 #include "ayther_api.h"
 #include "generated_rom.h"
+#include "cd_fixture.h"
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -82,6 +85,14 @@ static void *load_symbol(library_t l, const char *n) { return dlsym(l, n); }
 #define FNV_OFFSET    UINT64_C(0xcbf29ce484222325)
 #define FNV_PRIME     UINT64_C(0x100000001B3)
 
+/* #122: tres fixtures. El de SMS es el original de #75; los otros dos son
+   los sistemas donde el estado que NO viaja en el blob se hereda del
+   proceso sin que nadie lo vea en la misma sesion (#118 fue eso). */
+enum fixture_id { FX_SMS_FM, FX_MD_BUSY, FX_SCD };
+static enum fixture_id g_fixture = FX_SMS_FM;
+static const char *g_workdir = ".";   /* donde va la BIOS y la imagen del CD */
+static char g_cd_path[1024];
+static uint64_t g_state_hash;          /* el estado serializado tras la continuacion */
 static struct retro_game_info_ext gi_ext;
 static uint64_t g_audio_hash;
 static uint64_t g_video_hash;
@@ -109,11 +120,13 @@ static bool env_cb(unsigned cmd, void *data)
       if (data) *(int *)data = 3;
       return data != NULL;
     case RETRO_ENVIRONMENT_GET_GAME_INFO_EXT:
+      /* El CD entra por RUTA: cdd_load abre la imagen del disco. */
+      if (g_fixture == FX_SCD) return false;
       if (data) *(const struct retro_game_info_ext **)data = &gi_ext;
       return data != NULL;
     case RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY:
     case RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY:
-      if (data) *(const char **)data = ".";
+      if (data) *(const char **)data = g_workdir;
       return data != NULL;
     /* Las dos variables que ponen el YM2413 de Nuked en el camino. Sin la
        segunda el core usa el YM2413 de MAME y el test no toca ni una linea de
@@ -123,6 +136,7 @@ static bool env_cb(unsigned cmd, void *data)
       struct retro_variable *v = (struct retro_variable *)data;
       if (!v || !v->key) return false;
       v->value = NULL;
+      if (g_fixture != FX_SMS_FM) return false;   /* MD y CD: defaults del core */
       if (!strcmp(v->key, "genesis_plus_gx_ym2413"))      v->value = "enabled";
       else if (!strcmp(v->key, "genesis_plus_gx_ym2413_core")) v->value = "nuked";
       return v->value != NULL;
@@ -209,20 +223,36 @@ static int load_api(const char *path, struct core_api *api)
 /* El fixture SMS con la escena FM: escribe el YM2413 y deja tres canales en
    key-on. Sin eso el chip queda en reset y su contexto no distingue una carga
    sana de una podrida -- el test seria verde por vacio. */
+/* Cada fixture con algo que romper: SMS con el YM2413 Nuked en key-on; MD con
+   tres voces de FM y el 68000 corriendo LIBRE (un contador en RAM en vez de
+   `stop`, para que la fase del bus se vea, #118); Sega CD con la BIOS y la
+   imagen sinteticas de #97 (sub-CPU y PCM activos), escritas en el directorio
+   de trabajo porque el core las abre por ruta. */
 static int boot(struct core_api *api, uint8_t *rom, struct retro_game_info *game)
 {
-  if (!ayther_build_generated_rom_sms_scene(rom, ROM_SIZE, AYTHER_SMS_SCENE_FM)) {
-    fprintf(stderr, "no se pudo construir el fixture SMS con FM\n");
-    return 0;
-  }
   memset(&gi_ext, 0, sizeof(gi_ext));
-  gi_ext.full_path = "ayther-sms-fm.sms"; gi_ext.dir = ".";
-  gi_ext.name = "ayther-sms-fm"; gi_ext.ext = "sms";
-  gi_ext.data = rom; gi_ext.size = ROM_SIZE;
-  gi_ext.persistent_data = true;
   memset(game, 0, sizeof(*game));
-  game->path = "ayther-sms-fm.sms"; game->data = rom; game->size = ROM_SIZE;
-
+  if (g_fixture == FX_SCD) {
+    if (!ayther_cd_fixture_write(g_workdir, g_cd_path, sizeof(g_cd_path))) {
+      fprintf(stderr, "no se pudo escribir el fixture de CD en %s\n", g_workdir);
+      return 0;
+    }
+    game->path = g_cd_path;
+  } else {
+    const char *path = g_fixture == FX_SMS_FM ? "ayther-sms-fm.sms" : "ayther-fm-busy.md";
+    if (g_fixture == FX_SMS_FM
+          ? !ayther_build_generated_rom_sms_scene(rom, ROM_SIZE, AYTHER_SMS_SCENE_FM)
+          : !ayther_build_generated_rom_fm_busy(rom, ROM_SIZE)) {
+      fprintf(stderr, "no se pudo construir el fixture\n");
+      return 0;
+    }
+    gi_ext.full_path = path; gi_ext.dir = ".";
+    gi_ext.name = g_fixture == FX_SMS_FM ? "ayther-sms-fm" : "ayther-fm-busy";
+    gi_ext.ext = g_fixture == FX_SMS_FM ? "sms" : "md";
+    gi_ext.data = rom; gi_ext.size = ROM_SIZE;
+    gi_ext.persistent_data = true;
+    game->path = path; game->data = rom; game->size = ROM_SIZE;
+  }
   api->set_environment(env_cb);
   api->set_video_refresh(vid_cb);
   api->set_audio_sample_batch(aud_cb);
@@ -230,9 +260,25 @@ static int boot(struct core_api *api, uint8_t *rom, struct retro_game_info *game
   api->set_input_state(input_cb);
   api->init();
   if (!api->load_game(game)) {
-    fprintf(stderr, "el core rechazo el fixture SMS\n");
+    fprintf(stderr, "el core rechazo el fixture\n");
     return 0;
   }
+  return 1;
+}
+
+/* #122: el estado serializado despues de la continuacion, como huella. Es
+   lo que los chips tienen adentro, no solo lo que sale por video y audio:
+   un campo que no viaja en el blob se delata aca aunque todavia no se
+   vea ni se oiga. */
+static int state_hash_now(struct core_api *api)
+{
+  size_t n = api->serialize_size();
+  uint8_t *buf = n ? (uint8_t *)calloc(1, n) : NULL;
+  size_t i;
+  if (!buf || !api->serialize(buf, n)) { free(buf); fprintf(stderr, "serialize fallo tras la continuacion\n"); return 0; }
+  g_state_hash = FNV_OFFSET;
+  for (i = 0; i < n; ++i) { g_state_hash ^= buf[i]; g_state_hash *= FNV_PRIME; }
+  free(buf);
   return 1;
 }
 
@@ -240,21 +286,22 @@ static int write_hashes(const char *path)
 {
   FILE *f = fopen(path, "wb");
   if (!f) { fprintf(stderr, "no se puede escribir %s\n", path); return 0; }
-  fprintf(f, "%016llx %016llx %llu %llu\n",
+  fprintf(f, "%016llx %016llx %llu %llu %016llx\n",
           (unsigned long long)g_audio_hash, (unsigned long long)g_video_hash,
-          (unsigned long long)g_audio_energy, (unsigned long long)g_audio_samples);
+          (unsigned long long)g_audio_energy, (unsigned long long)g_audio_samples,
+          (unsigned long long)g_state_hash);
   fclose(f);
   return 1;
 }
 
-static int read_hashes(const char *path, unsigned long long out[4])
+static int read_hashes(const char *path, unsigned long long out[5])
 {
   FILE *f = fopen(path, "rb");
   int n;
   if (!f) { fprintf(stderr, "no se puede leer %s\n", path); return 0; }
-  n = fscanf(f, "%llx %llx %llu %llu", &out[0], &out[1], &out[2], &out[3]);
+  n = fscanf(f, "%llx %llx %llu %llu %llx", &out[0], &out[1], &out[2], &out[3], &out[4]);
   fclose(f);
-  if (n != 4) { fprintf(stderr, "%s no tiene los cuatro valores\n", path); return 0; }
+  if (n != 5) { fprintf(stderr, "%s no tiene los cinco valores\n", path); return 0; }
   return 1;
 }
 
@@ -296,6 +343,7 @@ static int mode_save(const char *core, const char *state_path, const char *hash_
   g_capturing = 1;
   for (f = 0; f < CROSS_FRAMES; ++f) api.run();
   g_capturing = 0;
+  if (!state_hash_now(&api)) goto done;
   rc = write_hashes(hash_path) ? 0 : 1;
 
   api.unload_game();
@@ -343,6 +391,7 @@ static int mode_same(const char *core, const char *state_path, const char *hash_
   g_capturing = 1;
   for (f = 0; f < CROSS_FRAMES; ++f) api.run();
   g_capturing = 0;
+  if (!state_hash_now(&api)) goto done;
   rc = write_hashes(hash_path) ? 0 : 1;
 
   api.unload_game();
@@ -395,6 +444,7 @@ static int mode_load(const char *core, const char *state_path, const char *hash_
   g_capturing = 1;
   for (f = 0; f < CROSS_FRAMES; ++f) api.run();
   g_capturing = 0;
+  if (!state_hash_now(&api)) goto done;
   rc = write_hashes(hash_path) ? 0 : 1;
 
   api.unload_game();
@@ -419,6 +469,7 @@ done:
  * El par de mas es lo que cmd espera comerse. Documentado en `cmd /?`, y es
  * por lo que fallaba el job de Windows y no los otros dos. */
 static int spawn(const char *self, const char *mode, const char *core,
+                 const char *fixture, const char *workdir,
                  const char *state_path, const char *hash_path)
 {
   char cmd[4096];
@@ -427,8 +478,8 @@ static int spawn(const char *self, const char *mode, const char *core,
 #else
   const char *wrap = "";
 #endif
-  int n = snprintf(cmd, sizeof(cmd), "%s\"%s\" %s \"%s\" \"%s\" \"%s\"%s",
-                   wrap, self, mode, core, state_path, hash_path, wrap);
+  int n = snprintf(cmd, sizeof(cmd), "%s\"%s\" %s \"%s\" %s \"%s\" \"%s\" \"%s\"%s",
+                   wrap, self, mode, core, fixture, workdir, state_path, hash_path, wrap);
   if (n < 0 || (size_t)n >= sizeof(cmd)) {
     fprintf(stderr, "la linea de comando no entra\n");
     return 0;
@@ -440,40 +491,59 @@ static int spawn(const char *self, const char *mode, const char *core,
   return 1;
 }
 
+static const struct { const char *name; enum fixture_id id; const char *title; } fixtures[] = {
+  { "sms-fm",  FX_SMS_FM,  "Master System con FM Nuked" },
+  { "md-busy", FX_MD_BUSY, "Mega Drive con FM y el 68000 corriendo libre" },
+  { "scd",     FX_SCD,     "Sega CD sintetico (sub-CPU y PCM activos)" },
+};
+
+static int pick_fixture(const char *name)
+{
+  unsigned i;
+  for (i = 0; i < sizeof(fixtures) / sizeof(fixtures[0]); ++i)
+    if (!strcmp(name, fixtures[i].name)) { g_fixture = fixtures[i].id; return (int)i; }
+  fprintf(stderr, "fixture desconocido: %s (sms-fm, md-busy, scd)\n", name);
+  return -1;
+}
+
 int main(int argc, char **argv)
 {
   char state_path[1024], native_path[1024], loaded_path[1024], same_path[1024];
-  unsigned long long native[4], loaded[4], same[4];
-  int ok_audio, ok_video, ok_energy, ok_same;
-
-  if (argc == 5 && !strcmp(argv[1], "--save"))
-    return mode_save(argv[2], argv[3], argv[4]);
-  if (argc == 5 && !strcmp(argv[1], "--same"))
-    return mode_same(argv[2], argv[3], argv[4]);
-  if (argc == 5 && !strcmp(argv[1], "--load"))
-    return mode_load(argv[2], argv[3], argv[4]);
-  if (argc != 3) {
+  unsigned long long native[5], loaded[5], same[5];
+  int ok_audio, ok_video, ok_state, ok_energy, ok_same, fx;
+  const char *fixture = "sms-fm";
+  if (argc == 7 && (!strcmp(argv[1], "--save") || !strcmp(argv[1], "--same") || !strcmp(argv[1], "--load"))) {
+    if (pick_fixture(argv[3]) < 0) return 2;
+    g_workdir = argv[4];
+    if (!strcmp(argv[1], "--save")) return mode_save(argv[2], argv[5], argv[6]);
+    if (!strcmp(argv[1], "--same")) return mode_same(argv[2], argv[5], argv[6]);
+    return mode_load(argv[2], argv[5], argv[6]);
+  }
+  if (argc != 3 && argc != 4) {
     fprintf(stderr,
-      "uso: %s <core> <dir-de-trabajo>\n"
-      "     %s --save <core> <estado> <hashes>\n"
-      "     %s --load <core> <estado> <hashes>\n",
-      argv[0], argv[0], argv[0]);
+      "uso: %s <core> <dir-de-trabajo> [sms-fm|md-busy|scd]\n"
+      "     %s --save|--same|--load <core> <fixture> <dir-de-trabajo> <estado> <hashes>\n",
+      argv[0], argv[0]);
     return 2;
   }
+  if (argc == 4) fixture = argv[3];
+  fx = pick_fixture(fixture);
+  if (fx < 0) return 2;
+  g_workdir = argv[2];
 
-  snprintf(state_path,  sizeof(state_path),  "%s/sms-fm.state", argv[2]);
-  snprintf(native_path, sizeof(native_path), "%s/sms-fm.native", argv[2]);
-  snprintf(loaded_path, sizeof(loaded_path), "%s/sms-fm.loaded", argv[2]);
-  snprintf(same_path,   sizeof(same_path),   "%s/sms-fm.same", argv[2]);
+  snprintf(state_path,  sizeof(state_path),  "%s/%s.state", argv[2], fixture);
+  snprintf(native_path, sizeof(native_path), "%s/%s.native", argv[2], fixture);
+  snprintf(loaded_path, sizeof(loaded_path), "%s/%s.loaded", argv[2], fixture);
+  snprintf(same_path,   sizeof(same_path),   "%s/%s.same", argv[2], fixture);
 
-  printf("savestate de Master System con FM Nuked, entre procesos\n");
+  printf("savestate de %s, entre procesos\n", fixtures[fx].title);
   printf("  core:   %s\n", argv[1]);
   printf("  %u frames de arranque, %u frames comparados\n\n",
          (unsigned)BOOT_FRAMES, (unsigned)CROSS_FRAMES);
 
-  if (!spawn(argv[0], "--save", argv[1], state_path, native_path)) return 1;
-  if (!spawn(argv[0], "--same", argv[1], state_path, same_path)) return 1;
-  if (!spawn(argv[0], "--load", argv[1], state_path, loaded_path)) return 1;
+  if (!spawn(argv[0], "--save", argv[1], fixture, argv[2], state_path, native_path)) return 1;
+  if (!spawn(argv[0], "--same", argv[1], fixture, argv[2], state_path, same_path)) return 1;
+  if (!spawn(argv[0], "--load", argv[1], fixture, argv[2], state_path, loaded_path)) return 1;
   if (!read_hashes(native_path, native) || !read_hashes(loaded_path, loaded) ||
       !read_hashes(same_path, same))
     return 1;
@@ -481,10 +551,11 @@ int main(int argc, char **argv)
   /* La afirmacion de fondo: restaurar tiene que dar lo mismo que seguir. */
   ok_audio  = loaded[0] == native[0];
   ok_video  = loaded[1] == native[1];
+  ok_state  = loaded[4] == native[4];
   /* Y la que separa las causas cuando la de arriba falla. */
-  ok_same   = loaded[0] == same[0] && loaded[1] == same[1];
+  ok_same   = loaded[0] == same[0] && loaded[1] == same[1] && loaded[4] == same[4];
   /* Un fixture mudo haria pasar el test sin probar nada: dos silencios son
-     iguales. La energia es la que afirma que habia FM que romper. */
+     iguales. La energia es la que afirma que habia sonido que romper. */
   ok_energy = native[2] > 0 && native[3] > 0;
 
   printf("  continuar normalmente vs restaurar el estado:\n");
@@ -492,12 +563,14 @@ int main(int argc, char **argv)
          native[0], loaded[0], ok_audio ? "igual" : "DISTINTO");
   printf("    video   %016llx vs %016llx  -> %s\n",
          native[1], loaded[1], ok_video ? "igual" : "DISTINTO");
+  printf("    estado  %016llx vs %016llx  -> %s\n",
+         native[4], loaded[4], ok_state ? "igual" : "DISTINTO");
   printf("  proceso nuevo vs mismo proceso: %s\n",
          ok_same ? "igual" : "DISTINTO");
-  printf("  energia del FM en la corrida nativa: %llu en %llu muestras -> %s\n",
+  printf("  energia del audio en la corrida nativa: %llu en %llu muestras -> %s\n",
          native[2], native[3], ok_energy ? "suena" : "MUDO");
 
-  if (ok_audio && ok_video && ok_same && ok_energy) {
+  if (ok_audio && ok_video && ok_state && ok_same && ok_energy) {
     printf("\nTODO OK\n");
     return 0;
   }

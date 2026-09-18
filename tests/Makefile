@@ -225,7 +225,7 @@ check-audio-controls: $(AUDIO_CTRL_BIN)
 	$(AUDIO_CTRL_BIN) "$(CORE)"
 
 $(STATE_XPROC_BIN): ayther/state_cross_process.c ayther/generated_rom.c \
-		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
+		ayther/generated_rom.h ayther/cd_fixture.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther \
 		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include \
 		-Iayther -o $@ ayther/state_cross_process.c ayther/generated_rom.c \
@@ -236,9 +236,14 @@ $(STATE_XPROC_BIN): ayther/state_cross_process.c ayther/generated_rom.c \
 # persigue-- y sonar igual que la corrida nativa. El binario se relanza a si
 # mismo dos veces; por eso necesita un directorio donde dejar el estado y los
 # hashes, y va BUILD_DIR, que ya se limpia con el resto.
+# #122: y no solo SMS. Mega Drive con el 68000 corriendo libre (donde #118 se
+# escondia en la misma sesion) y Sega CD con el sub-CPU y el PCM activos; en
+# los tres se compara tambien el estado serializado tras la continuacion.
 check-state-cross-process: $(STATE_XPROC_BIN) | $(BUILD_DIR)
 	$(call require_core)
-	$(STATE_XPROC_BIN) "$(CORE)" "$(BUILD_DIR)"
+	$(STATE_XPROC_BIN) "$(CORE)" "$(BUILD_DIR)" sms-fm
+	$(STATE_XPROC_BIN) "$(CORE)" "$(BUILD_DIR)" md-busy
+	$(STATE_XPROC_BIN) "$(CORE)" "$(BUILD_DIR)" scd
 
 # #121: compatibilidad del bloque ATIM (#118) en tres casos: estado actual
 # (continuidad exacta), estado sin bloque (acepta, corre, determinista) y un

@@ -146,13 +146,14 @@ raster-rom-probe: $(ROM_PROBE_BIN)
 
 # #117: el probe de ROMs, ejercitado en CI con el ROM sintetico de FM (el
 # 68000 corriendo libre, #118) y un checkpoint a mitad de la corrida:
-# serializa en el frame 60, corre hasta el 180, restaura y vuelve a correr
-# 60..180. Video, audio y estado serializado tienen que dar la misma huella
+# dos checkpoints (40 y 120, #123: una corrida entera por cada uno) en 180
+# frames: serializa, corre hasta el 180, restaura y vuelve a correr desde el
+# checkpoint. Video, audio y estado serializado tienen que dar la misma huella
 # frame a frame. Es el mismo camino que validate-roms recorre con
 # ROMs comerciales, que no pueden estar aca.
 check-rom-probe: $(ROM_PROBE_BIN)
 	$(call require_core)
-	$(ROM_PROBE_BIN) --frames 180 --checkpoint 60 "$(abspath $(CORE))" @generated-fm-busy
+	$(ROM_PROBE_BIN) --frames 180 --checkpoint 40,120 "$(abspath $(CORE))" @generated-fm-busy
 
 # #35 punto 4: la validacion con ROMs comerciales, reproducible.
 #
@@ -161,17 +162,18 @@ check-rom-probe: $(ROM_PROBE_BIN)
 # existia desde hace meses generado a mano, o sea que nadie mas podia
 # reproducirlo ni saber con que comando habia salido.
 #
-#   make -C tests validate-roms CORE=<core> ROM_DIR=<directorio> [FRAMES=1800] [CHECKPOINT=900]
+#   make -C tests validate-roms CORE=<core> ROM_DIR=<directorio> [FRAMES=1800] [CHECKPOINT=300,900,1500] [TAG=probe1]
 #
 # CHECKPOINT=N (#117): ademas del contrato de raster, guarda el estado en el
 # frame N y afirma que la continuacion restaurada reproduce el video y el audio
 # de la original, frame a frame.
 FRAMES ?= 1800
 CHECKPOINT ?=
+TAG ?=
 validate-roms: $(ROM_PROBE_BIN)
 	$(call require_core)
 	@test -n "$(ROM_DIR)" || (echo "ROM_DIR=<directorio-de-roms> es obligatorio" >&2; exit 2)
-	bash ci/validate_roms.sh "$(abspath $(CORE))" "$(ROM_DIR)" $(FRAMES) $(CHECKPOINT)
+	bash ci/validate_roms.sh "$(abspath $(CORE))" "$(ROM_DIR)" $(FRAMES) $(CHECKPOINT) $(TAG)
 
 $(FULL_CORE_BIN): ayther/full_core_replay.c ayther/generated_rom.c \
 		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)

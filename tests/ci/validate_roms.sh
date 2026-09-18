@@ -8,7 +8,12 @@
 # comando salio.
 #
 # Uso:
-#   tests/ci/validate_roms.sh <core> <directorio-de-roms> [frames] [checkpoint]
+#   tests/ci/validate_roms.sh <core> <directorio-de-roms> [frames] [checkpoints] [etiqueta]
+#
+# <checkpoints> puede ser una lista (300,900,1500): cada uno es una corrida
+# original + restaurada completa (#123). <etiqueta> (o VALIDATE_ROMS_TAG) va al
+# nombre del informe, para que dos perfiles no se pisen:
+#   raster-roms-<fecha>-checkpoint-<etiqueta>.md
 #
 # Con <checkpoint> (#117) el probe ademas guarda el estado en ese frame y
 # afirma que la continuacion restaurada reproduce el video y el audio de la
@@ -24,6 +29,7 @@ core=${1:?falta la ruta al core}
 rom_dir=${2:?falta el directorio de ROMs}
 frames=${3:-1800}
 checkpoint=${4:-}
+tag=${5:-${VALIDATE_ROMS_TAG:-}}
 
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 root=$(CDPATH= cd -- "$here/../.." && pwd)
@@ -57,7 +63,7 @@ fi
 
 date_tag=$(date +%Y-%m-%d)
 # Con checkpoint el informe es otro archivo: el de raster a secas no se pisa.
-out="$root/docs/validation/raster-roms-$date_tag${checkpoint:+-checkpoint}.md"
+out="$root/docs/validation/raster-roms-$date_tag${checkpoint:+-checkpoint}${tag:+-$tag}.md"
 log=$(mktemp)
 trap 'rm -f "$log"' EXIT
 
@@ -65,7 +71,7 @@ echo "probe:  $probe"
 echo "core:   $core"
 echo "roms:   ${#roms[@]} en $rom_dir"
 echo "frames: $frames por ROM"
-[ -n "$checkpoint" ] && echo "checkpoint: frame $checkpoint, continuacion restaurada hasta $frames"
+[ -n "$checkpoint" ] && echo "checkpoint(s): frame(s) $checkpoint, continuacion restaurada hasta $frames"
 echo
 
 status=0
@@ -84,7 +90,7 @@ mkdir -p "$root/docs/validation"
   echo
   echo '```sh'
   echo 'make -C tests raster-rom-probe'
-  echo "tests/ci/validate_roms.sh <core> <directorio-de-roms> $frames${checkpoint:+ $checkpoint}"
+  echo "tests/ci/validate_roms.sh <core> <directorio-de-roms> $frames${checkpoint:+ $checkpoint}${tag:+ $tag}"
   echo '```'
   echo
   echo '## Corrida'
@@ -93,7 +99,7 @@ mkdir -p "$root/docs/validation"
   echo "- ROMs: ${#roms[@]}"
   echo "- frames por ROM: $frames"
   if [ -n "$checkpoint" ]; then
-    echo "- checkpoint: estado guardado en el frame $checkpoint; continuacion $checkpoint..$frames corrida dos veces (original y restaurada)"
+    echo "- checkpoint(s): $checkpoint; para cada uno, estado guardado en ese frame y continuacion hasta $frames corrida dos veces (original y restaurada)"
   fi
   echo "- core (linea \`core\` del probe): \`$(grep -m1 '^{"type":"core"' "$log" || echo '?')\`"
   echo "- resultado: $([ "$status" -eq 0 ] && echo 'sin violaciones del contrato' || echo "FALLO (exit $status)")"

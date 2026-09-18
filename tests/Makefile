@@ -38,6 +38,7 @@ ODD_ACCESS_BIN := $(BUILD_DIR)/odd_word_access$(EXE_EXT)
 STATE_LAYOUT_BIN := $(BUILD_DIR)/state_layout$(EXE_EXT)
 AUDIO_CTRL_BIN := $(BUILD_DIR)/audio_controls$(EXE_EXT)
 STATE_XPROC_BIN := $(BUILD_DIR)/state_cross_process$(EXE_EXT)
+STATE_ATIM_BIN := $(BUILD_DIR)/state_atim_compat$(EXE_EXT)
 STATE_RT_BIN := $(BUILD_DIR)/state_roundtrip$(EXE_EXT)
 FRAME_DELTA_BIN := $(BUILD_DIR)/frame_delta$(EXE_EXT)
 SYSTEM_TRANSITION_BIN := $(BUILD_DIR)/system_transition$(EXE_EXT)
@@ -86,7 +87,7 @@ PROFILE_COMPARISON := $(ARTIFACT_DIR)/feature_gate_profiles.json
 	full-core-replay check-idle-metrics check-attribution-scene check-plane-suppress check-multilayer \
 	check-observability check-abi-dynamic check-fuzz check-fuzz-ring validate-roms check-mode4 \
 	check-mode4-raster check-mode4-68k-vram \
-	check-sprite-outcome check-state-cross-process check-state-roundtrip \
+	check-sprite-outcome check-state-cross-process check-state-roundtrip check-state-atim-compat \
 	regen-multilayer check-scenes regen-scenes regen-full-core check-line-state clean
 
 all: $(UNIT_BIN) $(CONCURRENCY_BIN) $(API_BIN) $(RASTER_BIN) \
@@ -238,6 +239,29 @@ $(STATE_XPROC_BIN): ayther/state_cross_process.c ayther/generated_rom.c \
 check-state-cross-process: $(STATE_XPROC_BIN) | $(BUILD_DIR)
 	$(call require_core)
 	$(STATE_XPROC_BIN) "$(CORE)" "$(BUILD_DIR)"
+
+# #121: compatibilidad del bloque ATIM (#118) en tres casos: estado actual
+# (continuidad exacta), estado sin bloque (acepta, corre, determinista) y un
+# estado REAL generado por el binario de ayther-abi-1.10-r2, guardado disperso
+# en ayther/golden con su procedencia. Se regenera SOLO con ese binario:
+#   .build/state_atim_compat --dump-sparse <binario de r2> ayther/golden/state-md-fm-busy-1.10-r2-<layout>.sparse
+# Hay uno por layout (win64 = LLP64, lp64 = Linux y macOS): el tag AYSS lleva
+# el id de layout y un estado de la otra plataforma se rechaza, como debe.
+$(STATE_ATIM_BIN): ayther/state_atim_compat.c ayther/generated_rom.c \
+		ayther/generated_rom.h $(CORE_DIR)/core/ayther/ayther_api.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(CORE_DIR)/core/ayther \
+		-I$(CORE_DIR)/libretro -I$(CORE_DIR)/libretro/libretro-common/include \
+		-Iayther -o $@ ayther/state_atim_compat.c ayther/generated_rom.c \
+		$(LDFLAGS) $(ROM_PROBE_LIBS)
+
+# ATIM_FIXTURES: los fixtures de r2 disponibles; el harness usa el que tiene el
+# layout de este core. macOS arm64 tiene un tercer layout y ningun binario
+# publicado de r2: la CI construye el commit de r2 ahi y suma el fixture
+# generado en el momento.
+ATIM_FIXTURES ?= ayther/golden/state-md-fm-busy-1.10-r2-win64.sparse ayther/golden/state-md-fm-busy-1.10-r2-lp64.sparse
+check-state-atim-compat: $(STATE_ATIM_BIN)
+	$(call require_core)
+	$(STATE_ATIM_BIN) "$(CORE)" $(ATIM_FIXTURES)
 
 $(STATE_RT_BIN): ayther/state_roundtrip.c ayther/generated_rom.c \
 		ayther/generated_rom.h ayther/cd_fixture.h \

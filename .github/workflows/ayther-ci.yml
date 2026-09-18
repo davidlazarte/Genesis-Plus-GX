@@ -1399,7 +1399,8 @@ jobs:
       # #121: ver el job de Linux. macOS arm64 tiene un TERCER layout de
       # savestate (0x2419d61a; Windows x64 0x7e56354f, Linux x64 0x670dec82) y
       # el release no publica binarios de macOS, asi que el estado "de r2" no
-      # puede venir del repo: se construye el commit de r2 (9e8b6bc6) aca mismo
+      # puede venir del repo: se construye el tag de r2 (9e8b6bc6; por tag, porque
+      # GitHub no sirve un fetch por SHA corto) aca mismo
       # y se vuelca el fixture con --dump-sparse justo antes del check. Los dos
       # fixtures del repo se pasan igual: el harness los descarta por layout, y
       # ese descarte es parte de lo que se afirma.
@@ -1407,8 +1408,8 @@ jobs:
         if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
         run: |
           set -euo pipefail
-          git fetch --depth=1 origin 9e8b6bc6
-          git worktree add ../gpgx-r2 9e8b6bc6
+          git fetch --depth=1 origin tag ayther-abi-1.10-r2
+          git worktree add ../gpgx-r2 ayther-abi-1.10-r2
           make -C ../gpgx-r2 -f Makefile.libretro platform=osx AYTHER_EXTENSIONS=1 SOUND_PROBE=1 -j3
           make -C tests .build/state_atim_compat
           tests/.build/state_atim_compat --dump-sparse ../gpgx-r2/genesis_plus_gx_libretro.dylib tests/.build/state-md-fm-busy-1.10-r2-macos.sparse

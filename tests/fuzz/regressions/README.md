@@ -204,6 +204,38 @@ tests/fuzz/.build/replay_unserialize --scene sms-fm \
   porque esa escena no entra por ninguna de las dos ramas: eso *es* el punto
   ciego que #75 vino a tapar, y es por qué el replay corre las tres.
 
+- **`unserialize/connect-corrupto-indexa-fm-algorithm-129`** y los seis que lo
+  acompañan (#129) — la misma familia, **adentro** del struct de Nuked OPN2.
+  #75 acotó los dos contadores de slot y dejó el resto del `ym3438_t` entrando
+  crudo: `sound_context_load` lo copia entero del blob, y `OPN2_Clock` usa una
+  docena de sus campos como índice de tabla o como exponente de un shift. En
+  el camino normal los acota su único escritor (`OPN2_DoRegWrite` enmascara
+  cada registro; `OPN2_Clock` deriva `channel = cycles % 6`), y un savestate no
+  pasa por ahí.
+
+  El primero es el archivo del nocturno tal cual, y **reproduce solo** (desde
+  #108 el target restaura el estado inicial antes de cada entrada): una sola
+  mutación, `connect[2] = 50`, contra `fm_algorithm[4][6][8]`. Los otros seis
+  están fabricados a mano con los offsets medidos (`ym3438_t` arranca en 140652
+  en la escena `md-nuked`; `offsetof` de cada campo sumado a eso), porque el
+  nocturno reportó `ks` y `pg_block` sin dejar archivo —UBSan imprime y sigue—
+  y los demás salieron de recorrer el struct con la misma pregunta. Sin el
+  saneado, medido con el core instrumentado:
+
+  | archivo | campo | lo que produce |
+  |---|---|---|
+  | `connect-…-129` | `connect[2] = 50` | `index 50 out of bounds for type 'Bit32u [8]'` + `global-buffer-overflow` en `OPN2_FMPrepare` |
+  | `channel-…` | `channel = 0x7f000000` | `index 2130706432 out of bounds for type 'Bit16s [6]'` + `SEGV` en `OPN2_ChGenerate` |
+  | `lfo-freq-…` | `lfo_freq = 255` | `index 255 out of bounds for type 'Bit32u [8]'` + `global-buffer-overflow` en `OPN2_UpdateLFO` |
+  | `pms-nuked-…` | `pms[0..5] = 255` | `index 255 out of bounds for type 'Bit32u [8][8]'` y shifts de 17400 bits |
+  | `ks-…` | `ks[0] = 255` | `shift exponent 252 is too large` (el del CI) |
+  | `pg-block-…` | `pg_block = 34` | `shift exponent 34 is too large` (el del CI) |
+  | `fb-…` | `fb[0..5] = 255` | `shift exponent -245 is negative` |
+
+  Los cuatro últimos **no crashean**: terminan en cero y solo los ve
+  `filter_known_ub.sh` sobre el log (#107). Con el saneado, los siete dan cero
+  reportes. Como los de #75, solo reproducen en la escena `md-nuked`.
+
 - **`write_control` (#63) — sin archivo, a propósito.** El caso que dejó el
   fuzzer (`crash-269aa8d4…`) no reproduce solo: el Z80 arrastra estado entre
   entradas —corre un frame por entrada y nunca se resetea—, y el desborde

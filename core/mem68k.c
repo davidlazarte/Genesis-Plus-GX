@@ -447,6 +447,16 @@ unsigned int ctrl_io_read_byte(unsigned int address)
 
     case 0x50:  /* SVP */
     {
+      /* Sin cartucho SVP el puntero es NULL (md_cart.c) y estas direcciones
+         no tienen nada detras: mismo trato que el resto de las no usadas.
+         Hasta aca cualquier ROM que tocara $A15000-$A15005 -o un 68000
+         con el SP perdido empujando un stack frame ahi- desreferenciaba
+         NULL. (#128) */
+      if (!svp)
+      {
+        return m68k_read_bus_8(address);
+      }
+
       if ((address & 0xFC) == 0x00)
       {
         unsigned int data = svp->ssp1601.gr[SSP_XST].byte.h;
@@ -591,6 +601,12 @@ unsigned int ctrl_io_read_word(unsigned int address)
 
     case 0x50:  /* SVP */
     {
+      /* sin SVP no hay nada detras (#128) */
+      if (!svp)
+      {
+        return m68k_read_bus_16(address);
+      }
+
       if ((address & 0xFC) == 0x00)
       {
         return svp->ssp1601.gr[SSP_XST].byte.h;
@@ -1316,6 +1332,13 @@ void ctrl_io_write_word(unsigned int address, unsigned int data)
 
     case 0x50:  /* SVP */
     {
+      /* sin SVP no hay nada detras (#128) */
+      if (!svp)
+      {
+        m68k_unused_16_w(address, data);
+        return;
+      }
+
       if (!(address & 0xFD))
       {
         svp->ssp1601.gr[SSP_XST].byte.h = data;

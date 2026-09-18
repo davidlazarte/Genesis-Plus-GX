@@ -490,6 +490,15 @@ jobs:
           make -C tests check-rom-probe
           CORE=../genesis_plus_gx_libretro.so
 
+      # #121: el bloque ATIM (#118) en tres casos: estado actual (continuidad
+      # exacta), estado sin bloque (acepta, corre, determinista) y un estado
+      # REAL guardado por el binario de ayther-abi-1.10-r2 (fixture disperso en
+      # tests/ayther/golden, con su procedencia al lado).
+      - name: Savestates with, without and predating the ATIM block
+        run: >-
+          make -C tests check-state-atim-compat
+          CORE=../genesis_plus_gx_libretro.so
+
       # #98: accesos de palabra impares y al borde del banco, con address
       # error apagado: donde las mascaras `& 0xfffe` de upstream hacen algo.
       - name: Odd word accesses return the even word next door
@@ -886,7 +895,7 @@ jobs:
         run: |
           set -euo pipefail
           export LD_LIBRARY_PATH="$(clang -print-runtime-dir):${LD_LIBRARY_PATH:-}"
-          make -C tests check-tmss-bootrom check-odd-word-access check-rom-probe CC=clang \
+          make -C tests check-tmss-bootrom check-odd-word-access check-rom-probe check-state-atim-compat CC=clang \
             CFLAGS="-O1 -g -Wall -Wextra -fsanitize=address,undefined -shared-libsan -fno-omit-frame-pointer" \
             LDFLAGS="-fsanitize=address,undefined -shared-libsan" \
             CORE=../genesis_plus_gx_libretro.so \
@@ -1151,6 +1160,15 @@ jobs:
           CC=clang
           CORE=../genesis_plus_gx_libretro.dll
 
+      # #121: ver el job de Linux.
+      - name: Savestates with, without and predating the ATIM block
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        shell: pwsh
+        run: >-
+          make -C tests check-state-atim-compat
+          CC=clang
+          CORE=../genesis_plus_gx_libretro.dll
+
       - name: Odd word accesses return the even word next door
         if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
         shell: pwsh
@@ -1376,6 +1394,13 @@ jobs:
         if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
         run: >-
           make -C tests check-rom-probe
+          CORE=../genesis_plus_gx_libretro.dylib
+
+      # #121: ver el job de Linux.
+      - name: Savestates with, without and predating the ATIM block
+        if: matrix.ayther_extensions == 1 && matrix.sound_probe == 1 && matrix.legacy_profile == 0
+        run: >-
+          make -C tests check-state-atim-compat
           CORE=../genesis_plus_gx_libretro.dylib
 
       - name: Odd word accesses return the even word next door

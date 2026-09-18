@@ -1,0 +1,16 @@
+state-md-fm-busy-1.10-r2.sparse: savestate REAL de un binario publicado, para
+check-state-atim-compat (#121).
+
+  generado por : genesis_plus_gx_libretro_ayther_x64.dll, release ayther-abi-1.10-r2
+                 (core 9e8b6bc6), SHA-256
+                 0e118623132ed8ec545f4feb6bae815cb6f07d7df51e640152ddd49e577f1eb5
+  como         : .build/state_atim_compat --dump-sparse <esa dll> <este archivo>
+                 (Windows x64, 2026-09-17): ROM sintetico de FM con el 68000 libre,
+                 60 frames, retro_serialize.
+  contenido    : blob de 1.036.288 bytes en formato disperso AYSP (solo las zonas
+                 no nulas); tag AYSS y bloque AINC presentes, bloque ATIM ausente.
+  para que     : probar que un estado guardado por un release ANTERIOR a #118
+                 carga en este core y corre, y que su continuacion es identica a
+                 la de un estado actual con el bloque ATIM borrado.
+
+No se regenera con este core: perderia justamente lo que prueba.

@@ -266,6 +266,47 @@ tests/fuzz/.build/replay_unserialize --scene sms-fm \
   `filter_known_ub.sh` sobre el log (#107). Con el saneado, los siete dan cero
   reportes. Como los de #75, solo reproducen en la escena `md-nuked`.
 
+- **`unserialize/fnum-corrupto-indexa-eg-ksltable-132`** y los diez que lo
+  acompañan (#132) — lo mismo que #129, del lado del otro Nuked: el `opll_t`
+  del YM2413. #75 acotó `cycles` y conservó `patchrom`/`chip_type`, y el resto
+  del struct seguía entrando crudo. En el camino normal lo acotan
+  `OPLL_DoRegWrite` y `OPLL_DoModeWrite` (cada registro con su máscara) y el
+  propio `OPLL_Clock` (los derivados); un savestate no pasa por ahí.
+
+  El primero es el archivo del nocturno tal cual y reproduce solo: de sus siete
+  mutaciones la que importa es el byte alto de `fnum[6]` (`0x76`), que deja
+  `c_ksl_freq = fnum >> 5 = 176` contra `eg_ksltable[16]`. Los otros diez están
+  fabricados con los offsets medidos (`opll_t`, 392 bytes, arranca en 75111 en
+  la escena `sms-fm`: `opll_cycles` está en 75651, menos `opll_sample` y
+  `opll_accm[18][2]`; `offsetof` de cada campo sumado a eso) recorriendo
+  `opll.c` con la pregunta de siempre: ¿qué campo es índice o cantidad de un
+  shift? Sin el saneado, medido con el core instrumentado (gcc, WSL):
+
+  | archivo | campo | lo que produce |
+  |---|---|---|
+  | `fnum-…-132` | `fnum[6] = 0x76xx` | `index 176 out of bounds for type 'uint32_t [16]'` en `OPLL_EnvelopeKSLTL` (con clang, además `global-buffer-overflow`: el del CI) |
+  | `block-opll-…` | `block[0..8] = 255` | `shift exponent 255 is too large` |
+  | `inst-…` | `inst[0..8] = 255` | `patchrom[opll_patch_1 + 254]`: lee fuera de la tabla y el `ksl` que saca de ahí da `shift exponent -7 is negative` |
+  | `c-multi-…` | `c_multi = 255` | `index 255 out of bounds for type 'uint32_t [16]'` (`pg_multi`) |
+  | `c-block-…` | `c_block = 255` | `shift exponent 255 is too large` |
+  | `c-fb-…` | `cycles = 0`, `c_fb = 255` | `shift exponent -248 is negative` |
+  | `eg-timer-low-lock-…` | `eg_timer_low_lock = 255` | `index 255 out of bounds for type 'uint32_t [4]'` (`eg_stephi`) |
+  | `eg-rate-hi-…` | `eg_state[] = attack`, `eg_kon = 2`, `eg_rate_hi = 255` | `shift exponent -239 is negative` |
+  | `op-exp-s-…` | `op_exp_s = 0xffff` | `shift exponent 65535 is too large` |
+  | `patch-multi-…` | `inst[] = 0`, `patch.multi[] = 255` | `index 255 out of bounds` (`pg_multi`, por el patch de usuario) |
+  | `patch-ksl-…` | `inst[] = 0`, `patch.ksl[] = 255` | `shift exponent -252 is negative` |
+
+  Los `c_*` y los `eg_*` son valores **latcheados**: `OPLL_PreparePatch2` y
+  `OPLL_EnvelopeGenerate` los recalculan al final de cada ciclo, así que el
+  valor podrido solo vive un `OPLL_Clock`, el primero después de cargar. Por
+  eso dos de los archivos acomodan además el contexto (`cycles`, `eg_state`)
+  para que ese primer ciclo pase por la rama que los usa.
+
+  Con gcc ninguno crashea: terminan en cero y los ve `filter_known_ub.sh`
+  sobre el log (#107). Con el saneado, los once dan cero reportes. Solo
+  reproducen en la escena `sms-fm`, que es la única que entra por la rama del
+  OPLL de Nuked.
+
 - **`write_control` (#63) — sin archivo, a propósito.** El caso que dejó el
   fuzzer (`crash-269aa8d4…`) no reproduce solo: el Z80 arrastra estado entre
   entradas —corre un frame por entrada y nunca se resetea—, y el desborde

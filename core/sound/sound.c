@@ -858,6 +858,72 @@ int sound_context_load(uint8 *state)
       opll_cycles = (int)((unsigned int)opll_cycles % 18u);
       opll.cycles %= 18;
       opll_status &= 1;
+
+      /* El resto de la familia, adentro del struct de Nuked OPLL: lo mismo
+         que #129 hizo con el ym3438_t. Cada campo que OPLL_Clock usa como
+         indice de tabla o como cantidad de un shift, acotado con la mascara
+         de su unico escritor (OPLL_DoRegWrite y OPLL_DoModeWrite para los
+         registros, el propio OPLL_Clock para los derivados). Un savestate
+         legitimo ya cumple todas, asi que no cambia nada.
+         El nocturno reporto uno (`fnum` crudo: `fnum >> 5` = 176 contra
+         eg_ksltable[16] en OPLL_EnvelopeKSLTL); los demas salen de recorrer
+         el struct con la misma pregunta. (#132) */
+      {
+        int i;
+
+        for (i = 0; i < 9; i++)
+        {
+          opll.fnum[i]  &= 0x1ff; /* fnum >> 5 indexa eg_ksltable[16] */
+          opll.block[i] &= 0x07;  /* (8 - block) << 3, freq << block */
+          opll.kon[i]   &= 0x01;
+          opll.son[i]   &= 0x01;
+          opll.vol[i]   &= 0x0f;
+          opll.inst[i]  &= 0x0f;  /* opll_patch_1 + inst - 1 en patchrom[] */
+        }
+
+        /* el patch de usuario: es el que elige PreparePatch con inst = 0 */
+        opll.patch.tl &= 0x3f;
+        opll.patch.dc &= 0x01;
+        opll.patch.dm &= 0x01;
+        opll.patch.fb &= 0x07;
+        for (i = 0; i < 2; i++)
+        {
+          opll.patch.am[i]    &= 0x01;
+          opll.patch.vib[i]   &= 0x01;
+          opll.patch.et[i]    &= 0x01;
+          opll.patch.ksr[i]   &= 0x01;
+          opll.patch.multi[i] &= 0x0f;
+          opll.patch.ksl[i]   &= 0x03;
+          opll.patch.ar[i]    &= 0x0f;
+          opll.patch.dr[i]    &= 0x0f;
+          opll.patch.sl[i]    &= 0x0f;
+          opll.patch.rr[i]    &= 0x0f;
+        }
+
+        /* lo que PreparePatch2 dejo latcheado al FINAL del ciclo anterior y
+           el primer OPLL_Clock usa antes de volver a calcularlo: c_multi
+           indexa pg_multi[16], c_block y c_fb son cantidades de shift
+           (`freq << block`, `op_fbsum >> (7 - c_fb)`) */
+        opll.c_multi &= 0x0f;
+        opll.c_fb    &= 0x07;
+        opll.c_fnum  &= 0x1ff;
+        opll.c_block &= 0x07;
+
+        /* derivados del generador de envolvente, usados por
+           OPLL_EnvelopeGenerate antes de recalcularlos: eg_timer_low_lock es
+           `eg_timer & 3` e indexa eg_stephi[4][4]; eg_rate_hi es
+           `eg_rate >> 2` con eg_rate topeado en 0x3f, y junto con eg_inc_hi
+           y eg_inc_lo (bits) arma el `~level >> (5 - shift)` del ataque */
+        opll.eg_timer_low_lock &= 0x03;
+        opll.eg_rate           &= 0x3f;
+        opll.eg_rate_hi        &= 0x0f;
+        opll.eg_inc_hi         &= 0x01;
+        opll.eg_inc_lo         &= 0x01;
+
+        /* op_exp_s es `level >> 8` con level < 4096, y es el exponente de
+           `op_exp_m >> exp_shift` en OPLL_Operator */
+        opll.op_exp_s &= 0x0f;
+      }
     }
     else
 #endif

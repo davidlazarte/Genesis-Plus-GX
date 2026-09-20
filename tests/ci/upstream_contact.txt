@@ -67,10 +67,13 @@ core/m68k/m68kcpu.h	INLINE uint m68ki_read_32(uint address)	else val |= *(uint16
 core/m68k/m68kcpu.h	INLINE void m68ki_write_16(uint address, uint value)	else *(uint16 *)(temp->base + ((address) & 0xfffe)) = value;
 core/m68k/m68kcpu.h	INLINE void m68ki_write_32(uint address, uint value)	else *(uint16 *)(temp->base + ((address + 2) & 0xfffe)) = value;
 core/m68k/m68kcpu.h	INLINE void m68ki_write_32(uint address, uint value)	else *(uint16 *)(temp->base + ((address) & 0xfffe)) = value >> 16;
+core/mem68k.c	unsigned int ctrl_io_read_byte(unsigned int address)	if (!svp)
+core/mem68k.c	unsigned int ctrl_io_read_word(unsigned int address)	if (!svp)
 core/mem68k.c	unsigned int ctrl_io_read_word(unsigned int address)	return (*(uint16 *)(m68k.memory_map[((address)>>16)&0xff].base + ((address) & 0xfffe)) & 0xFEFF);
 core/mem68k.c	unsigned int ctrl_io_read_word(unsigned int address)	return (*(uint16 *)(m68k.memory_map[((address)>>16)&0xff].base + ((address) & 0xfffe)) | 0x0100);
 core/mem68k.c	unsigned int m68k_lockup_r_16 (unsigned int address)	return *(uint16 *)(m68k.memory_map[((address)>>16)&0xff].base + ((address) & 0xfffe));
 core/mem68k.c	unsigned int m68k_read_bus_16(unsigned int address)	return *(uint16 *)(m68k.memory_map[((address)>>16)&0xff].base + ((address) & 0xfffe));
+core/mem68k.c	void ctrl_io_write_word(unsigned int address, unsigned int data)	if (!svp)
 core/memz80.c	(sin funcion)	* Copyright (C) 2007-2026 Eke-Eke (Genesis Plus GX)
 core/memz80.c	static void z80_request_68k_bus_access(void)	(comentario)
 core/memz80.h	(sin funcion)	* Copyright (C) 2007-2026 Eke-Eke (Genesis Plus GX)

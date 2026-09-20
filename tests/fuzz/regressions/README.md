@@ -121,6 +121,30 @@ tests/fuzz/.build/replay_unserialize --scene sms-fm \
   negativa medida es la de la lectura de word; de la de byte queda medida la
   positiva —con el arreglo las tres corren limpias—.
 
+- **`generated_rom/shifts-por-registro-con-cuenta-de-32-o-mas`** (#133) — UB del
+  intérprete de upstream que tampoco necesita un cartucho corrupto: alcanza con
+  `asl d0,d1` y `d0 >= 32`. Los doce shifts por registro de `m68kops.h`
+  (`asr`/`asl`/`lsr`/`lsl` × byte/word/long) hacen `shift = DX & 0x3f` —hasta
+  63— y calculan `res = src >> shift` **antes** de mirar la cuenta; el resultado
+  se descarta cuando es grande, pero la expresión ya es UB. El nocturno los
+  reportó dos noches sin dejar archivo (UBSan imprime y sigue: es el hueco de
+  #134), así que el fixture está **fabricado a mano**: apunta el PC de reset a
+  `$F000` y ejecuta ahí las 24 operaciones por registro (las cuatro familias
+  de shift y las dos de rotación, en los dos sentidos y los tres anchos) con
+  cuentas 0, 31, 32, 33 y 63 sobre `d1 = $FFFFFFFF`, y termina en `bra.s *`.
+
+  Recorrer las 24 y no solo las 12 que alcanzó el fuzzer encontró dos sitios
+  más: `roxr_32_r` y `roxl_32_r` —la rama sin `M68K_USE_64_BIT`, que es la que
+  compilamos— usan `32 - shift` y `shift - 1` como cuenta antes de preguntar
+  si `shift` es cero (`shift exponent 32` y `shift exponent 4294967295`). Las
+  rotaciones de 8 y 16 bits y `ror`/`rol` de 32 salen limpias: upstream ya las
+  enmascara.
+
+  Sin el arreglo, con el core instrumentado: 18 reportes en 14 sitios. Con el
+  arreglo, cero. No crashea en ningún caso: lo ve `filter_known_ub.sh` (#107).
+  El arreglo es `& 31` sobre la cuenta en esos 14 sitios, que no cambia nada
+  donde el resultado se usa (`shift < 32`).
+
 - **`unserialize/pms-corrupto-indexa-lfo-pm-table`** — muta bytes de un
   savestate válido y lo carga. `YM2612LoadContext` copia el blob crudo sobre el
   struct, y `pms`, `ams`, `lfo_cnt` y `LFO_PM` indexan tablas del proceso sin

@@ -67,6 +67,22 @@ core/m68k/m68kcpu.h	INLINE uint m68ki_read_32(uint address)	else val |= *(uint16
 core/m68k/m68kcpu.h	INLINE void m68ki_write_16(uint address, uint value)	else *(uint16 *)(temp->base + ((address) & 0xfffe)) = value;
 core/m68k/m68kcpu.h	INLINE void m68ki_write_32(uint address, uint value)	else *(uint16 *)(temp->base + ((address + 2) & 0xfffe)) = value;
 core/m68k/m68kcpu.h	INLINE void m68ki_write_32(uint address, uint value)	else *(uint16 *)(temp->base + ((address) & 0xfffe)) = value >> 16;
+core/m68k/m68kops.h	static void m68k_op_asl_16_r(void)	uint res = MASK_OUT_ABOVE_16(src << (shift & 31));
+core/m68k/m68kops.h	static void m68k_op_asl_32_r(void)	uint res = MASK_OUT_ABOVE_32(src << (shift & 31));
+core/m68k/m68kops.h	static void m68k_op_asl_8_r(void)	uint res = MASK_OUT_ABOVE_8(src << (shift & 31));
+core/m68k/m68kops.h	static void m68k_op_asr_16_r(void)	uint res = src >> (shift & 31);
+core/m68k/m68kops.h	static void m68k_op_asr_32_r(void)	uint res = src >> (shift & 31);
+core/m68k/m68kops.h	static void m68k_op_asr_32_s(void)	(comentario)
+core/m68k/m68kops.h	static void m68k_op_asr_8_r(void)	uint res = src >> (shift & 31);
+core/m68k/m68kops.h	static void m68k_op_lsl_16_r(void)	uint res = MASK_OUT_ABOVE_16(src << (shift & 31));
+core/m68k/m68kops.h	static void m68k_op_lsl_32_r(void)	uint res = MASK_OUT_ABOVE_32(src << (shift & 31));
+core/m68k/m68kops.h	static void m68k_op_lsl_8_r(void)	uint res = MASK_OUT_ABOVE_8(src << (shift & 31));
+core/m68k/m68kops.h	static void m68k_op_lsr_16_r(void)	uint res = src >> (shift & 31);
+core/m68k/m68kops.h	static void m68k_op_lsr_32_r(void)	uint res = src >> (shift & 31);
+core/m68k/m68kops.h	static void m68k_op_lsr_8_r(void)	uint res = src >> (shift & 31);
+core/m68k/m68kops.h	static void m68k_op_roxl_32_r(void)	uint res = MASK_OUT_ABOVE_32((ROL_33(src, shift) & ~(1 << ((shift - 1) & 31))) | (XFLAG_AS_1() << ((shift - 1) & 31)));
+core/m68k/m68kops.h	static void m68k_op_roxr_16_r(void)	(comentario)
+core/m68k/m68kops.h	static void m68k_op_roxr_32_r(void)	uint res = MASK_OUT_ABOVE_32((ROR_33(src, shift) & ~(1 << ((32 - shift) & 31))) | (XFLAG_AS_1() << ((32 - shift) & 31)));
 core/mem68k.c	unsigned int ctrl_io_read_byte(unsigned int address)	if (!svp)
 core/mem68k.c	unsigned int ctrl_io_read_word(unsigned int address)	if (!svp)
 core/mem68k.c	unsigned int ctrl_io_read_word(unsigned int address)	return (*(uint16 *)(m68k.memory_map[((address)>>16)&0xff].base + ((address) & 0xfffe)) & 0xFEFF);

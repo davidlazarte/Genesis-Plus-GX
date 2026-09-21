@@ -12,7 +12,9 @@ name: AYTHER fuzz
 #
 # Cuando este job encuentra algo, el hallazgo no se pierde: el crash sube como
 # artefacto y se abre un issue con el hash en el titulo, que es lo que evita
-# tener veinte issues del mismo bug.
+# tener veinte issues del mismo bug. Si lo que encontro es UB recuperable -UBSan
+# imprime y sigue, no hay `crash-*`-, el issue se abre igual, con el archivo y
+# la clase de UB en el titulo (#134).
 
 on:
   schedule:
@@ -126,44 +128,19 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-      # Un issue por hallazgo, con el hash del crash en el titulo. El hash es lo
-      # que deduplica: veinte noches encontrando el mismo bug tienen que producir
-      # UN issue, no veinte, o el ruido hace que nadie lea ninguno.
-      - name: Open an issue for a new crash
+      # Un issue por hallazgo, deduplicado: veinte noches encontrando el mismo
+      # bug tienen que producir UN issue, no veinte, o el ruido hace que nadie
+      # lea ninguno. La logica vive en tests/ci/fuzz_open_issue.sh y no aca para
+      # poder probarla (check_fuzz_open_issue.sh, en cada PR): este paso corre
+      # una vez por noche y solo si algo fallo, asi que adentro del YAML su
+      # unico caso ciego -el job rojo por UB recuperable, sin `crash-*`- estuvo
+      # dos noches sin abrir nada y nadie lo supo. (#134)
+      - name: Open an issue for a new finding
         if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
-          TARGET: ${{ matrix.id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          cd tests/fuzz/artifacts
-          file=$(ls crash-* timeout-* oom-* leak-* 2>/dev/null | head -1 || true)
-          if [ -z "$file" ]; then
-            echo "el job fallo sin dejar un caso: hay que leer el log a mano" >&2
-            exit 0
-          fi
-          hash=${file#*-}
-          existing=$(gh issue list --state all --search "$hash in:title" --json number --jq 'length')
-          if [ "$existing" != "0" ]; then
-            echo "ya existe un issue para $hash"
-            exit 0
-          fi
-          {
-            echo "El job nocturno de fuzzing encontro un caso en el target \`$TARGET\`."
-            echo
-            echo "El archivo esta en los artefactos de la corrida, como \`$file\`."
-            echo "Para reproducirlo sin fuzzer y con ASan/UBSan puestos:"
-            echo
-            echo '```'
-            echo "make -C tests/fuzz .build/replay_$TARGET"
-            echo "tests/fuzz/.build/replay_$TARGET <core.so> <ruta-al-archivo>"
-            echo '```'
-            echo
-            echo "Cuando este arreglado, el archivo va a \`tests/fuzz/regressions/$TARGET/\`:"
-            echo "ahi lo reproduce \`make -C tests check-fuzz\` en cada PR y el bug no"
-            echo "puede volver en silencio."
-            echo
-            echo "Corrida: $RUN_URL"
-          } > body.md
-          gh issue create --title "[fuzz][$TARGET] hallazgo $hash" --label ci --body-file body.md
+        run: >-
+          bash tests/ci/fuzz_open_issue.sh
+          "${{ matrix.id }}" "${{ matrix.target }}" "${{ matrix.scene }}"
+          tests/fuzz/artifacts "tests/fuzz/artifacts/${{ matrix.id }}.log" "$RUN_URL"

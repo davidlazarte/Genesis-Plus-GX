@@ -3603,12 +3603,15 @@ static void m68k_op_asr_32_s(void)
 }
 
 
+/* #133: la cuenta por registro llega a 63 y `res` se calcula antes de mirarla;
+   desplazar 32 bits o mas es UB. `res` solo se usa con shift < 32, donde
+   `& 31` no cambia nada. Vale para los doce shifts por registro. */
 static void m68k_op_asr_8_r(void)
 {
   uint* r_dst = &DY;
   uint shift = DX & 0x3f;
   uint src = MASK_OUT_ABOVE_8(*r_dst);
-  uint res = src >> shift;
+  uint res = src >> (shift & 31);
 
   if(shift != 0)
   {
@@ -3661,7 +3664,7 @@ static void m68k_op_asr_16_r(void)
   uint* r_dst = &DY;
   uint shift = DX & 0x3f;
   uint src = MASK_OUT_ABOVE_16(*r_dst);
-  uint res = src >> shift;
+  uint res = src >> (shift & 31);
 
   if(shift != 0)
   {
@@ -3714,7 +3717,7 @@ static void m68k_op_asr_32_r(void)
   uint* r_dst = &DY;
   uint shift = DX & 0x3f;
   uint src = *r_dst;
-  uint res = src >> shift;
+  uint res = src >> (shift & 31);
 
   if(shift != 0)
   {
@@ -3953,7 +3956,7 @@ static void m68k_op_asl_8_r(void)
   uint* r_dst = &DY;
   uint shift = DX & 0x3f;
   uint src = MASK_OUT_ABOVE_8(*r_dst);
-  uint res = MASK_OUT_ABOVE_8(src << shift);
+  uint res = MASK_OUT_ABOVE_8(src << (shift & 31));
 
   if(shift != 0)
   {
@@ -3991,7 +3994,7 @@ static void m68k_op_asl_16_r(void)
   uint* r_dst = &DY;
   uint shift = DX & 0x3f;
   uint src = MASK_OUT_ABOVE_16(*r_dst);
-  uint res = MASK_OUT_ABOVE_16(src << shift);
+  uint res = MASK_OUT_ABOVE_16(src << (shift & 31));
 
   if(shift != 0)
   {
@@ -4029,7 +4032,7 @@ static void m68k_op_asl_32_r(void)
   uint* r_dst = &DY;
   uint shift = DX & 0x3f;
   uint src = *r_dst;
-  uint res = MASK_OUT_ABOVE_32(src << shift);
+  uint res = MASK_OUT_ABOVE_32(src << (shift & 31));
 
   if(shift != 0)
   {
@@ -9578,7 +9581,7 @@ static void m68k_op_lsr_8_r(void)
   uint* r_dst = &DY;
   uint shift = DX & 0x3f;
   uint src = MASK_OUT_ABOVE_8(*r_dst);
-  uint res = src >> shift;
+  uint res = src >> (shift & 31);
 
   if(shift != 0)
   {
@@ -9616,7 +9619,7 @@ static void m68k_op_lsr_16_r(void)
   uint* r_dst = &DY;
   uint shift = DX & 0x3f;
   uint src = MASK_OUT_ABOVE_16(*r_dst);
-  uint res = src >> shift;
+  uint res = src >> (shift & 31);
 
   if(shift != 0)
   {
@@ -9654,7 +9657,7 @@ static void m68k_op_lsr_32_r(void)
   uint* r_dst = &DY;
   uint shift = DX & 0x3f;
   uint src = *r_dst;
-  uint res = src >> shift;
+  uint res = src >> (shift & 31);
 
   if(shift != 0)
   {
@@ -9853,7 +9856,7 @@ static void m68k_op_lsl_8_r(void)
   uint* r_dst = &DY;
   uint shift = DX & 0x3f;
   uint src = MASK_OUT_ABOVE_8(*r_dst);
-  uint res = MASK_OUT_ABOVE_8(src << shift);
+  uint res = MASK_OUT_ABOVE_8(src << (shift & 31));
 
   if(shift != 0)
   {
@@ -9891,7 +9894,7 @@ static void m68k_op_lsl_16_r(void)
   uint* r_dst = &DY;
   uint shift = DX & 0x3f;
   uint src = MASK_OUT_ABOVE_16(*r_dst);
-  uint res = MASK_OUT_ABOVE_16(src << shift);
+  uint res = MASK_OUT_ABOVE_16(src << (shift & 31));
 
   if(shift != 0)
   {
@@ -9929,7 +9932,7 @@ static void m68k_op_lsl_32_r(void)
   uint* r_dst = &DY;
   uint shift = DX & 0x3f;
   uint src = *r_dst;
-  uint res = MASK_OUT_ABOVE_32(src << shift);
+  uint res = MASK_OUT_ABOVE_32(src << (shift & 31));
 
   if(shift != 0)
   {
@@ -19392,6 +19395,9 @@ static void m68k_op_roxr_16_r(void)
 }
 
 
+/* #133: con shift == 0 `res` y `new_x_flag` se descartan, pero `32 - shift` y
+   `shift - 1` ya se usaron como cuenta (32 y 0xffffffff). Con shift en 1..32
+   `& 31` no cambia nada. Igual en roxl_32_r. */
 static void m68k_op_roxr_32_r(void)
 {
 #if M68K_USE_64_BIT
@@ -19431,8 +19437,8 @@ static void m68k_op_roxr_32_r(void)
   uint orig_shift = DX & 0x3f;
   uint shift = orig_shift % 33;
   uint src = *r_dst;
-  uint res = MASK_OUT_ABOVE_32((ROR_33(src, shift) & ~(1 << (32 - shift))) | (XFLAG_AS_1() << (32 - shift)));
-  uint new_x_flag = src & (1 << (shift - 1));
+  uint res = MASK_OUT_ABOVE_32((ROR_33(src, shift) & ~(1 << ((32 - shift) & 31))) | (XFLAG_AS_1() << ((32 - shift) & 31)));
+  uint new_x_flag = src & (1 << ((shift - 1) & 31));
 
   if(orig_shift != 0)
   {
@@ -19764,8 +19770,8 @@ static void m68k_op_roxl_32_r(void)
   uint orig_shift = DX & 0x3f;
   uint shift = orig_shift % 33;
   uint src = *r_dst;
-  uint res = MASK_OUT_ABOVE_32((ROL_33(src, shift) & ~(1 << (shift - 1))) | (XFLAG_AS_1() << (shift - 1)));
-  uint new_x_flag = src & (1 << (32 - shift));
+  uint res = MASK_OUT_ABOVE_32((ROL_33(src, shift) & ~(1 << ((shift - 1) & 31))) | (XFLAG_AS_1() << ((shift - 1) & 31)));
+  uint new_x_flag = src & (1 << ((32 - shift) & 31));
 
   if(orig_shift != 0)
   {

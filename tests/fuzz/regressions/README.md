@@ -335,6 +335,35 @@ tests/fuzz/.build/replay_unserialize --scene sms-fm \
   reproducen en la escena `sms-fm`, que es la única que entra por la rama del
   OPLL de Nuked.
 
+- **`unserialize/freqinc-de-ruido-en-cero-cuelga-psg-update-138`** y
+  **`unserialize/freqinc-de-tono-en-cero-cuelga-psg-update`** (#138) — la
+  misma familia, en el PSG, y el primer hallazgo que no es un índice sino un
+  **paso de bucle**. `psg_context_load` copia `freqInc[4]` crudo del blob, y
+  `psg_update` lo usa como incremento de `while (timestamp < clocks)
+  timestamp += freqInc[i]`: con 0 el bucle no termina. En el camino normal lo
+  escribe solo `psg_write`, a partir del registro de tono (o de los dos bits
+  del de ruido) por `PSG_MCYCLES_RATIO`, y nunca da 0.
+
+  El primero es el archivo del nocturno tal cual y reproduce solo: son tres
+  bytes, que el lector completa como un `u32` (`0x00ef63cd`, que módulo
+  `STATE_SIZE` es 144333: el byte 1 de `freqInc[3]`, `0x0f00` → `0`) y un
+  valor implícito de 0. En el CI el proceso se quedó 1666 s en `blip_add_delta`
+  antes de que libFuzzer lo reportara (`-timeout` por defecto 1200 s; desde
+  #138 el nocturno pasa `-timeout=60`). El segundo está fabricado con el
+  mismo offset base (el bloque del PSG arranca en 144276 en todas las
+  escenas, medido sobre un estado volcado) y pone los cuatro bytes de
+  `freqInc[0]` en 0: el bucle de tono, no el de ruido. Sin el arreglo los dos
+  se cuelgan en cualquier escena (`timeout 60` los mata con 124; el watchdog
+  del driver, con 70). Con el arreglo —`freqInc` se recompone desde `regs` con
+  la fórmula de `psg_write`, y los registros de tono se acotan a sus 10 bits—
+  los dos corren limpios en las cuatro escenas.
+
+  Del mismo bloque se examinaron y quedaron como están `polarity` (con
+  `-fwrapv`, que es como se compila el core, `-INT_MIN` no es UB: solo audio
+  podrido) y `clocks` (el tiempo que va a `blip_add_delta`: `blip` trunca la
+  posición a 12 bits, así que a 44100 Hz nunca sale del buffer). Ninguno de
+  los dos es medible con el fixture, y un acote que no se mide no entra.
+
 - **`write_control` (#63) — sin archivo, a propósito.** El caso que dejó el
   fuzzer (`crash-269aa8d4…`) no reproduce solo: el Z80 arrastra estado entre
   entradas —corre un frame por entrada y nunca se resetea—, y el desborde

@@ -223,6 +223,32 @@ int psg_context_load(uint8 *state)
   load_param(psg.polarity,sizeof(psg.polarity));
   load_param(psg.chanOut,sizeof(psg.chanOut));
 
+  /* AYTHER fork delta (#138): `freqInc` no entra crudo del blob, se recompone.
+
+     Es el paso de `while (timestamp < clocks) timestamp += freqInc[i]` en
+     psg_update, y con 0 ese bucle no termina: el nocturno lo encontro con una
+     sola mutacion, un byte de freqInc[3] en 0, y el proceso se quedo 28
+     minutos en blip_add_delta. En el camino normal lo escribe solo psg_write,
+     a partir del registro de tono (o de los dos bits del de ruido) y de
+     PSG_MCYCLES_RATIO, asi que aca se vuelve a calcular con esa misma formula
+     y el mismo caso especial (registro en 0 -> zeroFreqInc). Los registros de
+     tono se acotan antes a sus 10 bits, que es lo que psg_write deja en ellos,
+     para que el producto no pueda desbordar. En un estado legitimo nada de
+     esto cambia un byte: freqInc siempre fue funcion de regs. */
+  for (i=0; i<3; i++)
+  {
+    psg.regs[i*2] &= 0x3ff;
+    psg.freqInc[i] = psg.regs[i*2] ? (psg.regs[i*2] * PSG_MCYCLES_RATIO) : psg.zeroFreqInc;
+  }
+  if ((psg.regs[6] & 0x03) == 0x03)
+  {
+    psg.freqInc[3] = psg.freqInc[2];
+  }
+  else
+  {
+    psg.freqInc[3] = (0x10 << (psg.regs[6] & 0x03)) * PSG_MCYCLES_RATIO;
+  }
+
   /* AYTHER fork delta: el savestate guarda el audio SIN mutear (el mute es
      output-only, no toca el estado del chip), así que el estado restaurado está
      "desmuteado". Reseteamos el shadow a 0 → la próxima máscara del frontend

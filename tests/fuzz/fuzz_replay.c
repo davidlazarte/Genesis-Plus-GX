@@ -29,11 +29,94 @@
 #else
 #include <dirent.h>
 #include <sys/stat.h>
+#include <signal.h>
+#include <unistd.h>
 #endif
 
 int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size);
 
 #define FUZZ_MAX_INPUT (4u * 1024u * 1024u)
+
+/* Watchdog por entrada. (#138)
+ *
+ * Un crash pone el replay en rojo. Un CUELGUE no ponia nada: el proceso se
+ * quedaba en el bucle y el job de PR con el, hasta el limite de seis horas de
+ * Actions, sin decir que entrada fue. El primer caso fue un `freqInc` del PSG
+ * en cero, que deja a psg_update en `while (timestamp < clocks) timestamp += 0`;
+ * libFuzzer lo vio porque trae su propio `-timeout`, y este driver, que es el
+ * que corre en cada PR, no traia ninguno.
+ *
+ * Una entrada son un unserialize y tres frames (o un frame, en los otros
+ * targets), milisegundos incluso con ASan; 60 s es dos ordenes de magnitud
+ * de margen y AYTHER_FUZZ_INPUT_SECONDS lo cambia sin recompilar. Sale con 70,
+ * el mismo codigo que usa libFuzzer para un timeout, y con el nombre del
+ * archivo: es lo que hay que copiar a regressions/ cuando se arregle.
+ */
+#define FUZZ_INPUT_SECONDS_DEFAULT 60u
+
+static const char *watchdog_path;
+static volatile unsigned watchdog_serial;   /* cambia con cada entrada */
+
+static unsigned watchdog_seconds(void)
+{
+  const char *v = getenv("AYTHER_FUZZ_INPUT_SECONDS");
+  unsigned n = (v && *v) ? (unsigned)strtoul(v, NULL, 10) : FUZZ_INPUT_SECONDS_DEFAULT;
+  return n ? n : FUZZ_INPUT_SECONDS_DEFAULT;
+}
+
+static void watchdog_fire(void)
+{
+  /* Solo llamadas seguras desde una senal: nada de printf. */
+  static const char pre[] = "\n  TIMEOUT ";
+  static const char post[] = ": la entrada no termino a tiempo\n";
+  const char *p = watchdog_path ? watchdog_path : "?";
+#if defined(_WIN32)
+  DWORD w;
+  HANDLE err = GetStdHandle(STD_ERROR_HANDLE);
+  WriteFile(err, pre, (DWORD)(sizeof(pre) - 1), &w, NULL);
+  WriteFile(err, p, (DWORD)strlen(p), &w, NULL);
+  WriteFile(err, post, (DWORD)(sizeof(post) - 1), &w, NULL);
+  _exit(70);
+#else
+  ssize_t r;
+  r = write(2, pre, sizeof(pre) - 1);
+  r = write(2, p, strlen(p));
+  r = write(2, post, sizeof(post) - 1);
+  (void)r;
+  _exit(70);
+#endif
+}
+
+#if defined(_WIN32)
+/* Sin alarm() en Windows: un hilo mira cada segundo si la entrada sigue
+   siendo la misma. Es el equivalente exacto, sin precision de un segundo. */
+static DWORD WINAPI watchdog_thread(LPVOID arg)
+{
+  unsigned limit = watchdog_seconds();
+  unsigned seen = watchdog_serial, elapsed = 0;
+  (void)arg;
+  for (;;)
+  {
+    Sleep(1000);
+    if (watchdog_serial != seen) { seen = watchdog_serial; elapsed = 0; continue; }
+    if (++elapsed >= limit) watchdog_fire();
+  }
+  return 0;
+}
+static void watchdog_start(void)
+{
+  HANDLE h = CreateThread(NULL, 0, watchdog_thread, NULL, 0, NULL);
+  if (h) CloseHandle(h);
+}
+static void watchdog_arm(const char *path)   { watchdog_path = path; ++watchdog_serial; }
+static void watchdog_disarm(void)            { watchdog_path = NULL; ++watchdog_serial; }
+#else
+static void watchdog_signal(int sig) { (void)sig; watchdog_fire(); }
+static void watchdog_start(void)  { signal(SIGALRM, watchdog_signal); }
+static void watchdog_arm(const char *path)
+{ watchdog_path = path; ++watchdog_serial; alarm(watchdog_seconds()); }
+static void watchdog_disarm(void) { alarm(0); watchdog_path = NULL; ++watchdog_serial; }
+#endif
 
 static int run_file(const char *path)
 {
@@ -47,7 +130,9 @@ static int run_file(const char *path)
   n = fread(buf, 1, FUZZ_MAX_INPUT, f);
   fclose(f);
 
+  watchdog_arm(path);
   LLVMFuzzerTestOneInput(buf, n);
+  watchdog_disarm();
   free(buf);
   printf("  ok  %-52s %lu bytes\n", path, (unsigned long)n);
   return 1;
@@ -137,6 +222,7 @@ int main(int argc, char **argv)
      dos caminos. Uno solo de verdad, no dos que se parecen. */
   fuzz_setenv("AYTHER_FUZZ_CORE", argv[1]);
 
+  watchdog_start();
   for (i = 2; i < argc; ++i)
     total += is_dir(argv[i]) ? run_dir(argv[i]) : run_file(argv[i]);
 

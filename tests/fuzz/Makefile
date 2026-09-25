@@ -167,11 +167,22 @@ endif
 	$$(ASAN_PRELOAD) AYTHER_FUZZ_CORE="$$(CORE)" AYTHER_FUZZ_SCENE="$$(SCENE)" \
 		AYTHER_FUZZ_WORKDIR="$$(BUILD_DIR)" \
 		$$(BUILD_DIR)/fuzz_$(1)$$(EXE_EXT) \
-		corpus/$(1) -max_total_time=$$(FUZZ_SECONDS) -print_final_stats=1
+		corpus/$(1) -max_total_time=$$(FUZZ_SECONDS) -timeout=$$(FUZZ_TIMEOUT) \
+		-print_final_stats=1
 endef
 $(foreach t,$(TARGETS),$(eval $(call FUZZ_RULE,$(t))))
 
 FUZZ_SECONDS ?= 60
+
+# Tope por ENTRADA, distinto del presupuesto total de arriba. (#138)
+#
+# El default de libFuzzer es 1200 s, y ademas solo lo mira cada tanto: el
+# primer cuelgue que encontro el nocturno (un freqInc del PSG en cero) tardo
+# 1666 s en reportarse, casi tres veces el presupuesto del job. Una entrada de
+# estos targets son milisegundos; 60 s es margen de sobra y deja el hallazgo
+# en el log el mismo minuto. Es el mismo tope que usa el driver de replay
+# (AYTHER_FUZZ_INPUT_SECONDS), a proposito.
+FUZZ_TIMEOUT ?= 60
 
 # --- build de replay (cualquier compilador) -------------------------------
 define REPLAY_RULE

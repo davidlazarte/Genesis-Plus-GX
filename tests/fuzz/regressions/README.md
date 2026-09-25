@@ -7,7 +7,11 @@ fuzzer y de forma determinística, para que el bug no pueda volver en silencio.
 ## Qué atrapa este gate y qué no
 
 El replay falla cuando el proceso **crashea**: un abort, un segfault, un error
-de ASan. Eso cubre la mayoría de los hallazgos.
+de ASan. Eso cubre la mayoría de los hallazgos. Desde #138 también falla cuando
+una entrada **se cuelga**: el driver lleva un watchdog por entrada (60 s,
+`AYTHER_FUZZ_INPUT_SECONDS` lo cambia) y sale con 70 —el código que usa
+libFuzzer para un timeout— diciendo qué archivo fue. Hasta entonces un bucle
+infinito dejaba el job de PR colgado hasta el límite de seis horas, sin nombre.
 
 Por sí solo **no** cubre **UB que solo se reporta**: UBSan por defecto imprime
 `runtime error` y sigue, así que el replay termina en cero y el caso figura

@@ -100,7 +100,7 @@ core/sound/blip_buf.h	typedef struct blip_t blip_t;	#include <stddef.h>
 core/sound/blip_buf.h	void blip_delete_buffer_state(blip_buffer_state_t *state);	size_t blip_buffer_state_size( void );
 core/sound/psg.c	(sin funcion)	#include "ayther/ayther_dual_path.h"
 core/sound/psg.c	int psg_context_load(uint8 *state)	(comentario)
-core/sound/psg.c	int psg_context_load(uint8 *state)	for (i=0; i<4; i++) psg_ayther_muted[i] = 0;
+core/sound/psg.c	int psg_context_load(uint8 *state)	for (i=0; i<3; i++)
 core/sound/psg.c	int psg_context_load(uint8 *state)	if ((psg.noiseShiftValue & 1)
 core/sound/psg.c	int psg_context_load(uint8 *state)	if ((psg.polarity[i] > 0)
 core/sound/psg.c	static struct	static uint8 psg_ayther_muted[4] = {0};
